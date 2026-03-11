@@ -1,7 +1,13 @@
 <div align="center">
-  <h1>🌌 ZenithPanel</h1>
+  <h1>🌌 <a href="https://github.com/harveyxiacn/ZenithPanel">ZenithPanel</a></h1>
   <p><b>下一代全能型服务器运维与代理服务管理面板</b></p>
   <p>不仅仅是 1Panel，不仅仅是 3x-ui，更是你的专属数字中枢。</p>
+
+  <p>
+    <a href="https://github.com/harveyxiacn/ZenithPanel/blob/main/LICENSE">
+      <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License">
+    </a>
+  </p>
 </div>
 
 ---
@@ -51,5 +57,22 @@
 3. **备份迁移**：只需打包 `zenith-data` 一个文件夹即可全盘克隆到新机器。
 
 ---
+
+## 🙏 致谢 (Acknowledgments)
+
+作为一个站在前人肩膀上的开源项目，ZenithPanel 的诞生离不开以下优秀开源项目的启发与底层支持：
+
+- **[1Panel](https://github.com/1Panel-dev/1Panel)**: 为我们提供了现代化服务器运维面板的架构思路与容器管理交互灵感。
+- **[3x-ui](https://github.com/MHSanaei/3x-ui)**: 代理面板领域的优秀前驱，其丰富的功能为我们的代理核心设计提供了重要参考。
+- **[Sing-box UI](https://github.com/hiddify/hiddify-next)**: 在基于 Sing-box 核心的面板交互上提供了宝贵的可视化经验。
+- **[Xray-core](https://github.com/XTLS/Xray-core) & [Sing-box](https://github.com/SagerNet/sing-box)**: 强大的底层代理核心引擎，支撑了面板的高级路由与分流能力。
+
+我们对这些项目的维护者和贡献者表示最诚挚的感谢！
+
+---
+
+## 📄 开源许可 (License)
+
+本项目采用 [MIT License](LICENSE) 协议进行开源，您可以自由地使用、修改和分发。
 
 > 快来看看吧，准备好迎接全新的 VPS 管理方式！欢迎提交 Issue 与 PR，共同打造这款开源神器！
