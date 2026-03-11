@@ -14,6 +14,8 @@ RUN apk add --no-cache gcc musl-dev
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend .
+# Sync freshly built frontend into the go:embed directory
+COPY --from=frontend-builder /app/frontend/dist ./internal/api/dist/
 # Disable CGO to ensure statically linked binary
 ENV CGO_ENABLED=0
 ENV GOOS=linux
@@ -25,15 +27,10 @@ FROM alpine:latest
 WORKDIR /opt/zenithpanel
 
 # Install basic runtime dependencies (ca-certificates for TLS, tzdata, etc)
-RUN apk add --no-cache ca-certificates tzdata sqlite-libs docker-cli tzdata
+RUN apk add --no-cache ca-certificates tzdata sqlite-libs docker-cli
 
-# Copy backend binary
+# Copy backend binary (frontend is already embedded via go:embed)
 COPY --from=backend-builder /zenithpanel /opt/zenithpanel/zenithpanel
-
-# Copy frontend static build (the backend router serves these from ../frontend/dist by default, 
-# but in docker we can put them in a specific absolute path or embed them. 
-# Assuming the Go binary is modified to serve from ./frontend/dist in docker)
-COPY --from=frontend-builder /app/frontend/dist /opt/zenithpanel/frontend/dist
 
 # Ensure the database and logs directories exist
 RUN mkdir -p /opt/zenithpanel/data /opt/zenithpanel/logs

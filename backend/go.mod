@@ -1,6 +1,6 @@
 module github.com/harveyxiacn/ZenithPanel/backend
 
-go 1.24
+go 1.24.0
 
 require (
 	github.com/docker/docker v24.0.9+incompatible
@@ -62,7 +62,7 @@ require (
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
+	golang.org/x/time v0.9.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
