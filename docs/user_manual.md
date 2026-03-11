@@ -1,38 +1,41 @@
-# ZenithPanel - 极客面板用户使用手册
+# ZenithPanel - User Manual
 
-## 📖 简介
-ZenithPanel 是一款面向外贸/商旅极客的全方位 VPS 管理与科学上网代理核心编排面板。提供基于 Vue 3 + Tailwind CSS 的现代化沉浸式 UI 和 Go 语言驱动的极低内存开销后端。极度适配 1C1G 小型 VPS 方案。
+[简体中文](user_manual_CN.md) | English
+
+## 📖 Introduction
+ZenithPanel is an all-in-one VPS management and proxy orchestration panel designed for international trade and travel geeks. It features a modern immersive UI based on Vue 3 + Tailwind CSS and a high-performance Go-driven backend with extremely low memory overhead, perfectly suited for 1C1G small VPS plans.
 
 ---
 
-## 🚀 启动与安装
+## 🚀 Getting Started & Installation
 
 > [!TIP]
-> **由于本项目现已公开 (Public)**，GitHub Actions 是**完全免费且无限量使用**的。每次代码 Push 到 `main` 分支都会触发自动构建。
+> **Since this project is now Public**, GitHub Actions is **completely free and unlimited**. Every code push to the `main` branch will trigger an automatic build.
 
-### 方案一：使用 GitHub 自动构建镜像 (推荐)
-如果您想直接使用 GitHub 自动构建好的镜像：
-1. 代码 Push 后查看仓库的 **Actions** 标签页，等待构建完成。
-2. 在您的服务器上拉取镜像并运行（见方案三）。
+### Option 1: Use GitHub Automated Build (Recommended)
+If you want to use the pre-built Docker image from GitHub:
+1. Push your code and check the **Actions** tab in the repository; wait for the build to complete.
+2. In your server, pull and run the image (see Option 3).
 
-由于 ZenithPanel 包含极低资源开销的前后端，您可以直接在本地（Windows/Mac）编译它，生成一个脱离依赖的绿色安装包并上传到 VPS：
+### Option 2: Local Build & Upload (Bypass CI/CD)
+Since ZenithPanel has extremely low resource overhead, you can compile it locally (Windows/Mac) to generate a standalone binary and upload it to your VPS:
 
-1. **本地执行打包**
-   在项目根目录下，Windows 用户在 PowerShell 执行 `./scripts/build_release.ps1` （Mac/Linux 执行 `bash scripts/build_release.sh`）。
-   这会在根目录生成一个 `zenithpanel-release.tar.gz` 文件。
+1. **Local Packaging**
+   In the project root, Windows users run `./scripts/build_release.ps1` in PowerShell (Mac/Linux users run `bash scripts/build_release.sh`).
+   This will generate a `zenithpanel-release.tar.gz` file in the root directory.
 
-2. **上传到服务器**
-   使用 SCP / SFTP / 宝塔 等工具将以下两个文件上传到 VPS 的**同一个目录** (如 `/root`):
+2. **Upload to Server**
+   Use SCP / SFTP or tools like BT Panel to upload these two files to the **same directory** on your VPS (e.g., `/root`):
    - `zenithpanel-release.tar.gz`
    - `scripts/install.sh`
 
-3. **进入 VPS 执行安装**
+3. **Run Installation on VPS**
    ```bash
    bash install.sh
    ```
-这一步脚本会自动解压包，安装所需的 Docker 环境，并将服务端配置为 `systemd` 守护进程开机自启。
+This script will automatically extract the package, install the required Docker environment, and configure the service as a `systemd` daemon.
 
-### 方案二：Docker / Docker Compose 启动
+### Option 3: Docker / Docker Compose
 ```bash
 docker run -d \
   -p 8080:8080 \
@@ -41,43 +44,43 @@ docker run -d \
   --restart always \
   ghcr.io/harveyxiacn/zenithpanel:latest
 ```
-运行后执行 `docker logs zenithpanel` 查看初始化向导进入地址和临时安全密码。
+After running, use `docker logs zenithpanel` to find the setup wizard link and temporary security password.
 
 ---
 
-## 🛡️ 首次安全初始化向导 (Setup Wizard)
-> **非常重要**：为了防止面板直接暴露公网导致配置和服务器失陷，首次运行必须在终端查看日志以获取临时密码和安全短链！
+## 🛡️ Security Setup Wizard
+> **Important**: To prevent the panel from being exposed to the public internet without security, you must check the logs during the first run to get a temporary password and security entry link!
 
-1. 浏览器打开日志提示的 URL，如：`http://ip:8080/zenith-setup-AbcD123`
-2. 使用日志内生成的 16 位**一次性密码**登录向导。
-3. 在系统向导中设置正式的管理员 **账户名** 与 **密码**，并自定义后续的面版入口路径。
-4. Setup 成功完成后，以上初始 URL 彻底失效！
-
----
-
-## ⚙️ 核心功能模块
-
-### Dashboard (系统展示大盘)
-- 实时预览您的底层主机状态 (CPU / 内存 / 磁盘使用率) 以及历史连通性、核心进程运行状态。
-
-### 服务器管理 (Servers)
-完全替代了例如 1Panel 等控制面板的臃肿基础功能，保留最轻巧的系统入口：
-- **Web Terminal**: 全屏沉浸、低延迟的基于 WebSocket 的系统后台仿真 SSH。
-- **File Manager**: 安全运行在 `/home` 沙箱，防止越权，随时查看和批量下载编辑配置文件。
-- **Docker 守护进程**: 一页管理您的所有运行容器、控制开关。
-
-### 代理节点分发中心 (Proxy Services)
-这套系统的核心特色——全方位融合 V2ray/Xray 和 Sing-box 两大核心网络通信基石引擎。
-1. **Nodes (入站节点)**：支持开启各协议入站并配置端口，并实时挂载证书进行 TLS 连接鉴权。
-2. **Users**: 针对节点配置客户并附带到期时间控制和历史上下行流量记录。
-3. **Sub (聚合订阅)**：一键复制动态生成的订阅 URL！无论是移动端采用 Clash(yaml)、Surge 或安卓采用的 V2ray(Base64)，客户端 UA 全端适配下发最新配置图谱。
+1. Open the URL provided in the logs (e.g., `http://your_ip:8080/zenith-setup-AbcD123`).
+2. Log in using the 16-character **one-time password** generated in the logs.
+3. In the setup wizard, set your official administrator **Username** and **Password**, and customize your future panel entrance path.
+4. Once setup is complete, the initial URL will be permanently deactivated.
 
 ---
 
-## 💡 进阶：如何开启新的节点服务？
+## ⚙️ Core Modules
 
-1. 进入 `Proxy` 面板，选择 `Nodes -> Add Inbound`
-2. 选择要部署的协议 (如 `VLESS + TCP + XTLS` 或 `Hysteria2`)
-3. 输入欲监听的端口号，为节点设置备注，提交！
-4. 随后请前往 `Users` 界面为此节点发配一个用户。
-5. 进入 `Subscriptions` 面板并点击链接复制按钮，在客户端更新即可直接连接体验！
+### Dashboard
+- Real-time preview of host status (CPU/RAM/Disk usage), connection history, and core process status.
+
+### Servers (Server Management)
+Replaces the bloated basic features of control panels like 1Panel with a lightweight entry:
+- **Web Terminal**: Full-screen, low-latency WebSocket-based SSH simulation.
+- **File Manager**: Runs securely in the `/home` sandbox to prevent unauthorized access; supports online editing and batch downloads.
+- **Docker Daemon**: Manage all running containers and controls on a single page.
+
+### Proxy Services
+The core of this system—integrating V2ray/Xray and Sing-box engines.
+1. **Nodes**: Supports multiple protocols for inbounds, port configuration, and real-time TLS certificate mounting.
+2. **Users**: Configure clients for nodes with expiration dates and data usage statistics.
+3. **Sub**: Copy dynamically generated subscription URLs. Supports Clash (YAML), Surge, or V2ray (Base64) with automatic User-Agent detection.
+
+---
+
+## 💡 Advanced: How to Start a New Node?
+
+1. Go to the `Proxy` panel, select `Nodes -> Add Inbound`.
+2. Choose a protocol (e.g., `VLESS + TCP + XTLS` or `Hysteria2`).
+3. Enter the target listening port, add a remark, and submit.
+4. Go to the `Users` interface to assign a user to this node.
+5. In the `Subscriptions` panel, click the copy button and update your client!

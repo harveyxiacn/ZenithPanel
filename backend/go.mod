@@ -1,6 +1,6 @@
 module github.com/harveyxiacn/ZenithPanel/backend
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/docker/docker v24.0.9+incompatible
@@ -11,7 +11,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/shirou/gopsutil/v3 v3.24.5
-	golang.org/x/crypto v0.48.0
+	golang.org/x/crypto v0.47.0
 	gorm.io/gorm v1.31.1
 )
 
