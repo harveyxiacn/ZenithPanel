@@ -1,0 +1,82 @@
+# 开发坏境配置 (Development Environment)
+
+# 后端 (Go)
+/backend/bin/
+/backend/tmp/
+/backend/*.exe
+/backend/*.exe~
+/backend/*.dll
+/backend/*.so
+/backend/*.dylib
+/backend/vendor/
+/backend/go.work
+/backend/go.work.sum
+
+# 前端 (Node / Vue / React)
+node_modules/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+/frontend/dist/
+/frontend/dist-ssr/
+/frontend/.output/
+/frontend/.nuxt/
+/frontend/coverage/
+
+# 单体编译输出与最终产物
+/build/
+/bin/
+/dist/
+/zenith-panel
+/zenith-panel.exe
+/zenith-panel-*.tar.gz
+/zenith-panel-*.zip
+
+# 数据源文件 (绝对不能上传)
+# 用户面板数据、SQLite 数据库、证书目录、生成的配置文件等
+/zenith-data/
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# 环境变量与密钥 (绝对不能上传)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# 编辑器与 IDE 配置
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*~
+
+# 系统文件
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 日志文件
+/logs/
+*.log
+
+# 其他
+/tmp/
+.temp/
+
+# 忽略构建输出的 release 目录及各种包
+/release/
+zenithpanel-release.tar.gz
+task.md
