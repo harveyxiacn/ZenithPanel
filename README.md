@@ -68,7 +68,7 @@ ZenithPanel stands on the shoulders of giants:
 
 - **[1Panel](https://github.com/1Panel-dev/1Panel)**: For modern architecture and container interaction inspiration.
 - **[3x-ui](https://github.com/MHSanaei/3x-ui)**: For feature-rich proxy management reference.
-- **[Sing-box UI](https://github.com/hiddify/hiddify-next)**: For visual experience in Sing-box core interactions.
+- **[Sing-box UI](https://github.com/SpadesA99/singbox_ui)**: For visual experience in Sing-box core interactions.
 - **[Xray-core](https://github.com/XTLS/Xray-core) & [Sing-box](https://github.com/SagerNet/sing-box)**: The powerful engine cores driving our panel.
 
 ---

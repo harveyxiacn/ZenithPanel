@@ -68,7 +68,7 @@
 
 - **[1Panel](https://github.com/1Panel-dev/1Panel)**: 为我们提供了现代化服务器运维面板的架构思路与容器管理交互灵感。
 - **[3x-ui](https://github.com/MHSanaei/3x-ui)**: 代理面板领域的优秀前驱，其丰富的功能为我们的代理核心设计提供了重要参考。
-- **[Sing-box UI](https://github.com/hiddify/hiddify-next)**: 在基于 Sing-box 核心的面板交互上提供了宝贵的可视化经验。
+- **[Sing-box UI](https://github.com/SpadesA99/singbox_ui)**: 在基于 Sing-box 核心的面板交互上提供了宝贵的可视化经验。
 - **[Xray-core](https://github.com/XTLS/Xray-core) & [Sing-box](https://github.com/SagerNet/sing-box)**: 强大的底层代理核心引擎，支撑了面板的高级路由与分流能力。
 
 我们对这些项目的维护者和贡献者表示最诚挚的感谢！
