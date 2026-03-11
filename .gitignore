@@ -80,6 +80,7 @@ Thumbs.db
 /release/
 zenithpanel-release.tar.gz
 task.md
+dev_log.md
 /backend/internal/api/dist/
 /frontend/node_modules/
 /backend/vendor/
