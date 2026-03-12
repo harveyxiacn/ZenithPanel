@@ -1,7 +1,7 @@
 import apiClient from './client'
 
 export function setupLogin(initialPassword: string) {
-  return apiClient.post('/setup/login', { initial_password: initialPassword })
+  return apiClient.post('/setup/login', { password: initialPassword })
 }
 
 export function setupComplete(data: {
