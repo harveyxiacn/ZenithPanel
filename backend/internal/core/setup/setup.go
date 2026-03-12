@@ -9,6 +9,11 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 )
 
+var (
+	pendingToken  string
+	pendingSuffix string
+)
+
 func generateRandomString(n int) string {
 	b := make([]byte, n)
 	_, err := rand.Read(b)
@@ -18,16 +23,17 @@ func generateRandomString(n int) string {
 	return base64.URLEncoding.EncodeToString(b)[:n]
 }
 
-// PrintSetupInstructions outputs the setup credentials to the terminal
-func PrintSetupInstructions(token, suffix string) {
+// PrintSetupInstructions outputs the setup credentials to the terminal.
+// It is called once at startup and again after the port is resolved.
+func PrintSetupInstructions(token, suffix, port string) {
 	fmt.Println("=========================================================")
-	fmt.Println("             🔒 ZenithPanel 安全初始化向导 🔒              ")
+	fmt.Println("             ZenithPanel Setup Wizard")
 	fmt.Println("=========================================================")
-	fmt.Println("检测到系统为首次启动，为了您的安全，已为您生成一次性安全凭证。")
-	fmt.Println("请使用以下信息在浏览器登录并完成设置：")
-	fmt.Printf("\n  访问地址: http://<你的IP>:8080/zenith-setup-%s\n", suffix)
-	fmt.Printf("  初始密码: %s\n\n", token)
-	fmt.Println("提示: 成功完成安装向导后，此地址与密码将永久失效！")
+	fmt.Println("First launch detected. One-time security credentials generated.")
+	fmt.Println("Open the following URL in your browser to complete setup:")
+	fmt.Printf("\n  URL:      http://<YOUR_IP>:%s/zenith-setup-%s\n", port, suffix)
+	fmt.Printf("  Password: %s\n\n", token)
+	fmt.Println("This URL and password expire after setup is completed.")
 	fmt.Println("=========================================================")
 }
 
@@ -51,6 +57,14 @@ func InitSetup() {
 	cfg.SetupOneTimeToken = oneTimePassword
 	cfg.IsSetupComplete = false
 
-	PrintSetupInstructions(oneTimePassword, setupSuffix)
+	pendingToken = oneTimePassword
+	pendingSuffix = setupSuffix
+}
+
+// PrintSetupIfPending prints the setup instructions once the listen port is known.
+func PrintSetupIfPending(port string) {
+	if pendingToken != "" {
+		PrintSetupInstructions(pendingToken, pendingSuffix, port)
+	}
 }
 
