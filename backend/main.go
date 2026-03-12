@@ -54,10 +54,13 @@ func main() {
 	// 7. Setup API routes
 	api.SetupRoutes(r, dm, xm, sm, sched)
 	
-	// 6. Resolve listen port (random on first run, persisted in DB)
+	// Resolve listen port (random on first run, persisted in DB)
 	port := config.EnsurePort()
 
-	// 7. Define HTTP Server
+	// Print setup wizard URL now that port is known
+	setup.PrintSetupIfPending(port)
+
+	// Define HTTP Server
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: r,
