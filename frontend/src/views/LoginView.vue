@@ -24,7 +24,7 @@ const handleLogin = async () => {
 
   try {
     const res: any = await login(username.value, password.value)
-    if (res.code === 0 && res.data?.token) {
+    if (res.code === 200 && res.data?.token) {
       authStore.setToken(res.data.token)
       router.push('/dashboard')
     } else {
