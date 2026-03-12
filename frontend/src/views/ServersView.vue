@@ -21,6 +21,7 @@ const showSshPrompt = ref(true)
 const sshUser = ref('root')
 const sshPass = ref('')
 const sshConnecting = ref(false)
+const hostname = window.location.hostname
 let termWs: WebSocket | null = null
 
 async function connectTerminal() {
@@ -186,7 +187,7 @@ async function deleteFwRule(num: string) {
 
 // ---- Lifecycle ----
 onMounted(() => {
-  if (activeTab.value === 'terminal') nextTick(initTerminal)
+  if (activeTab.value === 'terminal') nextTick(() => { /* show prompt */ })
   dockerLoading.value = true
   fetchContainers()
   dockerPollTimer = setInterval(fetchContainers, 10000)
@@ -251,7 +252,7 @@ watch(activeTab, (tab) => {
             <div class="h-3 w-3 rounded-full bg-amber-500"></div>
             <div class="h-3 w-3 rounded-full bg-emerald-500"></div>
           </div>
-          <span class="text-xs text-slate-400 font-mono">{{ termInitialized ? sshUser + '@' + location.hostname : 'SSH Login' }}</span>
+          <span class="text-xs text-slate-400 font-mono">{{ termInitialized ? sshUser + '@' + hostname : 'SSH Login' }}</span>
           <div class="w-16"></div>
         </div>
 
