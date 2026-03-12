@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/rand"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -8,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gin-contrib/cors"
-
 	"github.com/gin-gonic/gin"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/api/middleware"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
@@ -17,17 +18,22 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/cert"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/diagnostic"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/firewall"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/fs"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/monitor"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/terminal"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/time/rate"
 )
 
 // fsSandboxRoot is the allowed root for file operations.
-// In production this could be configurable.
 var fsSandboxRoot = "/home"
+
+// loginLimiter restricts login attempts to 5 per second
+var loginLimiter = rate.NewLimiter(rate.Every(time.Second), 5)
 
 // isPathSafe ensures the resolved path stays within the sandbox root
 func isPathSafe(userPath string) (string, bool) {
@@ -40,8 +46,17 @@ func isPathSafe(userPath string) (string, bool) {
 }
 
 // SetupRoutes configures all the Gin routes.
-func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *proxy.SingboxManager) {
-	
+func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *proxy.SingboxManager, sched *scheduler.Scheduler) {
+
+	// Security Headers
+	r.Use(func(c *gin.Context) {
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-XSS-Protection", "1; mode=block")
+		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+		c.Next()
+	})
+
 	// Apply Setup Guard Globally
 	r.Use(middleware.SetupGuardMiddleware())
 
@@ -51,14 +66,14 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
+		AllowCredentials: false,
 		MaxAge:           12 * time.Hour,
 	}))
 
 	// Embedded Static Files
 	staticFS := GetStaticAssets()
 	r.StaticFS("/assets", staticFS)
-	
+
 	// Separate handling for index.html at root and for SPA routes
 	r.NoRoute(func(c *gin.Context) {
 		if strings.HasPrefix(c.Request.URL.Path, "/api") {
@@ -86,7 +101,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid one-time password"})
 				return
 			}
-			
+
 			// Issue real JWT for setup process
 			token, err := jwtutil.GenerateToken("setup-admin", "admin", time.Minute*30)
 			if err != nil {
@@ -146,6 +161,12 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		})
 
 		apiGroup.POST("/login", func(c *gin.Context) {
+			// Rate limiting
+			if !loginLimiter.Allow() {
+				c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "msg": "Too many login attempts, please try again later"})
+				return
+			}
+
 			var req struct {
 				Username string `json:"username"`
 				Password string `json:"password"`
@@ -199,7 +220,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": stats})
 		})
 
+		// ======================================
 		// Docker Management
+		// ======================================
 		authGroup.GET("/docker/containers", func(c *gin.Context) {
 			if dm == nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker engine not reachable"})
@@ -213,10 +236,61 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": containers})
 		})
 
+		authGroup.POST("/docker/containers/:id/start", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			if err := dm.StartContainer(c.Request.Context(), c.Param("id")); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container started"})
+		})
+
+		authGroup.POST("/docker/containers/:id/stop", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			if err := dm.StopContainer(c.Request.Context(), c.Param("id")); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container stopped"})
+		})
+
+		authGroup.POST("/docker/containers/:id/restart", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			if err := dm.RestartContainer(c.Request.Context(), c.Param("id")); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container restarted"})
+		})
+
+		authGroup.DELETE("/docker/containers/:id", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			force := c.Query("force") == "true"
+			if err := dm.RemoveContainer(c.Request.Context(), c.Param("id"), force); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container removed"})
+		})
+
 		// Terminal WebSocket
 		authGroup.GET("/terminal", terminal.HandleTerminalWebSocket)
 
-		// File System Management (with sandbox protection)
+		// ======================================
+		// File System Management
+		// ======================================
 		fsGroup := authGroup.Group("/fs")
 		{
 			fsGroup.GET("/list", func(c *gin.Context) {
@@ -284,17 +358,260 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": output})
 		})
 
-		// Cron Management Dummy Endpoints
-		authGroup.GET("/cron/list", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": []string{}})
+		// ======================================
+		// Inbound CRUD
+		// ======================================
+		authGroup.GET("/inbounds", func(c *gin.Context) {
+			var inbounds []model.Inbound
+			if err := config.DB.Find(&inbounds).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": inbounds})
 		})
 
-		// Firewall Management Dummy Endpoints
+		authGroup.POST("/inbounds", func(c *gin.Context) {
+			var inbound model.Inbound
+			if err := c.ShouldBindJSON(&inbound); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if err := config.DB.Create(&inbound).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": inbound})
+		})
+
+		authGroup.PUT("/inbounds/:id", func(c *gin.Context) {
+			id := c.Param("id")
+			var inbound model.Inbound
+			if err := config.DB.First(&inbound, id).Error; err != nil {
+				c.JSON(404, gin.H{"code": 404, "msg": "Inbound not found"})
+				return
+			}
+			if err := c.ShouldBindJSON(&inbound); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if err := config.DB.Save(&inbound).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": inbound})
+		})
+
+		authGroup.DELETE("/inbounds/:id", func(c *gin.Context) {
+			id := c.Param("id")
+			if err := config.DB.Delete(&model.Inbound{}, id).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
+		})
+
+		// ======================================
+		// Client CRUD
+		// ======================================
+		authGroup.GET("/clients", func(c *gin.Context) {
+			var clients []model.Client
+			query := config.DB
+			if inboundID := c.Query("inbound_id"); inboundID != "" {
+				query = query.Where("inbound_id = ?", inboundID)
+			}
+			if err := query.Find(&clients).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": clients})
+		})
+
+		authGroup.POST("/clients", func(c *gin.Context) {
+			var client model.Client
+			if err := c.ShouldBindJSON(&client); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			// Auto-generate UUID if not provided
+			if client.UUID == "" {
+				b := make([]byte, 16)
+				rand.Read(b)
+				client.UUID = fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+					b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+			}
+			if err := config.DB.Create(&client).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": client})
+		})
+
+		authGroup.PUT("/clients/:id", func(c *gin.Context) {
+			id := c.Param("id")
+			var client model.Client
+			if err := config.DB.First(&client, id).Error; err != nil {
+				c.JSON(404, gin.H{"code": 404, "msg": "Client not found"})
+				return
+			}
+			if err := c.ShouldBindJSON(&client); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if err := config.DB.Save(&client).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": client})
+		})
+
+		authGroup.DELETE("/clients/:id", func(c *gin.Context) {
+			id := c.Param("id")
+			if err := config.DB.Delete(&model.Client{}, id).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
+		})
+
+		// ======================================
+		// Routing Rule CRUD
+		// ======================================
+		authGroup.GET("/routing-rules", func(c *gin.Context) {
+			var rules []model.RoutingRule
+			if err := config.DB.Find(&rules).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": rules})
+		})
+
+		authGroup.POST("/routing-rules", func(c *gin.Context) {
+			var rule model.RoutingRule
+			if err := c.ShouldBindJSON(&rule); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if err := config.DB.Create(&rule).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": rule})
+		})
+
+		authGroup.PUT("/routing-rules/:id", func(c *gin.Context) {
+			id := c.Param("id")
+			var rule model.RoutingRule
+			if err := config.DB.First(&rule, id).Error; err != nil {
+				c.JSON(404, gin.H{"code": 404, "msg": "Routing rule not found"})
+				return
+			}
+			if err := c.ShouldBindJSON(&rule); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if err := config.DB.Save(&rule).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": rule})
+		})
+
+		authGroup.DELETE("/routing-rules/:id", func(c *gin.Context) {
+			id := c.Param("id")
+			if err := config.DB.Delete(&model.RoutingRule{}, id).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
+		})
+
+		// ======================================
+		// Firewall Management
+		// ======================================
 		authGroup.GET("/firewall/rules", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": []string{}})
+			rules, err := firewall.ListRules()
+			if err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": rules})
 		})
 
+		authGroup.POST("/firewall/rules", func(c *gin.Context) {
+			var req struct {
+				Protocol string `json:"protocol"`
+				Port     string `json:"port"`
+				Action   string `json:"action"`
+				Source   string `json:"source"`
+				Comment  string `json:"comment"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if err := firewall.AddRule(req.Protocol, req.Port, req.Action, req.Source, req.Comment); err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Rule added"})
+		})
+
+		authGroup.DELETE("/firewall/rules", func(c *gin.Context) {
+			var req struct {
+				Num string `json:"num"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if err := firewall.DeleteRule(req.Num); err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Rule deleted"})
+		})
+
+		// ======================================
+		// Cron Job Management
+		// ======================================
+		authGroup.GET("/cron/jobs", func(c *gin.Context) {
+			jobs, err := sched.ListJobs()
+			if err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": jobs})
+		})
+
+		authGroup.POST("/cron/jobs", func(c *gin.Context) {
+			var job model.CronJob
+			if err := c.ShouldBindJSON(&job); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			id, err := sched.AddJob(job)
+			if err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			job.ID = id
+			c.JSON(200, gin.H{"code": 200, "msg": "Job created", "data": job})
+		})
+
+		authGroup.DELETE("/cron/jobs/:id", func(c *gin.Context) {
+			id := c.Param("id")
+			var jobID uint
+			fmt.Sscanf(id, "%d", &jobID)
+			if err := sched.RemoveJob(jobID); err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Job deleted"})
+		})
+
+		// ======================================
 		// Proxy Core Management
+		// ======================================
 		proxyGroup := authGroup.Group("/proxy")
 		{
 			proxyGroup.GET("/config/xray", func(c *gin.Context) {
