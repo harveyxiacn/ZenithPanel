@@ -4,11 +4,12 @@ package config
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"log"
+	"strconv"
 
 	"github.com/glebarez/sqlite"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"gorm.io/gorm"
-	"log"
 )
 
 var DB *gorm.DB
@@ -89,5 +90,26 @@ func IsSetupDone() bool {
 // MarkSetupDone persists setup completion to the DB
 func MarkSetupDone() error {
 	return SetSetting("setup_complete", "true")
+}
+
+// EnsurePort returns the panel's listen port, generating a random one (10000-65535) on first run.
+func EnsurePort() string {
+	existing := GetSetting("port")
+	if existing != "" {
+		return existing
+	}
+	// Generate 2 random bytes to derive a port in [10000, 65535]
+	b := make([]byte, 2)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("Failed to generate random port: %v", err)
+	}
+	n := int(b[0])<<8 | int(b[1])
+	port := 10000 + (n % 55536) // range: 10000–65535
+	portStr := strconv.Itoa(port)
+	if err := SetSetting("port", portStr); err != nil {
+		log.Fatalf("Failed to persist port: %v", err)
+	}
+	log.Printf("Generated random listen port: %s (saved to DB)", portStr)
+	return portStr
 }
 

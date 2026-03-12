@@ -2,7 +2,10 @@ package firewall
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -16,6 +19,42 @@ type Rule struct {
 	Destination string `json:"destination"`
 	Port        string `json:"port"`
 	Extra       string `json:"extra"`
+}
+
+var (
+	validProtocols = map[string]bool{"tcp": true, "udp": true, "icmp": true, "all": true}
+	validActions   = map[string]bool{"ACCEPT": true, "DROP": true, "REJECT": true}
+	portRangeRe    = regexp.MustCompile(`^\d+(?::\d+)?$`)
+	ruleNumRe      = regexp.MustCompile(`^\d+$`)
+)
+
+// validateRule checks all user-supplied parameters before passing them to iptables.
+func validateRule(protocol, port, action, source string) error {
+	if protocol != "" && !validProtocols[strings.ToLower(protocol)] {
+		return fmt.Errorf("invalid protocol: must be tcp, udp, icmp, or all")
+	}
+	if port != "" {
+		if !portRangeRe.MatchString(port) {
+			return fmt.Errorf("invalid port: must be a number (80) or range (80:90)")
+		}
+		for _, p := range strings.SplitN(port, ":", 2) {
+			n, _ := strconv.Atoi(p)
+			if n < 1 || n > 65535 {
+				return fmt.Errorf("invalid port: must be between 1 and 65535")
+			}
+		}
+	}
+	if !validActions[strings.ToUpper(action)] {
+		return fmt.Errorf("invalid action: must be ACCEPT, DROP, or REJECT")
+	}
+	if source != "" {
+		if _, _, err := net.ParseCIDR(source); err != nil {
+			if net.ParseIP(source) == nil {
+				return fmt.Errorf("invalid source: must be a valid IP or CIDR (e.g. 1.2.3.4 or 1.2.3.0/24)")
+			}
+		}
+	}
+	return nil
 }
 
 // ListRules returns the current INPUT chain rules from iptables
@@ -41,10 +80,9 @@ func ListRules() ([]Rule, error) {
 			Num:         fields[0],
 			Target:      fields[3],
 			Protocol:    fields[4],
-			Source:       fields[8],
+			Source:      fields[8],
 			Destination: fields[9],
 		}
-		// Extract dport if present
 		rest := strings.Join(fields[10:], " ")
 		if idx := strings.Index(rest, "dpt:"); idx != -1 {
 			port := rest[idx+4:]
@@ -59,11 +97,15 @@ func ListRules() ([]Rule, error) {
 	return rules, nil
 }
 
-// AddRule appends a rule to the INPUT chain
+// AddRule appends a validated rule to the INPUT chain
 func AddRule(protocol, port, action, source, comment string) error {
+	if err := validateRule(protocol, port, action, source); err != nil {
+		return err
+	}
+
 	args := []string{"-A", "INPUT"}
-	if protocol != "" && protocol != "all" {
-		args = append(args, "-p", protocol)
+	if protocol != "" && strings.ToLower(protocol) != "all" {
+		args = append(args, "-p", strings.ToLower(protocol))
 	}
 	if port != "" {
 		args = append(args, "--dport", port)
@@ -72,6 +114,12 @@ func AddRule(protocol, port, action, source, comment string) error {
 		args = append(args, "-s", source)
 	}
 	if comment != "" {
+		// Sanitize comment: strip quotes and cap length
+		comment = strings.ReplaceAll(comment, `"`, "")
+		comment = strings.ReplaceAll(comment, `'`, "")
+		if len(comment) > 64 {
+			comment = comment[:64]
+		}
 		args = append(args, "-m", "comment", "--comment", comment)
 	}
 	args = append(args, "-j", strings.ToUpper(action))
@@ -85,6 +133,9 @@ func AddRule(protocol, port, action, source, comment string) error {
 
 // DeleteRule removes a rule from the INPUT chain by line number
 func DeleteRule(num string) error {
+	if !ruleNumRe.MatchString(num) {
+		return fmt.Errorf("invalid rule number: must be a positive integer")
+	}
 	out, err := exec.Command("iptables", "-D", "INPUT", num).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("iptables: %s (%w)", strings.TrimSpace(string(out)), err)
