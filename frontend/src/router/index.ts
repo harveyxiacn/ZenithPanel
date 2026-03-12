@@ -8,7 +8,7 @@ import { useAuthStore } from '@/store/auth'
 
 const routes: RouteRecordRaw[] = [
   {
-    path: '/setup/:token?',
+    path: '/zenith-setup-:suffix',
     name: 'Setup',
     component: SetupWizard,
     meta: { requiresGuest: true }
