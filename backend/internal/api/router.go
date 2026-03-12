@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -35,14 +36,35 @@ var fsSandboxRoot = "/home"
 // loginLimiter restricts login attempts to 5 per second
 var loginLimiter = rate.NewLimiter(rate.Every(time.Second), 5)
 
-// isPathSafe ensures the resolved path stays within the sandbox root
+// isPathSafe ensures the resolved path stays within the sandbox root and is not a symlink.
 func isPathSafe(userPath string) (string, bool) {
 	cleaned := filepath.Clean(userPath)
 	abs, err := filepath.Abs(cleaned)
 	if err != nil {
 		return "", false
 	}
-	return abs, strings.HasPrefix(abs, fsSandboxRoot)
+	if !strings.HasPrefix(abs, fsSandboxRoot) {
+		return "", false
+	}
+	// Resolve symlinks to prevent sandbox escape via symlink chains.
+	// For paths that don't exist yet (write ops), resolve the parent instead.
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		parent := filepath.Dir(abs)
+		resolvedParent, err := filepath.EvalSymlinks(parent)
+		if err != nil {
+			return "", false
+		}
+		resolved = filepath.Join(resolvedParent, filepath.Base(abs))
+	}
+	if !strings.HasPrefix(resolved, fsSandboxRoot) {
+		return "", false
+	}
+	// Reject explicit symlink entries
+	if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return "", false
+	}
+	return abs, true
 }
 
 // SetupRoutes configures all the Gin routes.
@@ -54,6 +76,12 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		c.Header("X-Content-Type-Options", "nosniff")
 		c.Header("X-XSS-Protection", "1; mode=block")
 		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+		c.Next()
+	})
+
+	// Limit request body size to 10 MB to prevent resource exhaustion
+	r.Use(func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20)
 		c.Next()
 	})
 
@@ -135,7 +163,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				PasswordHash: string(hash),
 			}
 			if err := config.DB.Create(&admin).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to create admin user: " + err.Error()})
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to create admin user"})
 				return
 			}
 
@@ -587,6 +615,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			var job model.CronJob
 			if err := c.ShouldBindJSON(&job); err != nil {
 				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if len(job.Command) > 1000 {
+				c.JSON(400, gin.H{"code": 400, "msg": "Command too long (max 1000 characters)"})
 				return
 			}
 			id, err := sched.AddJob(job)

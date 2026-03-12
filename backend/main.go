@@ -54,15 +54,18 @@ func main() {
 	// 7. Setup API routes
 	api.SetupRoutes(r, dm, xm, sm, sched)
 	
-	// 6. Define HTTP Server
+	// 6. Resolve listen port (random on first run, persisted in DB)
+	port := config.EnsurePort()
+
+	// 7. Define HTTP Server
 	srv := &http.Server{
-		Addr:    ":8080",
+		Addr:    ":" + port,
 		Handler: r,
 	}
 
-	// 7. Run the server in a goroutine so it doesn't block
+	// 8. Run the server in a goroutine so it doesn't block
 	go func() {
-		log.Println("Server running on port 8080")
+		log.Printf("ZenithPanel listening on http://0.0.0.0:%s", port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
 		}
