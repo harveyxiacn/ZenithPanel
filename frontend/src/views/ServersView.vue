@@ -35,7 +35,7 @@ async function initTerminal() {
     const token = useAuthStore().token
     const ws = new WebSocket(`${proto}://${location.host}/api/v1/terminal?token=${token}`)
     ws.onmessage = (e) => term.write(e.data)
-    term.onData((data) => { if (ws.readyState === WebSocket.OPEN) ws.send(data) })
+    term.onData((data: string) => { if (ws.readyState === WebSocket.OPEN) ws.send(data) })
     ws.onclose = () => term.write('\r\n\x1b[31m[Connection closed]\x1b[0m\r\n')
     ws.onerror = () => term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n')
     termWs = ws
