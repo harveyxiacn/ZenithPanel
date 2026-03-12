@@ -22,3 +22,14 @@ type AdminUser struct {
 	UpdatedAt    time.Time      `json:"updated_at"`
 	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
 }
+
+// CronJob stores scheduled tasks
+type CronJob struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Name      string    `gorm:"not null" json:"name"`
+	Schedule  string    `gorm:"not null" json:"schedule"`
+	Command   string    `gorm:"not null" json:"command"`
+	Enable    bool      `gorm:"default:true" json:"enable"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}

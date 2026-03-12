@@ -26,6 +26,7 @@ func InitDB(dbPath string) {
 		&model.RoutingRule{},
 		&model.Setting{},
 		&model.AdminUser{},
+		&model.CronJob{},
 	)
 	if err != nil {
 		log.Fatalf("Failed to auto migrate database: %v", err)

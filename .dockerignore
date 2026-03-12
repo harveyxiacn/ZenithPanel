@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node
+frontend/node_modules/
+
+# Go
+backend/tmp/
+backend/*.exe
+backend/*.test
+
+# Scripts
+scripts/
+
+# CI/CD
+.github/
+
+# Logs
+*.log
+logs/
+
+# Dev files
+.env
+.env.*
+dev.log

@@ -16,6 +16,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/docker"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
 )
 
 func main() {
@@ -40,11 +41,18 @@ func main() {
 	xm := proxy.NewXrayManager()
 	sm := proxy.NewSingboxManager()
 
-	// 5. Create a new Gin router
+	// 5. Initialize Cron Scheduler
+	sched := scheduler.NewScheduler()
+	if err := sched.LoadFromDB(); err != nil {
+		log.Printf("Warning: Failed to load cron jobs: %v", err)
+	}
+	sched.Start()
+
+	// 6. Create a new Gin router
 	r := gin.Default()
-	
-	// 6. Setup API routes
-	api.SetupRoutes(r, dm, xm, sm)
+
+	// 7. Setup API routes
+	api.SetupRoutes(r, dm, xm, sm, sched)
 	
 	// 6. Define HTTP Server
 	srv := &http.Server{
@@ -68,6 +76,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("Shutting down server...")
+	sched.Stop()
 
 	// The context is used to inform the server it has 5 seconds to finish
 	// the request it is currently handling
