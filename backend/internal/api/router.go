@@ -100,14 +100,23 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 	// Embedded Static Files
 	staticFS := GetStaticAssets()
-	r.StaticFS("/assets", staticFS)
 
-	// Separate handling for index.html at root and for SPA routes
+	// Serve static files and SPA fallback via NoRoute.
+	// Try the exact file first (e.g. /assets/index-xxx.js, /vite.svg),
+	// then fall back to index.html for client-side routing.
 	r.NoRoute(func(c *gin.Context) {
-		if strings.HasPrefix(c.Request.URL.Path, "/api") {
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/api") {
 			c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Endpoint not found"})
 			return
 		}
+		// Try to serve the exact static file
+		if f, err := staticFS.Open(path); err == nil {
+			f.Close()
+			c.FileFromFS(path, staticFS)
+			return
+		}
+		// SPA fallback: serve index.html
 		c.FileFromFS("/", staticFS)
 	})
 
