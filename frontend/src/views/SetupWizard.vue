@@ -10,6 +10,7 @@ const authStore = useAuthStore()
 
 const step = ref(1)
 const loading = ref(false)
+const origin = window.location.origin
 const errorMsg = ref('')
 
 const form = reactive({
@@ -193,7 +194,7 @@ const goToLogin = () => {
           The temporary setup token has been destroyed. Your panel is now securely locked.
           <br/><br/>
           Please bookmark your new panel URL:<br/>
-          <strong class="text-primary-400 select-all p-2 rounded bg-gray-900 inline-block mt-2 font-mono border border-gray-700">{{ location.origin }}{{ form.customPanelPath.startsWith('/') ? form.customPanelPath : '/' + form.customPanelPath }}</strong>
+          <strong class="text-primary-400 select-all p-2 rounded bg-gray-900 inline-block mt-2 font-mono border border-gray-700">{{ origin }}{{ form.customPanelPath.startsWith('/') ? form.customPanelPath : '/' + form.customPanelPath }}</strong>
         </p>
 
         <button
