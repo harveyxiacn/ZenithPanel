@@ -32,7 +32,7 @@ const handleInitialLogin = async () => {
 
   try {
     const res: any = await setupLogin(form.initialPassword)
-    if (res.code === 0 && res.data?.token) {
+    if (res.code === 200 && res.data?.token) {
       authStore.setToken(res.data.token)
       step.value = 2
     } else {
@@ -64,7 +64,7 @@ const handleCompleteSetup = async () => {
       password: form.newPassword,
       panel_path: form.customPanelPath
     })
-    if (res.code === 0) {
+    if (res.code === 200) {
       step.value = 3
     } else {
       errorMsg.value = res.msg || 'Setup failed'
