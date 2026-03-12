@@ -28,9 +28,13 @@ func SetupGuardMiddleware() gin.HandlerFunc {
 		expectedSetupPrefix := "/zenith-setup-" + cfg.SetupURLSuffix
 		expectedSetupAPI := "/api/setup"
 
+		// Allow static assets so the setup wizard page can load its CSS/JS
+		if strings.HasPrefix(path, "/assets/") || path == "/vite.svg" {
+			c.Next()
+			return
+		}
+
 		if strings.HasPrefix(path, expectedSetupPrefix) || strings.HasPrefix(path, expectedSetupAPI) {
-			// They are trying to access the setup system. 
-			// We can let them hit the HTML or the setup API.
 			c.Next()
 			return
 		}
