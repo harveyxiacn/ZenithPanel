@@ -27,7 +27,16 @@ FROM alpine:latest
 WORKDIR /opt/zenithpanel
 
 # Install basic runtime dependencies (ca-certificates for TLS, tzdata, etc)
-RUN apk add --no-cache ca-certificates tzdata sqlite-libs docker-cli bash iptables util-linux
+RUN apk add --no-cache ca-certificates tzdata sqlite-libs docker-cli bash iptables util-linux unzip
+
+# Download latest Xray-core binary + geodata
+RUN set -ex && \
+    XRAY_VER=$(wget -qO- "https://api.github.com/repos/XTLS/Xray-core/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4) && \
+    wget -O /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VER}/Xray-linux-64.zip" && \
+    unzip /tmp/xray.zip xray geoip.dat geosite.dat -d /usr/local/bin/ && \
+    chmod +x /usr/local/bin/xray && \
+    rm -f /tmp/xray.zip && \
+    xray version
 
 # Copy backend binary (frontend is already embedded via go:embed)
 COPY --from=backend-builder /zenithpanel /opt/zenithpanel/zenithpanel
