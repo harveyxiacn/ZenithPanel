@@ -1,10 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon } from '@heroicons/vue/24/outline'
 import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule } from '@/api/proxy'
 
-const props = defineProps<{ defaultTab?: string }>()
-const activeTab = ref(props.defaultTab || 'inbounds')
+const route = useRoute()
+const tabFromRoute = route.name === 'Users' ? 'users' : 'inbounds'
+const activeTab = ref(tabFromRoute)
+
+watch(() => route.name, (name) => {
+  if (name === 'Users') activeTab.value = 'users'
+  else if (name === 'ProxyNodes') activeTab.value = 'inbounds'
+})
 const tabs = [
   { id: 'inbounds', name: 'Inbound Nodes' },
   { id: 'routing', name: 'Routing Rules' },

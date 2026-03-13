@@ -47,8 +47,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'users',
         name: 'Users',
-        component: () => import('@/views/ProxyView.vue'),
-        props: { defaultTab: 'users' }
+        component: () => import('@/views/ProxyView.vue')
       },
       {
         path: 'security',
