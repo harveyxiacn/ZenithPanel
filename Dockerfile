@@ -27,7 +27,7 @@ FROM alpine:latest
 WORKDIR /opt/zenithpanel
 
 # Install basic runtime dependencies (ca-certificates for TLS, tzdata, etc)
-RUN apk add --no-cache ca-certificates tzdata sqlite-libs docker-cli bash iptables
+RUN apk add --no-cache ca-certificates tzdata sqlite-libs docker-cli bash iptables util-linux
 
 # Copy backend binary (frontend is already embedded via go:embed)
 COPY --from=backend-builder /zenithpanel /opt/zenithpanel/zenithpanel
