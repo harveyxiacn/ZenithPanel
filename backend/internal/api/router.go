@@ -26,6 +26,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/terminal"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/updater"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/time/rate"
 )
@@ -692,5 +693,25 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Certificate issued successfully"})
 			})
 		}
+
+		// ======================================
+		// OTA Update
+		// ======================================
+		authGroup.GET("/system/update/check", func(c *gin.Context) {
+			info, err := updater.CheckForUpdate(c.Request.Context())
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Update check failed: " + err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": info})
+		})
+
+		authGroup.POST("/system/update/apply", func(c *gin.Context) {
+			if err := updater.PerformUpdate(c.Request.Context()); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Update failed: " + err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Update applied. Panel will restart in a few seconds."})
+		})
 	}
 }
