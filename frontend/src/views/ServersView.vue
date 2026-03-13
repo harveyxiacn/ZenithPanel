@@ -17,16 +17,13 @@ const tabs = [
 // ---- Terminal ----
 const terminalEl = ref<HTMLElement | null>(null)
 const termInitialized = ref(false)
-const showSshPrompt = ref(true)
-const sshUser = ref('root')
-const sshPass = ref('')
-const sshConnecting = ref(false)
+const termConnecting = ref(false)
 const hostname = window.location.hostname
 let termWs: WebSocket | null = null
 
 async function connectTerminal() {
   if (termInitialized.value || !terminalEl.value) return
-  sshConnecting.value = true
+  termConnecting.value = true
   try {
     const { Terminal } = await import('xterm')
     await import('xterm/css/xterm.css')
@@ -42,31 +39,30 @@ async function connectTerminal() {
     const ws = new WebSocket(`${proto}://${location.host}/api/v1/terminal?token=${token}`)
 
     ws.onopen = () => {
-      // Send SSH credentials as the very first message (never in URL/query params)
-      ws.send(JSON.stringify({ user: sshUser.value, pass: sshPass.value }))
-      showSshPrompt.value = false
       termInitialized.value = true
-      sshConnecting.value = false
+      termConnecting.value = false
+      // Send initial resize
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
     }
     ws.onmessage = (e) => term.write(e.data)
     term.onData((data: string) => { if (ws.readyState === WebSocket.OPEN) ws.send(data) })
+    term.onResize(({ cols, rows }) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+      }
+    })
     ws.onclose = () => term.write('\r\n\x1b[31m[Connection closed]\x1b[0m\r\n')
     ws.onerror = () => {
       term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n')
-      sshConnecting.value = false
+      termConnecting.value = false
     }
     termWs = ws
 
     window.addEventListener('resize', () => fitAddon.fit())
   } catch {
-    sshConnecting.value = false
-    // xterm not installed — show fallback
+    termConnecting.value = false
   }
 }
-
-watch(activeTab, (tab) => {
-  if (tab === 'terminal' && !termInitialized.value) nextTick(() => { /* show prompt */ })
-})
 
 // ---- File Explorer ----
 const currentPath = ref('/')
@@ -187,7 +183,7 @@ async function deleteFwRule(num: string) {
 
 // ---- Lifecycle ----
 onMounted(() => {
-  if (activeTab.value === 'terminal') nextTick(() => { /* show prompt */ })
+  if (activeTab.value === 'terminal') nextTick(() => connectTerminal())
   dockerLoading.value = true
   fetchContainers()
   dockerPollTimer = setInterval(fetchContainers, 10000)
@@ -200,6 +196,7 @@ onUnmounted(() => {
 
 // Load data when switching tabs
 watch(activeTab, (tab) => {
+  if (tab === 'terminal' && !termInitialized.value) nextTick(() => connectTerminal())
   if (tab === 'files' && files.value.length === 0) fetchFiles(currentPath.value)
   if (tab === 'firewall' && fwRules.value.length === 0) fetchFwRules()
 })
@@ -252,48 +249,17 @@ watch(activeTab, (tab) => {
             <div class="h-3 w-3 rounded-full bg-amber-500"></div>
             <div class="h-3 w-3 rounded-full bg-emerald-500"></div>
           </div>
-          <span class="text-xs text-slate-400 font-mono">{{ termInitialized ? sshUser + '@' + hostname : 'SSH Login' }}</span>
+          <span class="text-xs text-slate-400 font-mono">{{ termInitialized ? 'shell@' + hostname : 'Connecting...' }}</span>
           <div class="w-16"></div>
         </div>
 
-        <!-- SSH Credential Prompt -->
-        <div v-if="showSshPrompt" class="flex-1 flex items-center justify-center bg-[#1a1b26]">
-          <div class="bg-[#2d2d2d] rounded-xl p-8 w-full max-w-sm border border-[#3d3d3d]">
-            <h3 class="text-white font-semibold text-lg mb-1">SSH Authentication</h3>
-            <p class="text-slate-400 text-sm mb-6">Connects to localhost:22</p>
-            <div class="space-y-4">
-              <div>
-                <label class="text-xs text-slate-400 uppercase tracking-wide mb-1 block">Username</label>
-                <input
-                  v-model="sshUser"
-                  type="text"
-                  class="w-full bg-[#1a1b26] border border-[#3d3d3d] text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary-500"
-                  placeholder="root"
-                />
-              </div>
-              <div>
-                <label class="text-xs text-slate-400 uppercase tracking-wide mb-1 block">Password</label>
-                <input
-                  v-model="sshPass"
-                  type="password"
-                  class="w-full bg-[#1a1b26] border border-[#3d3d3d] text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary-500"
-                  placeholder="••••••••"
-                  @keyup.enter="connectTerminal"
-                />
-              </div>
-              <button
-                @click="connectTerminal"
-                :disabled="sshConnecting"
-                class="w-full bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white rounded-lg py-2 text-sm font-medium transition-colors"
-              >
-                {{ sshConnecting ? 'Connecting...' : 'Connect' }}
-              </button>
-            </div>
-          </div>
+        <!-- Connecting spinner -->
+        <div v-if="termConnecting && !termInitialized" class="flex-1 flex items-center justify-center bg-[#1a1b26]">
+          <p class="text-slate-400 text-sm">Connecting to shell...</p>
         </div>
 
         <!-- Terminal Canvas -->
-        <div ref="terminalEl" class="flex-1 p-1" :class="{ hidden: showSshPrompt }"></div>
+        <div ref="terminalEl" class="flex-1 p-1" :class="{ hidden: termConnecting && !termInitialized }"></div>
       </div>
 
       <!-- File Explorer -->

@@ -3,6 +3,7 @@ module github.com/harveyxiacn/ZenithPanel/backend
 go 1.24.0
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/docker/docker v24.0.9+incompatible
 	github.com/gin-contrib/cors v1.7.6
 	github.com/gin-gonic/gin v1.10.1
@@ -12,6 +13,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/shirou/gopsutil/v3 v3.24.5
 	golang.org/x/crypto v0.47.0
+	golang.org/x/time v0.9.0
 	gorm.io/gorm v1.31.1
 )
 
@@ -62,7 +64,6 @@ require (
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	golang.org/x/time v0.9.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.2 // indirect

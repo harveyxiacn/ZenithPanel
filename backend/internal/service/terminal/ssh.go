@@ -5,12 +5,13 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
-	"time"
 
+	"github.com/creack/pty"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"golang.org/x/crypto/ssh"
 )
 
 var upgrader = websocket.Upgrader{
@@ -28,13 +29,26 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-type sshCredentials struct {
-	User string `json:"user"`
-	Pass string `json:"pass"`
+// wsMsg is the JSON protocol for terminal WebSocket messages.
+type wsMsg struct {
+	Type string `json:"type"` // "cmd", "resize", "heartbeat"
+	Data string `json:"data"`
+	Cols int    `json:"cols"`
+	Rows int    `json:"rows"`
 }
 
-// HandleTerminalWebSocket upgrades the HTTP request to a WebSocket and bridges to SSH.
-// The client must send JSON {"user":"...","pass":"..."} as the very first message after connecting.
+// findShell returns the first available shell binary.
+func findShell() string {
+	for _, sh := range []string{"/bin/bash", "/bin/sh"} {
+		if _, err := os.Stat(sh); err == nil {
+			return sh
+		}
+	}
+	return "/bin/sh"
+}
+
+// HandleTerminalWebSocket upgrades the HTTP request to a WebSocket and spawns
+// a local shell via PTY — no SSH credentials required.
 func HandleTerminalWebSocket(c *gin.Context) {
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -43,101 +57,71 @@ func HandleTerminalWebSocket(c *gin.Context) {
 	}
 	defer ws.Close()
 
-	// Wait for SSH credentials as the first message (30-second window)
-	ws.SetReadDeadline(time.Now().Add(30 * time.Second))
-	_, msg, err := ws.ReadMessage()
-	ws.SetReadDeadline(time.Time{}) // reset after auth
+	shell := findShell()
+	cmd := exec.Command(shell)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	if home, err := os.UserHomeDir(); err == nil {
+		cmd.Dir = home
+	}
+
+	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		ws.WriteMessage(websocket.TextMessage, []byte("\r\n\x1b[31m[Authentication timeout]\x1b[0m\r\n"))
+		ws.WriteMessage(websocket.TextMessage, []byte("\r\n\x1b[31mFailed to start shell: "+err.Error()+"\x1b[0m\r\n"))
 		return
 	}
+	defer func() {
+		ptmx.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
 
-	var creds sshCredentials
-	if jsonErr := json.Unmarshal(msg, &creds); jsonErr != nil || creds.User == "" {
-		ws.WriteMessage(websocket.TextMessage, []byte("\r\n\x1b[31m[Invalid credentials format]\x1b[0m\r\n"))
-		return
-	}
-
-	sshConfig := &ssh.ClientConfig{
-		User: creds.User,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(creds.Pass),
-		},
-		// MITM on loopback 127.0.0.1 is not realistic when panel and sshd run on the same host.
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-		Timeout:         10 * time.Second,
-	}
-
-	client, err := ssh.Dial("tcp", "127.0.0.1:22", sshConfig)
-	if err != nil {
-		ws.WriteMessage(websocket.TextMessage, []byte("\r\n\x1b[31mSSH failed: "+err.Error()+"\x1b[0m\r\n"))
-		return
-	}
-	defer client.Close()
-
-	session, err := client.NewSession()
-	if err != nil {
-		ws.WriteMessage(websocket.TextMessage, []byte("\r\n\x1b[31mFailed to create SSH session: "+err.Error()+"\x1b[0m\r\n"))
-		return
-	}
-	defer session.Close()
-
-	modes := ssh.TerminalModes{
-		ssh.ECHO:          1,
-		ssh.TTY_OP_ISPEED: 14400,
-		ssh.TTY_OP_OSPEED: 14400,
-	}
-	if err := session.RequestPty("xterm-256color", 40, 80, modes); err != nil {
-		ws.WriteMessage(websocket.TextMessage, []byte("\r\n\x1b[31mPTY request failed: "+err.Error()+"\x1b[0m\r\n"))
-		return
-	}
-
-	stdin, err := session.StdinPipe()
-	if err != nil {
-		return
-	}
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		return
-	}
-	stderr, err := session.StderrPipe()
-	if err != nil {
-		return
-	}
-
+	// PTY output → WebSocket
 	go func() {
-		buf := make([]byte, 1024)
+		buf := make([]byte, 4096)
 		for {
-			n, err := stdout.Read(buf)
+			n, err := ptmx.Read(buf)
 			if err != nil {
+				ws.WriteMessage(websocket.TextMessage, []byte("\r\n\x1b[31m[Session ended]\x1b[0m\r\n"))
+				ws.Close()
 				return
 			}
 			ws.WriteMessage(websocket.BinaryMessage, buf[:n])
 		}
 	}()
 
-	go func() {
-		buf := make([]byte, 1024)
-		for {
-			n, err := stderr.Read(buf)
-			if err != nil {
-				return
-			}
-			ws.WriteMessage(websocket.BinaryMessage, buf[:n])
-		}
-	}()
-
-	if err := session.Shell(); err != nil {
-		return
-	}
-
+	// WebSocket → PTY stdin
 	for {
-		messageType, p, err := ws.ReadMessage()
+		_, p, err := ws.ReadMessage()
 		if err != nil {
 			break
 		}
-		if messageType == websocket.TextMessage || messageType == websocket.BinaryMessage {
-			stdin.Write(p)
+
+		// Try to parse as JSON message for resize/heartbeat
+		var msg wsMsg
+		if json.Unmarshal(p, &msg) == nil && msg.Type != "" {
+			switch msg.Type {
+			case "resize":
+				if msg.Cols > 0 && msg.Rows > 0 {
+					setTermSize(ptmx, msg.Cols, msg.Rows)
+				}
+			case "heartbeat":
+				// echo back
+				ws.WriteMessage(websocket.TextMessage, p)
+			case "cmd":
+				ptmx.Write([]byte(msg.Data))
+			}
+			continue
 		}
+
+		// Raw terminal input (plain text from xterm.js)
+		ptmx.Write(p)
 	}
+}
+
+// setTermSize sets the terminal window size on the PTY.
+func setTermSize(f *os.File, cols, rows int) {
+	pty.Setsize(f, &pty.Winsize{
+		Rows: uint16(rows),
+		Cols: uint16(cols),
+	})
 }

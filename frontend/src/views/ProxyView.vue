@@ -3,7 +3,8 @@ import { ref, onMounted } from 'vue'
 import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon } from '@heroicons/vue/24/outline'
 import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule } from '@/api/proxy'
 
-const activeTab = ref('inbounds')
+const props = defineProps<{ defaultTab?: string }>()
+const activeTab = ref(props.defaultTab || 'inbounds')
 const tabs = [
   { id: 'inbounds', name: 'Inbound Nodes' },
   { id: 'routing', name: 'Routing Rules' },
