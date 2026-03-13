@@ -37,6 +37,7 @@ async function connectTerminal() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     const token = useAuthStore().token
     const ws = new WebSocket(`${proto}://${location.host}/api/v1/terminal?token=${token}`)
+    ws.binaryType = 'arraybuffer'
 
     ws.onopen = () => {
       termInitialized.value = true
