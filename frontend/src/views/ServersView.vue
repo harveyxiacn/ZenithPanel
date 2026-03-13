@@ -48,7 +48,13 @@ async function connectTerminal() {
         ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
       })
     }
-    ws.onmessage = (e) => term.write(e.data)
+    ws.onmessage = (e) => {
+      if (e.data instanceof ArrayBuffer) {
+        term.write(new Uint8Array(e.data))
+      } else {
+        term.write(e.data)
+      }
+    }
     term.onData((data: string) => { if (ws.readyState === WebSocket.OPEN) ws.send(data) })
     term.onResize(({ cols, rows }) => {
       if (ws.readyState === WebSocket.OPEN) {

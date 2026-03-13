@@ -22,9 +22,36 @@ type UpdateInfo struct {
 	LatestID  string `json:"latest_id"`
 }
 
-// getContainerID returns the current container's ID.
-// Docker sets hostname to the short container ID by default.
+// getContainerID reads the container ID from /proc/self/cgroup.
+// This works even with --pid=host where os.Hostname() returns the host's name.
 func getContainerID() (string, error) {
+	data, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return "", fmt.Errorf("read cgroup: %w", err)
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		// cgroup v2: "0::/docker/<id>" or cgroup v1: "N:xyz:/docker/<id>"
+		if idx := strings.LastIndex(line, "/docker/"); idx != -1 {
+			id := strings.TrimSpace(line[idx+len("/docker/"):])
+			if len(id) >= 12 {
+				return id, nil
+			}
+		}
+		// systemd cgroup: "0::/system.slice/docker-<id>.scope"
+		if idx := strings.Index(line, "docker-"); idx != -1 {
+			id := line[idx+len("docker-"):]
+			if dotIdx := strings.Index(id, "."); dotIdx != -1 {
+				id = id[:dotIdx]
+			}
+			id = strings.TrimSpace(id)
+			if len(id) >= 12 {
+				return id, nil
+			}
+		}
+	}
+
+	// Fallback: try hostname (works when --pid=host is not set)
 	return os.Hostname()
 }
 
