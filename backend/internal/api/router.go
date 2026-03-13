@@ -31,7 +31,7 @@ import (
 )
 
 // fsSandboxRoot is the allowed root for file operations.
-var fsSandboxRoot = "/home"
+var fsSandboxRoot = "/"
 
 // loginLimiter restricts login attempts to 5 per second
 var loginLimiter = rate.NewLimiter(rate.Every(time.Second), 5)
