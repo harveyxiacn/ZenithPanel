@@ -1,0 +1,313 @@
+# V2Ray / Xray 代理设置指南
+
+本指南将帮助你在 ZenithPanel 中设置代理节点，并将其导入到客户端应用（Clash、V2RayN 等）。
+
+---
+
+## 前提条件
+
+- ZenithPanel 已部署并运行（参见 `development_guide_CN.md`）
+- 一台拥有公网 IP 的 VPS
+- （可选）一个已解析到 VPS 的域名，用于 TLS 证书
+
+## Docker 启动命令
+
+确保容器使用以下参数启动：
+
+```bash
+docker run -d \
+  --name zenithpanel \
+  --network host \
+  --pid=host \
+  --privileged \
+  --restart unless-stopped \
+  -v zenith-data:/opt/zenithpanel/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/harveyxiacn/zenithpanel:main
+```
+
+> `--network host` 是必需的，这样 Xray 才能直接监听 VPS 的端口。
+
+---
+
+## 第一步：创建入站节点（Inbound）
+
+进入 **代理服务（Proxy Services）** > **入站节点（Inbound Nodes）** 标签页，点击 **Add Node**。
+
+### 示例：VLESS + TCP + TLS
+
+| 字段     | 值 |
+|----------|-------|
+| Tag      | `vless-tcp-tls` |
+| Protocol | `vless` |
+| Listen   | `0.0.0.0` |
+| Port     | `443` |
+
+**Settings JSON**（协议配置）：
+```json
+{
+  "decryption": "none",
+  "flow": "xtls-rprx-vision"
+}
+```
+
+**Stream JSON**（传输层 + TLS）：
+```json
+{
+  "network": "tcp",
+  "security": "tls",
+  "tlsSettings": {
+    "serverName": "你的域名.com",
+    "certificates": [
+      {
+        "certificateFile": "/etc/letsencrypt/live/你的域名.com/fullchain.pem",
+        "keyFile": "/etc/letsencrypt/live/你的域名.com/privkey.pem"
+      }
+    ]
+  }
+}
+```
+
+### 示例：VLESS + Reality（无需域名）
+
+| 字段     | 值 |
+|----------|-------|
+| Tag      | `vless-reality` |
+| Protocol | `vless` |
+| Port     | `443` |
+
+**Settings JSON：**
+```json
+{
+  "decryption": "none",
+  "flow": "xtls-rprx-vision"
+}
+```
+
+**Stream JSON：**
+```json
+{
+  "network": "tcp",
+  "security": "reality",
+  "realitySettings": {
+    "dest": "www.microsoft.com:443",
+    "serverNames": ["www.microsoft.com"],
+    "publicKey": "你的公钥",
+    "privateKey": "你的私钥",
+    "shortIds": ["abcd1234"]
+  }
+}
+```
+
+> 生成 Reality 密钥对：`xray x25519`
+> 在容器中执行：`docker exec zenithpanel xray x25519`
+
+### 示例：VMess + WebSocket + TLS
+
+| 字段     | 值 |
+|----------|-------|
+| Tag      | `vmess-ws-tls` |
+| Protocol | `vmess` |
+| Port     | `443` |
+
+**Settings JSON：**
+```json
+{}
+```
+
+**Stream JSON：**
+```json
+{
+  "network": "ws",
+  "security": "tls",
+  "wsSettings": {
+    "path": "/vmws",
+    "headers": {
+      "Host": "你的域名.com"
+    }
+  },
+  "tlsSettings": {
+    "serverName": "你的域名.com",
+    "certificates": [
+      {
+        "certificateFile": "/etc/letsencrypt/live/你的域名.com/fullchain.pem",
+        "keyFile": "/etc/letsencrypt/live/你的域名.com/privkey.pem"
+      }
+    ]
+  }
+}
+```
+
+### 示例：Trojan + TCP + TLS
+
+| 字段     | 值 |
+|----------|-------|
+| Tag      | `trojan-tls` |
+| Protocol | `trojan` |
+| Port     | `443` |
+
+**Settings JSON：**
+```json
+{}
+```
+
+**Stream JSON：**
+```json
+{
+  "network": "tcp",
+  "security": "tls",
+  "tlsSettings": {
+    "serverName": "你的域名.com",
+    "certificates": [
+      {
+        "certificateFile": "/etc/letsencrypt/live/你的域名.com/fullchain.pem",
+        "keyFile": "/etc/letsencrypt/live/你的域名.com/privkey.pem"
+      }
+    ]
+  }
+}
+```
+
+### 示例：Shadowsocks
+
+| 字段     | 值 |
+|----------|-------|
+| Tag      | `ss-aead` |
+| Protocol | `shadowsocks` |
+| Port     | `8388` |
+
+**Settings JSON：**
+```json
+{
+  "method": "2022-blake3-aes-128-gcm",
+  "password": "你的服务器密码",
+  "network": "tcp,udp"
+}
+```
+
+---
+
+## 第二步：应用配置
+
+创建入站节点后，点击代理服务页面顶部的 **Apply Configuration** 按钮。这将生成 Xray 配置文件并启动/重启 Xray 进程。
+
+你可以通过 API 预览生成的配置：
+```
+GET /api/v1/proxy/config/xray
+```
+
+---
+
+## 第三步：创建用户（Client）
+
+进入 **用户与订阅（Users & Subs）** 标签页，点击 **Add Client**。
+
+| 字段          | 值 |
+|---------------|-------|
+| Email         | `user1@example.com` |
+| Select Inbound| 选择第一步创建的入站节点 |
+| Traffic Limit | `0`（无限制）或字节数（如 `107374182400` = 100GB） |
+
+UUID 会自动生成。创建后，点击 **Sub Link** 复制订阅链接。
+
+---
+
+## 第四步：导入到客户端应用
+
+### 订阅链接格式
+```
+https://你的服务器:面板端口/api/v1/sub/用户UUID
+```
+
+面板会根据 `User-Agent` 请求头自动判断客户端类型：
+- **Clash/Mihomo/Stash/Surge/Shadowrocket/Loon** -> Clash YAML 格式
+- **V2RayN/V2RayNG/其他** -> Base64 编码链接
+
+你也可以手动指定格式：
+```
+https://服务器:端口/api/v1/sub/UUID?format=clash
+https://服务器:端口/api/v1/sub/UUID?format=base64
+```
+
+### Clash / Mihomo
+1. 打开 Clash -> **配置（Profiles）**
+2. 点击 **导入（Import）** 或粘贴订阅链接
+3. 点击 **更新（Update）** 下载配置
+4. 选择 **PROXY** 分组，选择一个节点
+
+### V2RayN（Windows）
+1. 打开 V2RayN -> **订阅（Subscription）** -> **订阅设置**
+2. 添加新订阅，粘贴订阅链接
+3. 点击 **更新订阅** -> 节点会出现在列表中
+4. 右键节点 -> **设为活动服务器**
+
+### V2RayNG（Android）
+1. 打开 V2RayNG -> 点击 **+** -> **从URL导入配置**
+2. 粘贴订阅链接
+3. 点击播放按钮连接
+
+### Shadowrocket（iOS）
+1. 打开 Shadowrocket -> 点击右上角 **+**
+2. 选择 **Subscribe** -> 粘贴链接
+3. 点击更新，然后选择节点
+
+---
+
+## 第五步：开放防火墙端口
+
+确保入站节点的端口已开放。可以使用 ZenithPanel 内置的防火墙页面，或通过终端操作：
+
+```bash
+# 示例：开放 TCP 443 端口
+iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+
+# 示例：开放 TCP+UDP 8388 端口
+iptables -I INPUT -p tcp --dport 8388 -j ACCEPT
+iptables -I INPUT -p udp --dport 8388 -j ACCEPT
+```
+
+---
+
+## 路由规则
+
+进入 **代理服务** > **路由规则（Routing Rules）** 标签页，添加规则来控制流量走向：
+
+| Outbound Tag | 用途 |
+|-------------|---------|
+| `direct`    | 直连（不经过代理） |
+| `block`     | 拦截（丢弃流量） |
+
+示例：屏蔽广告域名：
+- Domain: `geosite:category-ads-all`
+- Outbound Tag: `block`
+
+示例：中国 IP 直连：
+- IP: `geoip:cn`
+- Outbound Tag: `direct`
+
+---
+
+## 常见问题
+
+**Xray 启动失败：**
+- 检查端口是否被占用：`netstat -tlnp | grep 443`
+- 检查生成的配置文件：`cat /opt/zenithpanel/xray_config.json`
+- 手动运行 Xray 排查：`xray run -c /opt/zenithpanel/xray_config.json`
+
+**TLS 证书错误：**
+- 确保证书文件在容器内可访问。如果使用宿主机的 Let's Encrypt 证书，挂载证书目录：
+  ```bash
+  -v /etc/letsencrypt:/etc/letsencrypt:ro
+  ```
+
+**客户端无法连接：**
+- 确认防火墙端口已开放
+- 确认入站节点已启用（Enable）
+- 确认用户已启用且未过期
+- 检查订阅链接是否可访问
+
+**生成 Reality 密钥对：**
+```bash
+docker exec zenithpanel xray x25519
+```
+输出包含私钥和公钥。将私钥填入 Stream JSON 的 `realitySettings.privateKey`，公钥填入 `realitySettings.publicKey`（公钥会通过订阅链接下发给客户端）。

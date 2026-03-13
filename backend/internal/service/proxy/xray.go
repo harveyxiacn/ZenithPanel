@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"fmt"
 	"os/exec"
 
@@ -15,8 +16,8 @@ type XrayManager struct {
 func NewXrayManager() *XrayManager {
 	return &XrayManager{
 		BaseCore: BaseCore{
-			BinaryPath: "xray", // Or absolute path to xray binary
-			ConfigPath: "xray_config.json", // Path to save generated config
+			BinaryPath: "xray",
+			ConfigPath: "/opt/zenithpanel/xray_config.json",
 		},
 	}
 }
@@ -25,47 +26,38 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 	var inbounds []model.Inbound
 	var rules []model.RoutingRule
 
-	// Fetch active configurations from DB
 	config.DB.Where("enable = ?", true).Find(&inbounds)
 	config.DB.Where("enable = ?", true).Find(&rules)
 
-	// Build the JSON structure for Xray
-	// This is a minimal skeleton
 	xrayConfig := map[string]interface{}{
 		"log": map[string]interface{}{
 			"loglevel": "warning",
 		},
-		"inbounds":  []map[string]interface{}{},
-		"outbounds": []map[string]interface{}{
-			{
+		"inbounds":  []interface{}{},
+		"outbounds": []interface{}{
+			map[string]interface{}{
 				"protocol": "freedom",
 				"tag":      "direct",
 			},
-			{
+			map[string]interface{}{
 				"protocol": "blackhole",
 				"tag":      "block",
 			},
 		},
 		"routing": map[string]interface{}{
 			"domainStrategy": "AsIs",
-			"rules":          []map[string]interface{}{},
+			"rules":          []interface{}{},
 		},
 	}
 
-	// Process Inbounds
 	for _, in := range inbounds {
-		inboundMap := map[string]interface{}{
-			"tag":      in.Tag,
-			"port":     in.Port,
-			"protocol": in.Protocol,
+		inboundEntry, err := buildXrayInbound(in)
+		if err != nil {
+			return "", fmt.Errorf("build inbound %q: %w", in.Tag, err)
 		}
-		// Typically we would unmarshal `in.Settings` and `in.Stream` and merge them
-		// For the skeleton, we just append
-		inboundList := xrayConfig["inbounds"].([]map[string]interface{})
-		xrayConfig["inbounds"] = append(inboundList, inboundMap)
+		xrayConfig["inbounds"] = append(xrayConfig["inbounds"].([]interface{}), inboundEntry)
 	}
 
-	// Process Routing Rules
 	for _, r := range rules {
 		ruleMap := map[string]interface{}{
 			"type":        "field",
@@ -77,18 +69,108 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 		if r.IP != "" {
 			ruleMap["ip"] = []string{r.IP}
 		}
-		ruleList := xrayConfig["routing"].(map[string]interface{})["rules"].([]map[string]interface{})
-		xrayConfig["routing"].(map[string]interface{})["rules"] = append(ruleList, ruleMap)
+		xrayConfig["routing"].(map[string]interface{})["rules"] = append(
+			xrayConfig["routing"].(map[string]interface{})["rules"].([]interface{}), ruleMap,
+		)
 	}
 
 	return PrettifyJSON(xrayConfig)
+}
+
+// buildXrayInbound constructs a complete Xray inbound entry from the DB model,
+// parsing the Settings/Stream JSON and injecting clients from the Client table.
+func buildXrayInbound(in model.Inbound) (map[string]interface{}, error) {
+	entry := map[string]interface{}{
+		"tag":      in.Tag,
+		"port":     in.Port,
+		"listen":   "0.0.0.0",
+		"protocol": in.Protocol,
+	}
+
+	// Parse settings JSON
+	settings := map[string]interface{}{}
+	if in.Settings != "" && in.Settings != "{}" {
+		if err := json.Unmarshal([]byte(in.Settings), &settings); err != nil {
+			return nil, fmt.Errorf("parse settings: %w", err)
+		}
+	}
+
+	// Fetch clients for this inbound and inject them
+	var clients []model.Client
+	config.DB.Where("inbound_id = ? AND enable = ?", in.ID, true).Find(&clients)
+
+	switch in.Protocol {
+	case "vless":
+		if _, ok := settings["decryption"]; !ok {
+			settings["decryption"] = "none"
+		}
+		clientList := []map[string]interface{}{}
+		for _, c := range clients {
+			cm := map[string]interface{}{"id": c.UUID, "email": c.Email}
+			// Preserve flow if set in settings template
+			if flow, ok := settings["flow"]; ok {
+				cm["flow"] = flow
+			}
+			clientList = append(clientList, cm)
+		}
+		settings["clients"] = clientList
+		delete(settings, "flow") // flow belongs on client, not top-level
+
+	case "vmess":
+		clientList := []map[string]interface{}{}
+		for _, c := range clients {
+			clientList = append(clientList, map[string]interface{}{
+				"id":      c.UUID,
+				"email":   c.Email,
+				"alterId": 0,
+			})
+		}
+		settings["clients"] = clientList
+
+	case "trojan":
+		clientList := []map[string]interface{}{}
+		for _, c := range clients {
+			clientList = append(clientList, map[string]interface{}{
+				"password": c.UUID,
+				"email":    c.Email,
+			})
+		}
+		settings["clients"] = clientList
+
+	case "shadowsocks":
+		// Shadowsocks uses a single password, clients share it or use AEAD 2022 multi-user
+		// Keep existing settings (method, password) as-is
+
+	case "hysteria2":
+		clientList := []map[string]interface{}{}
+		for _, c := range clients {
+			clientList = append(clientList, map[string]interface{}{
+				"password": c.UUID,
+				"email":    c.Email,
+			})
+		}
+		settings["clients"] = clientList
+	}
+
+	entry["settings"] = settings
+
+	// Parse stream settings JSON
+	if in.Stream != "" && in.Stream != "{}" {
+		streamSettings := map[string]interface{}{}
+		if err := json.Unmarshal([]byte(in.Stream), &streamSettings); err != nil {
+			return nil, fmt.Errorf("parse stream: %w", err)
+		}
+		entry["streamSettings"] = streamSettings
+	}
+
+	return entry, nil
 }
 
 func (x *XrayManager) Start() error {
 	if x.Status() {
 		return fmt.Errorf("xray is already running")
 	}
-	
+
 	cfgJSON, err := x.GenerateConfig()
 	if err != nil {
 		return err

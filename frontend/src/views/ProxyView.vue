@@ -23,7 +23,7 @@ const inbounds = ref<any[]>([])
 const inboundsLoading = ref(false)
 const showInboundForm = ref(false)
 const editingInbound = ref<any>(null)
-const inboundForm = ref({ tag: '', protocol: 'vless', listen: '0.0.0.0', port: 443, settings: '{}' })
+const inboundForm = ref({ tag: '', protocol: 'vless', listen: '0.0.0.0', port: 443, settings: '{}', stream: '{}' })
 
 async function fetchInbounds() {
   inboundsLoading.value = true
@@ -43,10 +43,11 @@ function openInboundForm(inbound?: any) {
       listen: inbound.listen || '0.0.0.0',
       port: inbound.port || 443,
       settings: typeof inbound.settings === 'string' ? inbound.settings : JSON.stringify(inbound.settings || {}, null, 2),
+      stream: typeof inbound.stream === 'string' ? inbound.stream : JSON.stringify(inbound.stream || {}, null, 2),
     }
   } else {
     editingInbound.value = null
-    inboundForm.value = { tag: '', protocol: 'vless', listen: '0.0.0.0', port: 443, settings: '{}' }
+    inboundForm.value = { tag: '', protocol: 'vless', listen: '0.0.0.0', port: 443, settings: '{}', stream: '{}' }
   }
   showInboundForm.value = true
 }
@@ -144,6 +145,17 @@ async function removeRoutingRule(id: number) {
   } catch { /* ignore */ }
 }
 
+// ---- Helpers ----
+function parseTransport(stream: string): string {
+  if (!stream || stream === '{}') return 'tcp'
+  try {
+    const s = JSON.parse(stream)
+    const net = s.network || 'tcp'
+    const sec = s.security || 'none'
+    return sec !== 'none' ? `${net}+${sec}` : net
+  } catch { return 'tcp' }
+}
+
 // ---- Lifecycle ----
 onMounted(() => {
   fetchInbounds()
@@ -217,7 +229,16 @@ onMounted(() => {
             <input v-model="inboundForm.listen" placeholder="Listen" class="input-field text-sm" />
             <input v-model.number="inboundForm.port" type="number" placeholder="Port" class="input-field text-sm" />
           </div>
-          <textarea v-model="inboundForm.settings" placeholder="Settings (JSON)" rows="3" class="input-field text-sm w-full font-mono mb-3"></textarea>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Settings (JSON) - Protocol config</label>
+              <textarea v-model="inboundForm.settings" placeholder='{"decryption":"none","flow":"xtls-rprx-vision"}' rows="4" class="input-field text-sm w-full font-mono"></textarea>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-500 mb-1">Stream (JSON) - Transport & TLS</label>
+              <textarea v-model="inboundForm.stream" placeholder='{"network":"tcp","security":"tls","tlsSettings":{...}}' rows="4" class="input-field text-sm w-full font-mono"></textarea>
+            </div>
+          </div>
           <button @click="saveInbound" class="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-primary-700">Save</button>
         </div>
 
@@ -229,7 +250,7 @@ onMounted(() => {
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Tag</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Protocol</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Port</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Listen</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Transport</th>
               <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
@@ -242,7 +263,7 @@ onMounted(() => {
                 </span>
               </td>
               <td class="px-6 py-4 text-sm text-slate-500">{{ node.port }}</td>
-              <td class="px-6 py-4 text-sm text-slate-500">{{ node.listen || '0.0.0.0' }}</td>
+              <td class="px-6 py-4 text-sm text-slate-500">{{ parseTransport(node.stream) }}</td>
               <td class="px-6 py-4 text-right text-sm font-medium">
                 <button @click="openInboundForm(node)" class="text-primary-600 hover:text-primary-900 mr-4">Edit</button>
                 <button @click="removeInbound(node.id)" class="text-rose-600 hover:text-rose-900">
