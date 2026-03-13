@@ -41,8 +41,11 @@ async function connectTerminal() {
     ws.onopen = () => {
       termInitialized.value = true
       termConnecting.value = false
-      // Send initial resize
-      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+      // Re-fit now that overlay is gone, then send correct size to PTY
+      nextTick(() => {
+        fitAddon.fit()
+        ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
+      })
     }
     ws.onmessage = (e) => term.write(e.data)
     term.onData((data: string) => { if (ws.readyState === WebSocket.OPEN) ws.send(data) })
@@ -253,13 +256,13 @@ watch(activeTab, (tab) => {
           <div class="w-16"></div>
         </div>
 
-        <!-- Connecting spinner -->
-        <div v-if="termConnecting && !termInitialized" class="flex-1 flex items-center justify-center bg-[#1a1b26]">
-          <p class="text-slate-400 text-sm">Connecting to shell...</p>
+        <!-- Terminal Canvas (must not be hidden when xterm opens, or cols/rows = 0) -->
+        <div class="flex-1 relative">
+          <div v-if="termConnecting && !termInitialized" class="absolute inset-0 flex items-center justify-center bg-[#1a1b26] z-10">
+            <p class="text-slate-400 text-sm">Connecting to shell...</p>
+          </div>
+          <div ref="terminalEl" class="h-full p-1"></div>
         </div>
-
-        <!-- Terminal Canvas -->
-        <div ref="terminalEl" class="flex-1 p-1" :class="{ hidden: termConnecting && !termInitialized }"></div>
       </div>
 
       <!-- File Explorer -->

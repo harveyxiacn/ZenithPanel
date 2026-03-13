@@ -37,18 +37,46 @@ type wsMsg struct {
 	Rows int    `json:"rows"`
 }
 
-// findShell returns the first available shell binary.
-func findShell() string {
-	for _, sh := range []string{"/bin/bash", "/bin/sh"} {
-		if _, err := os.Stat(sh); err == nil {
-			return sh
+// buildShellCmd returns a command that opens a host shell via nsenter (if running
+// in a container with --pid=host), or falls back to a local container shell.
+func buildShellCmd() *exec.Cmd {
+	// Try nsenter into host PID 1 — works when container has --pid=host + --privileged
+	if _, err := os.Stat("/proc/1/ns/mnt"); err == nil {
+		if nsenter, err := exec.LookPath("nsenter"); err == nil {
+			// Find best shell on host
+			hostShell := "/bin/sh"
+			for _, sh := range []string{"/bin/bash", "/bin/sh"} {
+				// Check if shell exists on host via nsenter
+				check := exec.Command(nsenter, "-t", "1", "-m", "--", "test", "-x", sh)
+				if check.Run() == nil {
+					hostShell = sh
+					break
+				}
+			}
+			cmd := exec.Command(nsenter, "--mount", "--uts", "--ipc", "--net", "--pid", "--target", "1", "--", hostShell, "--login")
+			cmd.Env = []string{"TERM=xterm-256color", "HOME=/root", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+			return cmd
 		}
 	}
-	return "/bin/sh"
+
+	// Fallback: local container shell
+	shell := "/bin/sh"
+	for _, sh := range []string{"/bin/bash", "/bin/sh"} {
+		if _, err := os.Stat(sh); err == nil {
+			shell = sh
+			break
+		}
+	}
+	cmd := exec.Command(shell)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	if home, err := os.UserHomeDir(); err == nil {
+		cmd.Dir = home
+	}
+	return cmd
 }
 
 // HandleTerminalWebSocket upgrades the HTTP request to a WebSocket and spawns
-// a local shell via PTY — no SSH credentials required.
+// a host shell via nsenter+PTY — no SSH credentials required.
 func HandleTerminalWebSocket(c *gin.Context) {
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
@@ -57,12 +85,7 @@ func HandleTerminalWebSocket(c *gin.Context) {
 	}
 	defer ws.Close()
 
-	shell := findShell()
-	cmd := exec.Command(shell)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-	if home, err := os.UserHomeDir(); err == nil {
-		cmd.Dir = home
-	}
+	cmd := buildShellCmd()
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
