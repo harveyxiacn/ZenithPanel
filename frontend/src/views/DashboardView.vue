@@ -16,6 +16,9 @@ const netIn = ref(0)
 const netOut = ref(0)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let lastNetIn = 0
+let lastNetOut = 0
+let lastFetchTime = 0
 
 async function fetchStats() {
   try {
@@ -30,8 +33,21 @@ async function fetchStats() {
       uptime.value = formatUptime(d.uptime_seconds ?? 0)
       hostname.value = d.hostname ?? ''
       loadAvg.value = (d.load_avg ?? []).map((v: number) => v.toFixed(2)).join(' / ')
-      netIn.value = d.net_in ?? 0
-      netOut.value = d.net_out ?? 0
+
+      // Compute network rate from cumulative counters
+      const now = Date.now()
+      const rawIn = d.net_in ?? 0
+      const rawOut = d.net_out ?? 0
+      if (lastFetchTime > 0) {
+        const elapsed = (now - lastFetchTime) / 1000
+        if (elapsed > 0) {
+          netIn.value = Math.round((rawIn - lastNetIn) / elapsed)
+          netOut.value = Math.round((rawOut - lastNetOut) / elapsed)
+        }
+      }
+      lastNetIn = rawIn
+      lastNetOut = rawOut
+      lastFetchTime = now
     }
   } catch {
     // silently fail, keep polling
