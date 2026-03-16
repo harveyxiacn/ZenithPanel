@@ -1,10 +1,14 @@
 package fs
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 )
+
+// maxReadSize limits file reads to 10 MB to prevent memory exhaustion.
+const maxReadSize = 10 << 20
 
 type FileInfo struct {
 	Name    string `json:"name"`
@@ -38,8 +42,15 @@ func ListDirectory(dirPath string) ([]FileInfo, error) {
 	return results, nil
 }
 
-// ReadFileContent returns the text content of a file
+// ReadFileContent returns the text content of a file (capped at maxReadSize).
 func ReadFileContent(filePath string) (string, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return "", err
+	}
+	if info.Size() > maxReadSize {
+		return "", fmt.Errorf("file too large (%d bytes, max %d)", info.Size(), maxReadSize)
+	}
 	b, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", err
