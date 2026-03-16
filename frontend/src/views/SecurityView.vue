@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, GlobeAltIcon, ArrowPathIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
 import { checkForUpdate, applyUpdate } from '@/api/system'
+
+const { t } = useI18n()
 
 // ---- Update ----
 const updateChecking = ref(false)
@@ -32,7 +35,7 @@ async function onCheckUpdate() {
 }
 
 async function onApplyUpdate() {
-  if (!confirm('This will restart the panel. Continue?')) return
+  if (!confirm(t('security.update.confirmRestart'))) return
   updateApplying.value = true
   updateError.value = ''
   try {
@@ -43,7 +46,7 @@ async function onApplyUpdate() {
       updateError.value = ''
       const timer = setInterval(() => {
         countdown--
-        updateError.value = `Panel restarting... reloading in ${countdown}s`
+        updateError.value = t('security.update.restarting', { n: countdown })
         if (countdown <= 0) {
           clearInterval(timer)
           window.location.reload()
@@ -64,8 +67,8 @@ async function onApplyUpdate() {
   <div class="py-2">
     <!-- Header -->
     <div class="mb-8">
-      <h1 class="text-3xl font-bold text-slate-800 tracking-tight">Security & Settings</h1>
-      <p class="text-slate-500 mt-1">Configure panel security, manage updates, and customize settings.</p>
+      <h1 class="text-3xl font-bold text-slate-800 tracking-tight">{{ $t('security.title') }}</h1>
+      <p class="text-slate-500 mt-1">{{ $t('security.subtitle') }}</p>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -79,25 +82,25 @@ async function onApplyUpdate() {
               <ArrowDownTrayIcon class="h-6 w-6" />
             </div>
             <div>
-              <h3 class="text-lg font-medium text-slate-800">Panel Update</h3>
-              <p class="text-sm text-slate-500">Check for and install updates automatically</p>
+              <h3 class="text-lg font-medium text-slate-800">{{ $t('security.update.title') }}</h3>
+              <p class="text-sm text-slate-500">{{ $t('security.update.subtitle') }}</p>
             </div>
           </div>
           <div class="p-6 space-y-4">
             <div v-if="updateChecked" class="space-y-3">
               <div class="flex items-center justify-between text-sm">
-                <span class="text-slate-500">Current Image</span>
+                <span class="text-slate-500">{{ $t('security.update.currentImage') }}</span>
                 <code class="bg-slate-100 px-2 py-0.5 rounded text-xs text-slate-700">{{ currentImageID }}</code>
               </div>
               <div class="flex items-center justify-between text-sm">
-                <span class="text-slate-500">Latest Image</span>
+                <span class="text-slate-500">{{ $t('security.update.latestImage') }}</span>
                 <code class="bg-slate-100 px-2 py-0.5 rounded text-xs text-slate-700">{{ latestImageID }}</code>
               </div>
               <div v-if="updateAvailable" class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-700">
-                A new version is available. Click "Update Now" to apply.
+                {{ $t('security.update.available') }}
               </div>
               <div v-else class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-700">
-                You are running the latest version.
+                {{ $t('security.update.upToDate') }}
               </div>
             </div>
 
@@ -112,7 +115,7 @@ async function onApplyUpdate() {
                 class="flex items-center bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition"
               >
                 <ArrowPathIcon class="h-4 w-4 mr-2" :class="{ 'animate-spin': updateChecking }" />
-                {{ updateChecking ? 'Checking...' : 'Check for Updates' }}
+                {{ updateChecking ? $t('security.update.checking') : $t('security.update.checkForUpdates') }}
               </button>
               <button
                 v-if="updateAvailable"
@@ -121,7 +124,7 @@ async function onApplyUpdate() {
                 class="flex items-center bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition"
               >
                 <ArrowDownTrayIcon class="h-4 w-4 mr-2" />
-                {{ updateApplying ? 'Updating...' : 'Update Now' }}
+                {{ updateApplying ? $t('security.update.updating') : $t('security.update.updateNow') }}
               </button>
             </div>
           </div>
@@ -134,13 +137,13 @@ async function onApplyUpdate() {
               <GlobeAltIcon class="h-6 w-6" />
             </div>
             <div>
-              <h3 class="text-lg font-medium text-slate-800">Access Configuration</h3>
-              <p class="text-sm text-slate-500">Customize how you connect to ZenithPanel</p>
+              <h3 class="text-lg font-medium text-slate-800">{{ $t('security.access.title') }}</h3>
+              <p class="text-sm text-slate-500">{{ $t('security.access.subtitle') }}</p>
             </div>
           </div>
           <div class="p-6 space-y-4">
             <div>
-              <label class="block text-sm font-medium text-slate-700">Security Path Suffix</label>
+              <label class="block text-sm font-medium text-slate-700">{{ $t('security.access.securityPath') }}</label>
               <div class="mt-1 flex rounded-md shadow-sm">
                 <span class="inline-flex items-center rounded-l-md border border-r-0 border-slate-300 bg-slate-50 px-3 text-slate-500 sm:text-sm">
                   https://ip:port/
@@ -151,10 +154,10 @@ async function onApplyUpdate() {
 
             <div class="flex items-center justify-between pt-4 border-t border-slate-100">
               <div>
-                <h4 class="text-sm font-medium text-slate-900">API White-list</h4>
-                <p class="text-xs text-slate-500">Restrict backend API access to specific IPs.</p>
+                <h4 class="text-sm font-medium text-slate-900">{{ $t('security.access.apiWhitelist') }}</h4>
+                <p class="text-xs text-slate-500">{{ $t('security.access.apiWhitelistDesc') }}</p>
               </div>
-              <button class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">Configure</button>
+              <button class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">{{ $t('common.configure') }}</button>
             </div>
           </div>
         </div>
@@ -166,8 +169,8 @@ async function onApplyUpdate() {
               <KeyIcon class="h-6 w-6" />
             </div>
             <div>
-              <h3 class="text-lg font-medium text-slate-800">Authentication</h3>
-              <p class="text-sm text-slate-500">Manage your passwords and two-factor auth</p>
+              <h3 class="text-lg font-medium text-slate-800">{{ $t('security.auth.title') }}</h3>
+              <p class="text-sm text-slate-500">{{ $t('security.auth.subtitle') }}</p>
             </div>
           </div>
           <div class="p-6 space-y-4">
@@ -175,22 +178,22 @@ async function onApplyUpdate() {
               <div class="flex items-center">
                 <LockClosedIcon class="h-5 w-5 text-slate-400 mr-3" />
                 <div>
-                  <h4 class="text-sm font-medium text-slate-900">Panel Password</h4>
-                  <p class="text-xs text-slate-500">Change your admin password</p>
+                  <h4 class="text-sm font-medium text-slate-900">{{ $t('security.auth.panelPassword') }}</h4>
+                  <p class="text-xs text-slate-500">{{ $t('security.auth.panelPasswordDesc') }}</p>
                 </div>
               </div>
-              <button class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">Change</button>
+              <button class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">{{ $t('common.change') }}</button>
             </div>
 
             <div class="flex items-center justify-between pt-4 border-t border-slate-100">
               <div class="flex items-center">
                 <FingerPrintIcon class="h-5 w-5 text-slate-400 mr-3" />
                 <div>
-                  <h4 class="text-sm font-medium text-slate-900">Two-Factor Authentication (2FA)</h4>
-                  <p class="text-xs text-rose-500 font-medium mt-0.5">Not configured</p>
+                  <h4 class="text-sm font-medium text-slate-900">{{ $t('security.auth.twoFactor') }}</h4>
+                  <p class="text-xs text-rose-500 font-medium mt-0.5">{{ $t('security.auth.notConfigured') }}</p>
                 </div>
               </div>
-              <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">Enable Auth</button>
+              <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">{{ $t('security.auth.enableAuth') }}</button>
             </div>
           </div>
         </div>
@@ -201,17 +204,17 @@ async function onApplyUpdate() {
       <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden h-fit">
         <div class="p-6 border-b border-slate-100 flex items-center">
           <ShieldCheckIcon class="h-6 w-6 text-emerald-500 mr-2" />
-          <h3 class="text-lg font-medium text-slate-800">Security Tips</h3>
+          <h3 class="text-lg font-medium text-slate-800">{{ $t('security.tips.title') }}</h3>
         </div>
         <div class="p-6 space-y-4">
           <div class="text-sm text-slate-600 space-y-3">
-            <p>Keep your panel secure:</p>
+            <p>{{ $t('security.tips.intro') }}</p>
             <ul class="list-disc list-inside space-y-2 text-slate-500">
-              <li>Use a strong admin password</li>
-              <li>Enable 2FA when available</li>
-              <li>Keep the panel updated</li>
-              <li>Use HTTPS with a valid certificate</li>
-              <li>Restrict API access by IP if possible</li>
+              <li>{{ $t('security.tips.strongPassword') }}</li>
+              <li>{{ $t('security.tips.enable2fa') }}</li>
+              <li>{{ $t('security.tips.keepUpdated') }}</li>
+              <li>{{ $t('security.tips.useHttps') }}</li>
+              <li>{{ $t('security.tips.restrictApi') }}</li>
             </ul>
           </div>
         </div>

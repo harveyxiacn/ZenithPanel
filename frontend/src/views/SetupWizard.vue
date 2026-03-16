@@ -4,9 +4,11 @@ import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import { setupLogin, setupComplete } from '@/api/auth'
 import { CheckCircleIcon, ShieldCheckIcon, CubeTransparentIcon, ArrowRightIcon } from '@heroicons/vue/24/outline'
+import { useI18n } from 'vue-i18n'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const { t } = useI18n()
 
 const step = ref(1)
 const loading = ref(false)
@@ -25,7 +27,7 @@ const form = reactive({
 const handleInitialLogin = async () => {
   errorMsg.value = ''
   if (!form.initialPassword) {
-    errorMsg.value = 'Please enter the initial password printed in your console'
+    errorMsg.value = t('setup.welcomeMsg')
     return
   }
   loading.value = true
@@ -48,11 +50,11 @@ const handleInitialLogin = async () => {
 const handleCompleteSetup = async () => {
   errorMsg.value = ''
   if (form.newPassword !== form.confirmPassword) {
-    errorMsg.value = 'Passwords do not match'
+    errorMsg.value = t('setup.errorPasswordMismatch')
     return
   }
   if (form.newPassword.length < 8) {
-    errorMsg.value = 'New password must be at least 8 characters'
+    errorMsg.value = t('setup.errorPasswordShort')
     return
   }
 
@@ -92,8 +94,8 @@ const goToLogin = () => {
         <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-primary-500 to-primary-300 shadow-lg mb-4">
           <CubeTransparentIcon class="w-8 h-8 text-white" />
         </div>
-        <h1 class="text-3xl font-bold text-white tracking-tight">ZenithPanel</h1>
-        <p class="text-primary-200 mt-2 font-medium">Secure Initialization Wizard</p>
+        <h1 class="text-3xl font-bold text-white tracking-tight">{{ $t('setup.title') }}</h1>
+        <p class="text-primary-200 mt-2 font-medium">{{ $t('setup.subtitle') }}</p>
       </div>
 
       <!-- Error Alert -->
@@ -105,11 +107,11 @@ const goToLogin = () => {
       <!-- Step 1: Verify Access -->
       <div v-if="step === 1" class="animate-fade-in space-y-5">
         <div class="bg-primary-500/10 border border-primary-500/20 rounded-xl p-4 text-sm text-primary-100 mb-6 leading-relaxed">
-          Welcome to your new instance! To protect against unauthorized scanning, please enter the temporary password generated in your server console.
+          {{ $t('setup.welcomeMsg') }}
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-2">Initial One-Time Password</label>
+          <label class="block text-sm font-medium text-gray-300 mb-2">{{ $t('setup.initialPassword') }}</label>
           <input
             type="password"
             v-model="form.initialPassword"
@@ -126,7 +128,7 @@ const goToLogin = () => {
           class="w-full relative overflow-hidden bg-primary-600 text-white font-medium py-3 px-4 rounded-xl transition-all duration-300 hover:bg-primary-500 hover:shadow-[0_0_20px_rgba(34,197,94,0.4)] active:scale-[0.98] disabled:opacity-70 flex justify-center items-center mt-6"
         >
           <span v-if="loading" class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-          <span v-else class="flex items-center">Verify Identity <ArrowRightIcon class="w-4 h-4 ml-2" /></span>
+          <span v-else class="flex items-center">{{ $t('setup.verifyIdentity') }} <ArrowRightIcon class="w-4 h-4 ml-2" /></span>
         </button>
       </div>
 
@@ -134,27 +136,27 @@ const goToLogin = () => {
       <div v-else-if="step === 2" class="animate-fade-in space-y-5">
         <div class="flex items-center space-x-2 text-green-400 mb-6">
           <ShieldCheckIcon class="w-5 h-5" />
-          <span class="font-medium text-sm">Identity Verified. Configure Panel Security.</span>
+          <span class="font-medium text-sm">{{ $t('setup.identityVerified') }}</span>
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-2">New Admin Password</label>
+          <label class="block text-sm font-medium text-gray-300 mb-2">{{ $t('setup.newAdminPassword') }}</label>
           <input
             type="password"
             v-model="form.newPassword"
             class="w-full bg-gray-900/50 border border-gray-600 text-white rounded-xl px-4 py-3 outline-none focus:border-primary-500 transition-all"
-            placeholder="Minimum 8 characters"
+            :placeholder="$t('setup.minChars')"
             :disabled="loading"
           />
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-2">Confirm Password</label>
+          <label class="block text-sm font-medium text-gray-300 mb-2">{{ $t('setup.confirmPassword') }}</label>
           <input
             type="password"
             v-model="form.confirmPassword"
             class="w-full bg-gray-900/50 border border-gray-600 text-white rounded-xl px-4 py-3 outline-none focus:border-primary-500 transition-all"
-            placeholder="Re-type new password"
+            :placeholder="$t('setup.retypePassword')"
             :disabled="loading"
           />
         </div>
@@ -162,7 +164,7 @@ const goToLogin = () => {
         <div class="h-px bg-gray-700/50 my-6"></div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-2">Custom Panel URL Path</label>
+          <label class="block text-sm font-medium text-gray-300 mb-2">{{ $t('setup.customPanelPath') }}</label>
           <div class="flex items-center rounded-xl bg-gray-900/50 border border-gray-600 focus-within:border-primary-500 transition-all overflow-hidden p-1">
             <span class="pl-3 pr-2 text-gray-500 font-mono text-sm leading-none pt-1">/</span>
             <input
@@ -173,7 +175,7 @@ const goToLogin = () => {
               :disabled="loading"
             />
           </div>
-          <p class="text-xs text-gray-400 mt-2">Change to prevent automated scanning.</p>
+          <p class="text-xs text-gray-400 mt-2">{{ $t('setup.customPanelPathHint') }}</p>
         </div>
 
         <button
@@ -182,18 +184,18 @@ const goToLogin = () => {
           class="w-full relative overflow-hidden bg-primary-600 text-white font-medium py-3 px-4 rounded-xl transition-all duration-300 hover:bg-primary-500 hover:shadow-[0_0_20px_rgba(34,197,94,0.4)] active:scale-[0.98] disabled:opacity-70 flex justify-center items-center mt-8"
         >
           <span v-if="loading" class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-          <span v-else class="flex items-center">Apply & Initialize Zenith</span>
+          <span v-else class="flex items-center">{{ $t('setup.applyInit') }}</span>
         </button>
       </div>
 
       <!-- Step 3: Success -->
       <div v-else-if="step === 3" class="animate-fade-in text-center py-6">
         <CheckCircleIcon class="w-20 h-20 text-green-400 mx-auto mb-6 drop-shadow-[0_0_15px_rgba(74,222,128,0.5)]" />
-        <h2 class="text-2xl font-bold text-white mb-2">Initialization Complete!</h2>
+        <h2 class="text-2xl font-bold text-white mb-2">{{ $t('setup.completeTitle') }}</h2>
         <p class="text-gray-300 text-sm mb-6 leading-relaxed">
-          The temporary setup token has been destroyed. Your panel is now securely locked.
+          {{ $t('setup.completeMsg') }}
           <br/><br/>
-          Please bookmark your new panel URL:<br/>
+          {{ $t('setup.bookmarkMsg') }}<br/>
           <strong class="text-primary-400 select-all p-2 rounded bg-gray-900 inline-block mt-2 font-mono border border-gray-700">{{ origin }}{{ form.customPanelPath.startsWith('/') ? form.customPanelPath : '/' + form.customPanelPath }}</strong>
         </p>
 
@@ -201,7 +203,7 @@ const goToLogin = () => {
           @click="goToLogin"
           class="w-full bg-white text-gray-900 font-bold py-3 px-4 rounded-xl transition-all hover:bg-gray-100 active:scale-[0.98]"
         >
-          Go to Login
+          {{ $t('setup.goToLogin') }}
         </button>
       </div>
 

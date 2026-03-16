@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon } from '@heroicons/vue/24/outline'
+import { useI18n } from 'vue-i18n'
+import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon } from '@heroicons/vue/24/outline'
 import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys } from '@/api/proxy'
+import QRCode from 'qrcode'
 
+const { t } = useI18n()
 const route = useRoute()
 const tabFromRoute = route.name === 'Users' ? 'users' : 'inbounds'
 const activeTab = ref(tabFromRoute)
@@ -12,11 +15,11 @@ watch(() => route.name, (name) => {
   if (name === 'Users') activeTab.value = 'users'
   else if (name === 'ProxyNodes') activeTab.value = 'inbounds'
 })
-const tabs = [
-  { id: 'inbounds', name: 'Inbound Nodes' },
-  { id: 'routing', name: 'Routing Rules' },
-  { id: 'users', name: 'User & Subs' },
-]
+const tabs = computed(() => [
+  { id: 'inbounds', name: t('proxy.tabs.inbounds') },
+  { id: 'routing', name: t('proxy.tabs.routing') },
+  { id: 'users', name: t('proxy.tabs.users') },
+])
 
 // ---- Inbounds ----
 const inbounds = ref<any[]>([])
@@ -66,7 +69,7 @@ async function saveInbound() {
 }
 
 async function removeInbound(id: number) {
-  if (!confirm('Delete this inbound?')) return
+  if (!confirm(t('proxy.inbounds.confirmDelete'))) return
   try {
     await deleteInbound(id)
     await fetchInbounds()
@@ -99,7 +102,7 @@ async function saveClient() {
 }
 
 async function removeClient(id: number) {
-  if (!confirm('Delete this client?')) return
+  if (!confirm(t('proxy.clients.confirmDelete'))) return
   try {
     await deleteClient(id)
     await fetchClients()
@@ -111,6 +114,39 @@ function copySubLink(uuid: string) {
   navigator.clipboard.writeText(link)
   copiedUuid.value = uuid
   setTimeout(() => { copiedUuid.value = '' }, 2000)
+}
+
+// ---- QR Code ----
+const showQrModal = ref(false)
+const qrUuid = ref('')
+const qrEmail = ref('')
+const qrDataUrl = ref('')
+const qrFormat = ref<'v2ray' | 'clash'>('v2ray')
+
+async function openQrCode(uuid: string, email: string) {
+  qrUuid.value = uuid
+  qrEmail.value = email
+  qrFormat.value = 'v2ray'
+  showQrModal.value = true
+  await generateQr()
+}
+
+async function generateQr() {
+  const format = qrFormat.value === 'clash' ? '?format=clash' : '?format=base64'
+  const link = `${location.origin}/api/v1/sub/${qrUuid.value}${format}`
+  try {
+    qrDataUrl.value = await QRCode.toDataURL(link, { width: 280, margin: 2, color: { dark: '#1e293b', light: '#ffffff' } })
+  } catch {
+    qrDataUrl.value = ''
+  }
+}
+
+function downloadQr() {
+  if (!qrDataUrl.value) return
+  const a = document.createElement('a')
+  a.href = qrDataUrl.value
+  a.download = `${qrEmail.value || 'sub'}-${qrFormat.value}.png`
+  a.click()
 }
 
 // ---- Routing Rules ----
@@ -138,7 +174,7 @@ async function saveRoutingRule() {
 }
 
 async function removeRoutingRule(id: number) {
-  if (!confirm('Delete this routing rule?')) return
+  if (!confirm(t('proxy.routing.confirmDelete'))) return
   try {
     await deleteRoutingRule(id)
     await fetchRoutingRules()
@@ -171,11 +207,9 @@ const expandedPreset = ref<string | null>(null)
 const presets = [
   {
     id: 'vless-reality',
-    name: 'VLESS + Reality',
     protocol: 'vless',
-    badge: 'Recommended',
+    badgeKey: 'recommended',
     badgeColor: 'bg-emerald-100 text-emerald-700',
-    description: 'Most censorship-resistant. Disguises traffic using Reality fingerprint.',
     defaultPort: 443,
     needsRealityKeys: true,
     needsDomain: false,
@@ -183,11 +217,9 @@ const presets = [
   },
   {
     id: 'vless-ws-tls',
-    name: 'VLESS + WS + TLS',
     protocol: 'vless',
-    badge: 'CDN Friendly',
+    badgeKey: 'cdnFriendly',
     badgeColor: 'bg-blue-100 text-blue-700',
-    description: 'Works behind CDN like Cloudflare. Great for restricted networks.',
     defaultPort: 2083,
     needsRealityKeys: false,
     needsDomain: true,
@@ -195,11 +227,9 @@ const presets = [
   },
   {
     id: 'vmess-ws-tls',
-    name: 'VMess + WS + TLS',
     protocol: 'vmess',
-    badge: 'Wide Support',
+    badgeKey: 'wideSupport',
     badgeColor: 'bg-violet-100 text-violet-700',
-    description: 'Classic V2Ray protocol. Supported by virtually all clients.',
     defaultPort: 2087,
     needsRealityKeys: false,
     needsDomain: true,
@@ -207,11 +237,9 @@ const presets = [
   },
   {
     id: 'trojan-tls',
-    name: 'Trojan + TLS',
     protocol: 'trojan',
-    badge: 'Simple & Fast',
+    badgeKey: 'simpleFast',
     badgeColor: 'bg-amber-100 text-amber-700',
-    description: 'Simple and fast. Mimics regular HTTPS traffic.',
     defaultPort: 2096,
     needsRealityKeys: false,
     needsDomain: true,
@@ -219,11 +247,9 @@ const presets = [
   },
   {
     id: 'hysteria2',
-    name: 'Hysteria2',
     protocol: 'hysteria2',
-    badge: 'Ultra Fast',
+    badgeKey: 'ultraFast',
     badgeColor: 'bg-rose-100 text-rose-700',
-    description: 'UDP-based QUIC protocol. Best for high-speed, high-latency networks.',
     defaultPort: 8443,
     needsRealityKeys: false,
     needsDomain: true,
@@ -231,11 +257,9 @@ const presets = [
   },
   {
     id: 'shadowsocks',
-    name: 'Shadowsocks',
     protocol: 'shadowsocks',
-    badge: 'Lightweight',
+    badgeKey: 'lightweight',
     badgeColor: 'bg-slate-200 text-slate-700',
-    description: 'Simple encryption proxy. Wide client support, easy to deploy.',
     defaultPort: 8388,
     needsRealityKeys: false,
     needsDomain: false,
@@ -294,8 +318,8 @@ async function proceedToReview() {
         cfg.publicKey = ''
         cfg.shortId = randomHex(4)
       }
-      cfg.dest = 'www.google.com:443'
-      cfg.serverNames = 'www.google.com'
+      cfg.dest = 'www.microsoft.com:443'
+      cfg.serverNames = 'www.microsoft.com'
       cfg.flow = 'xtls-rprx-vision'
       cfg.fingerprint = 'chrome'
     }
@@ -398,7 +422,7 @@ async function executeQuickSetup() {
       await createInbound(payload)
       quickSetupResults.value.push({ tag: cfg.tag, success: true })
     } catch (e: any) {
-      quickSetupResults.value.push({ tag: cfg.tag, success: false, error: e?.message || 'Failed' })
+      quickSetupResults.value.push({ tag: cfg.tag, success: false, error: e?.message || t('proxy.quickSetup.failed') })
     }
   }
 
@@ -434,13 +458,13 @@ onMounted(() => {
     <!-- Header -->
     <div class="mb-8 flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold text-slate-800 tracking-tight">Proxy Services</h1>
-        <p class="text-slate-500 mt-1">Configure Xray/Sing-box engine, routing rules, and user subscriptions.</p>
+        <h1 class="text-3xl font-bold text-slate-800 tracking-tight">{{ $t('proxy.title') }}</h1>
+        <p class="text-slate-500 mt-1">{{ $t('proxy.subtitle') }}</p>
       </div>
       <div>
         <button class="bg-primary-600 hover:bg-primary-700 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors shadow-sm flex items-center">
           <ArrowPathIcon class="h-5 w-5 mr-2" />
-          Apply Configuration
+          {{ $t('proxy.applyConfig') }}
         </button>
       </div>
     </div>
@@ -470,13 +494,13 @@ onMounted(() => {
       <!-- Inbounds -->
       <div v-if="activeTab === 'inbounds'" class="flex flex-col h-full">
         <div class="p-6 border-b border-slate-100 flex justify-between items-center">
-          <h3 class="text-lg font-medium text-slate-800">Inbound Listeners</h3>
+          <h3 class="text-lg font-medium text-slate-800">{{ $t('proxy.inbounds.title') }}</h3>
           <div class="flex gap-2">
             <button @click="openQuickSetup()" class="text-sm bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg font-medium transition flex items-center">
-              <SparklesIcon class="h-4 w-4 mr-1" /> Quick Setup
+              <SparklesIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.inbounds.quickSetup') }}
             </button>
             <button @click="openInboundForm()" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium transition flex items-center">
-              <PlusIcon class="h-4 w-4 mr-1" /> Add Node
+              <PlusIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.inbounds.addNode') }}
             </button>
           </div>
         </div>
@@ -484,11 +508,11 @@ onMounted(() => {
         <!-- Inbound Form Modal -->
         <div v-if="showInboundForm" class="p-6 border-b border-slate-100 bg-slate-50">
           <div class="flex items-center justify-between mb-4">
-            <h4 class="font-medium text-slate-700">{{ editingInbound ? 'Edit' : 'Add' }} Inbound</h4>
+            <h4 class="font-medium text-slate-700">{{ editingInbound ? $t('proxy.inbounds.editInbound') : $t('proxy.inbounds.addInbound') }}</h4>
             <button @click="showInboundForm = false"><XMarkIcon class="h-5 w-5 text-slate-400" /></button>
           </div>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-            <input v-model="inboundForm.tag" placeholder="Tag" class="input-field text-sm" />
+            <input v-model="inboundForm.tag" :placeholder="$t('proxy.inbounds.tag')" class="input-field text-sm" />
             <select v-model="inboundForm.protocol" class="input-field text-sm">
               <option value="vless">VLESS</option>
               <option value="vmess">VMess</option>
@@ -496,31 +520,31 @@ onMounted(() => {
               <option value="hysteria2">Hysteria2</option>
               <option value="shadowsocks">Shadowsocks</option>
             </select>
-            <input v-model="inboundForm.listen" placeholder="Listen" class="input-field text-sm" />
-            <input v-model.number="inboundForm.port" type="number" placeholder="Port" class="input-field text-sm" />
+            <input v-model="inboundForm.listen" :placeholder="$t('proxy.inbounds.listen')" class="input-field text-sm" />
+            <input v-model.number="inboundForm.port" type="number" :placeholder="$t('proxy.inbounds.port')" class="input-field text-sm" />
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
             <div>
-              <label class="block text-xs font-medium text-slate-500 mb-1">Settings (JSON) - Protocol config</label>
+              <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.settingsJson') }}</label>
               <textarea v-model="inboundForm.settings" placeholder='{"decryption":"none","flow":"xtls-rprx-vision"}' rows="4" class="input-field text-sm w-full font-mono"></textarea>
             </div>
             <div>
-              <label class="block text-xs font-medium text-slate-500 mb-1">Stream (JSON) - Transport & TLS</label>
+              <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.streamJson') }}</label>
               <textarea v-model="inboundForm.stream" placeholder='{"network":"tcp","security":"tls","tlsSettings":{...}}' rows="4" class="input-field text-sm w-full font-mono"></textarea>
             </div>
           </div>
-          <button @click="saveInbound" class="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-primary-700">Save</button>
+          <button @click="saveInbound" class="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-primary-700">{{ $t('common.save') }}</button>
         </div>
 
-        <div v-if="inboundsLoading" class="text-sm text-slate-400 text-center py-12">Loading...</div>
+        <div v-if="inboundsLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('common.loading') }}</div>
 
         <table v-else class="min-w-full divide-y divide-slate-200">
           <thead class="bg-slate-50">
             <tr>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Tag</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Protocol</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Port</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Transport</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.inbounds.tag') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.inbounds.protocol') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.inbounds.port') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.inbounds.transport') }}</th>
               <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
@@ -535,7 +559,7 @@ onMounted(() => {
               <td class="px-6 py-4 text-sm text-slate-500">{{ node.port }}</td>
               <td class="px-6 py-4 text-sm text-slate-500">{{ parseTransport(node.stream) }}</td>
               <td class="px-6 py-4 text-right text-sm font-medium">
-                <button @click="openInboundForm(node)" class="text-primary-600 hover:text-primary-900 mr-4">Edit</button>
+                <button @click="openInboundForm(node)" class="text-primary-600 hover:text-primary-900 mr-4">{{ $t('common.edit') }}</button>
                 <button @click="removeInbound(node.id)" class="text-rose-600 hover:text-rose-900">
                   <TrashIcon class="h-4 w-4 inline" />
                 </button>
@@ -544,11 +568,11 @@ onMounted(() => {
             <tr v-if="inbounds.length === 0">
               <td colspan="5" class="py-12 text-center">
                 <SparklesIcon class="h-10 w-10 mx-auto mb-3 text-slate-300" />
-                <p class="text-sm text-slate-400 mb-4">No inbounds configured yet</p>
+                <p class="text-sm text-slate-400 mb-4">{{ $t('proxy.inbounds.noInbounds') }}</p>
                 <button @click="openQuickSetup()" class="bg-primary-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-primary-700 transition inline-flex items-center">
-                  <SparklesIcon class="h-4 w-4 mr-1.5" /> Quick Setup
+                  <SparklesIcon class="h-4 w-4 mr-1.5" /> {{ $t('proxy.inbounds.quickSetup') }}
                 </button>
-                <p class="text-xs text-slate-400 mt-2">One-click recommended configuration</p>
+                <p class="text-xs text-slate-400 mt-2">{{ $t('proxy.inbounds.oneClickConfig') }}</p>
               </td>
             </tr>
           </tbody>
@@ -559,39 +583,39 @@ onMounted(() => {
       <div v-else-if="activeTab === 'routing'" class="flex flex-col h-full">
         <div class="p-6 border-b border-slate-100 flex justify-between items-center">
           <div>
-            <h3 class="text-lg font-medium text-slate-800">Routing Rules</h3>
-            <p class="text-sm text-slate-500 mt-1">Direct traffic to dedicated outbound nodes.</p>
+            <h3 class="text-lg font-medium text-slate-800">{{ $t('proxy.routing.title') }}</h3>
+            <p class="text-sm text-slate-500 mt-1">{{ $t('proxy.routing.subtitle') }}</p>
           </div>
           <button @click="showRoutingForm = !showRoutingForm" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium flex items-center">
-            <PlusIcon class="h-4 w-4 mr-1" /> Add Rule
+            <PlusIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.routing.addRule') }}
           </button>
         </div>
 
         <!-- Add Routing Rule Form -->
         <div v-if="showRoutingForm" class="p-6 border-b border-slate-100 bg-slate-50">
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-            <input v-model="routingForm.name" placeholder="Rule Name" class="input-field text-sm" />
-            <input v-model="routingForm.domain_keyword" placeholder="Domain Keyword" class="input-field text-sm" />
-            <input v-model="routingForm.domain_suffix" placeholder="Domain Suffix" class="input-field text-sm" />
-            <input v-model="routingForm.outbound_tag" placeholder="Outbound Tag" class="input-field text-sm" />
+            <input v-model="routingForm.name" :placeholder="$t('proxy.routing.ruleName')" class="input-field text-sm" />
+            <input v-model="routingForm.domain_keyword" :placeholder="$t('proxy.routing.domainKeyword')" class="input-field text-sm" />
+            <input v-model="routingForm.domain_suffix" :placeholder="$t('proxy.routing.domainSuffix')" class="input-field text-sm" />
+            <input v-model="routingForm.outbound_tag" :placeholder="$t('proxy.routing.outboundTag')" class="input-field text-sm" />
           </div>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-            <input v-model="routingForm.geosite" placeholder="Geosite" class="input-field text-sm" />
-            <input v-model="routingForm.geoip" placeholder="GeoIP" class="input-field text-sm" />
-            <input v-model.number="routingForm.priority" type="number" placeholder="Priority" class="input-field text-sm" />
-            <button @click="saveRoutingRule" class="bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700">Add</button>
+            <input v-model="routingForm.geosite" :placeholder="$t('proxy.routing.geosite')" class="input-field text-sm" />
+            <input v-model="routingForm.geoip" :placeholder="$t('proxy.routing.geoip')" class="input-field text-sm" />
+            <input v-model.number="routingForm.priority" type="number" :placeholder="$t('proxy.routing.priority')" class="input-field text-sm" />
+            <button @click="saveRoutingRule" class="bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700">{{ $t('common.add') }}</button>
           </div>
         </div>
 
-        <div v-if="routingLoading" class="text-sm text-slate-400 text-center py-12">Loading...</div>
+        <div v-if="routingLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('common.loading') }}</div>
 
         <table v-else class="min-w-full divide-y divide-slate-200">
           <thead class="bg-slate-50">
             <tr>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Name</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Domain</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Geo</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Outbound</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.routing.name') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.routing.domain') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.routing.geo') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.routing.outbound') }}</th>
               <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
@@ -608,7 +632,7 @@ onMounted(() => {
               </td>
             </tr>
             <tr v-if="routingRules.length === 0">
-              <td colspan="5" class="py-8 text-center text-sm text-slate-400">No routing rules configured</td>
+              <td colspan="5" class="py-8 text-center text-sm text-slate-400">{{ $t('proxy.routing.noRules') }}</td>
             </tr>
           </tbody>
         </table>
@@ -617,34 +641,34 @@ onMounted(() => {
       <!-- Users & Subs -->
       <div v-else-if="activeTab === 'users'" class="flex flex-col h-full">
         <div class="p-6 border-b border-slate-100 flex justify-between items-center">
-          <h3 class="text-lg font-medium text-slate-800">Client Management</h3>
+          <h3 class="text-lg font-medium text-slate-800">{{ $t('proxy.clients.title') }}</h3>
           <button @click="showClientForm = !showClientForm" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium transition flex items-center">
-            <PlusIcon class="h-4 w-4 mr-1" /> Add Client
+            <PlusIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.clients.addClient') }}
           </button>
         </div>
 
         <!-- Add Client Form -->
         <div v-if="showClientForm" class="p-6 border-b border-slate-100 bg-slate-50">
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-            <input v-model="clientForm.email" placeholder="Email" class="input-field text-sm" />
+            <input v-model="clientForm.email" :placeholder="$t('proxy.clients.email')" class="input-field text-sm" />
             <select v-model.number="clientForm.inbound_id" class="input-field text-sm">
-              <option :value="0" disabled>Select Inbound</option>
+              <option :value="0" disabled>{{ $t('proxy.clients.selectInbound') }}</option>
               <option v-for="ib in inbounds" :key="ib.id" :value="ib.id">{{ ib.tag }}</option>
             </select>
-            <input v-model.number="clientForm.traffic_limit" type="number" placeholder="Traffic Limit (bytes)" class="input-field text-sm" />
-            <button @click="saveClient" class="bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700">Add</button>
+            <input v-model.number="clientForm.traffic_limit" type="number" :placeholder="$t('proxy.clients.trafficLimit')" class="input-field text-sm" />
+            <button @click="saveClient" class="bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700">{{ $t('common.add') }}</button>
           </div>
         </div>
 
-        <div v-if="clientsLoading" class="text-sm text-slate-400 text-center py-12">Loading...</div>
+        <div v-if="clientsLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('common.loading') }}</div>
 
         <table v-else class="min-w-full divide-y divide-slate-200">
           <thead class="bg-slate-50">
             <tr>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Email</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">UUID</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Traffic</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Status</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.email') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.uuid') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.traffic') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.status') }}</th>
               <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
@@ -652,16 +676,20 @@ onMounted(() => {
             <tr v-for="user in clients" :key="user.id" class="hover:bg-slate-50">
               <td class="px-6 py-4 text-sm font-medium text-slate-900">{{ user.email }}</td>
               <td class="px-6 py-4 text-sm text-slate-500 font-mono">{{ (user.uuid || '').slice(0, 8) }}...</td>
-              <td class="px-6 py-4 text-sm text-slate-500">{{ user.traffic_used || 0 }} / {{ user.traffic_limit || 'Unlimited' }}</td>
+              <td class="px-6 py-4 text-sm text-slate-500">{{ user.traffic_used || 0 }} / {{ user.traffic_limit || $t('proxy.clients.unlimited') }}</td>
               <td class="px-6 py-4">
                 <span :class="[user.enable ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-800', 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full']">
-                  {{ user.enable ? 'Active' : 'Disabled' }}
+                  {{ user.enable ? $t('common.active') : $t('common.disabled') }}
                 </span>
               </td>
               <td class="px-6 py-4 text-right text-sm font-medium space-x-2">
                 <button @click="copySubLink(user.uuid)" class="text-emerald-600 hover:text-emerald-900 inline-flex items-center">
                   <ClipboardDocumentIcon class="h-4 w-4 mr-1" />
-                  {{ copiedUuid === user.uuid ? 'Copied!' : 'Sub Link' }}
+                  {{ copiedUuid === user.uuid ? $t('proxy.clients.copied') : $t('proxy.clients.subLink') }}
+                </button>
+                <button @click="openQrCode(user.uuid, user.email)" class="text-blue-600 hover:text-blue-900 inline-flex items-center">
+                  <QrCodeIcon class="h-4 w-4 mr-1" />
+                  {{ $t('proxy.clients.qrCode') }}
                 </button>
                 <button @click="removeClient(user.id)" class="text-rose-600 hover:text-rose-900">
                   <TrashIcon class="h-4 w-4 inline" />
@@ -669,7 +697,7 @@ onMounted(() => {
               </td>
             </tr>
             <tr v-if="clients.length === 0">
-              <td colspan="5" class="py-8 text-center text-sm text-slate-400">No clients configured</td>
+              <td colspan="5" class="py-8 text-center text-sm text-slate-400">{{ $t('proxy.clients.noClients') }}</td>
             </tr>
           </tbody>
         </table>
@@ -684,14 +712,14 @@ onMounted(() => {
         <!-- Modal Header -->
         <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
           <div>
-            <h2 class="text-lg font-bold text-slate-800">Quick Setup</h2>
+            <h2 class="text-lg font-bold text-slate-800">{{ $t('proxy.quickSetup.title') }}</h2>
             <div class="flex items-center gap-3 mt-1">
               <div v-for="s in 3" :key="s" class="flex items-center gap-1.5">
                 <div :class="[
                   'w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-colors',
                   quickSetupStep >= s ? 'bg-primary-600 text-white' : 'bg-slate-200 text-slate-500'
                 ]">{{ s }}</div>
-                <span class="text-xs text-slate-500 hidden sm:inline">{{ ['Select', 'Review', 'Done'][s - 1] }}</span>
+                <span class="text-xs text-slate-500 hidden sm:inline">{{ [$t('proxy.quickSetup.steps.select'), $t('proxy.quickSetup.steps.review'), $t('proxy.quickSetup.steps.done')][s - 1] }}</span>
                 <div v-if="s < 3" class="w-6 h-px bg-slate-200"></div>
               </div>
             </div>
@@ -706,7 +734,7 @@ onMounted(() => {
 
           <!-- Step 1: Select Presets -->
           <div v-if="quickSetupStep === 1">
-            <p class="text-sm text-slate-600 mb-5">Choose one or more configurations. We recommend <strong>VLESS + Reality</strong> for the best security and performance.</p>
+            <p class="text-sm text-slate-600 mb-5" v-html="$t('proxy.quickSetup.selectDesc', { recommended: '<strong>' + $t('proxy.quickSetup.recommended') + '</strong>' })"></p>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div
                 v-for="preset in presets"
@@ -722,13 +750,13 @@ onMounted(() => {
                 <div class="flex items-start justify-between">
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 flex-wrap">
-                      <h4 class="font-semibold text-slate-800 text-sm">{{ preset.name }}</h4>
+                      <h4 class="font-semibold text-slate-800 text-sm">{{ $t(`proxy.quickSetup.presets.${preset.id}.name`) }}</h4>
                       <span :class="[preset.badgeColor, 'text-xs font-medium px-2 py-0.5 rounded-full whitespace-nowrap']">
-                        {{ preset.badge }}
+                        {{ $t(`proxy.quickSetup.badges.${preset.badgeKey}`) }}
                       </span>
                     </div>
-                    <p class="text-xs text-slate-500 mt-1 leading-relaxed">{{ preset.description }}</p>
-                    <p class="text-xs text-slate-400 mt-1.5">Default port: {{ preset.defaultPort }}</p>
+                    <p class="text-xs text-slate-500 mt-1 leading-relaxed">{{ $t(`proxy.quickSetup.presets.${preset.id}.desc`) }}</p>
+                    <p class="text-xs text-slate-400 mt-1.5">{{ $t('proxy.quickSetup.fields.defaultPort') }}: {{ preset.defaultPort }}</p>
                   </div>
                   <div :class="[
                     'w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ml-3 mt-0.5 transition-colors',
@@ -747,7 +775,7 @@ onMounted(() => {
 
           <!-- Step 2: Review & Customize -->
           <div v-else-if="quickSetupStep === 2">
-            <p class="text-sm text-slate-600 mb-5">Everything is pre-configured with recommended values. Expand each node to customize settings if needed.</p>
+            <p class="text-sm text-slate-600 mb-5">{{ $t('proxy.quickSetup.reviewDesc') }}</p>
 
             <div class="space-y-3">
               <div v-for="id in selectedPresetIds" :key="id" class="border border-slate-200 rounded-xl overflow-hidden">
@@ -756,11 +784,11 @@ onMounted(() => {
                   class="w-full px-4 py-3 flex items-center justify-between bg-slate-50 hover:bg-slate-100 transition text-left"
                 >
                   <div class="flex items-center gap-2">
-                    <span class="font-medium text-slate-800 text-sm">{{ presets.find(p => p.id === id)?.name }}</span>
+                    <span class="font-medium text-slate-800 text-sm">{{ $t(`proxy.quickSetup.presets.${id}.name`) }}</span>
                     <span :class="[presets.find(p => p.id === id)?.badgeColor, 'text-xs font-medium px-1.5 py-0.5 rounded-full']">
-                      {{ presets.find(p => p.id === id)?.badge }}
+                      {{ $t(`proxy.quickSetup.badges.${presets.find(p => p.id === id)?.badgeKey}`) }}
                     </span>
-                    <span class="text-xs text-slate-400">Port {{ presetConfigs[id]?.port }}</span>
+                    <span class="text-xs text-slate-400">{{ $t('proxy.inbounds.port') }} {{ presetConfigs[id]?.port }}</span>
                   </div>
                   <component :is="expandedPreset === id ? ChevronDownIcon : ChevronRightIcon" class="h-4 w-4 text-slate-400 flex-shrink-0" />
                 </button>
@@ -769,11 +797,11 @@ onMounted(() => {
                   <!-- Common fields -->
                   <div class="grid grid-cols-2 gap-3">
                     <div>
-                      <label class="block text-xs font-medium text-slate-500 mb-1">Tag</label>
+                      <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.tag') }}</label>
                       <input v-model="presetConfigs[id].tag" class="input-field text-sm w-full" />
                     </div>
                     <div>
-                      <label class="block text-xs font-medium text-slate-500 mb-1">Port</label>
+                      <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.port') }}</label>
                       <input v-model.number="presetConfigs[id].port" type="number" class="input-field text-sm w-full" />
                     </div>
                   </div>
@@ -782,31 +810,31 @@ onMounted(() => {
                   <template v-if="presets.find(p => p.id === id)?.needsRealityKeys">
                     <div class="grid grid-cols-2 gap-3">
                       <div>
-                        <label class="block text-xs font-medium text-slate-500 mb-1">Destination (SNI Target)</label>
-                        <input v-model="presetConfigs[id].dest" class="input-field text-sm w-full" placeholder="www.google.com:443" />
+                        <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.destSni') }}</label>
+                        <input v-model="presetConfigs[id].dest" class="input-field text-sm w-full" placeholder="www.microsoft.com:443" />
                       </div>
                       <div>
-                        <label class="block text-xs font-medium text-slate-500 mb-1">Server Names</label>
-                        <input v-model="presetConfigs[id].serverNames" class="input-field text-sm w-full" placeholder="www.google.com" />
+                        <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.serverNames') }}</label>
+                        <input v-model="presetConfigs[id].serverNames" class="input-field text-sm w-full" placeholder="www.microsoft.com" />
                       </div>
                     </div>
                     <div class="grid grid-cols-2 gap-3">
                       <div>
-                        <label class="block text-xs font-medium text-slate-500 mb-1">Private Key (auto-generated)</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.privateKey') }}</label>
                         <input v-model="presetConfigs[id].privateKey" class="input-field text-sm w-full font-mono text-xs" />
                       </div>
                       <div>
-                        <label class="block text-xs font-medium text-slate-500 mb-1">Public Key (auto-generated)</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.publicKey') }}</label>
                         <input v-model="presetConfigs[id].publicKey" class="input-field text-sm w-full font-mono text-xs" />
                       </div>
                     </div>
                     <div class="grid grid-cols-2 gap-3">
                       <div>
-                        <label class="block text-xs font-medium text-slate-500 mb-1">Short ID</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.shortId') }}</label>
                         <input v-model="presetConfigs[id].shortId" class="input-field text-sm w-full font-mono" />
                       </div>
                       <div>
-                        <label class="block text-xs font-medium text-slate-500 mb-1">Fingerprint</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.fingerprint') }}</label>
                         <select v-model="presetConfigs[id].fingerprint" class="input-field text-sm w-full">
                           <option value="chrome">Chrome</option>
                           <option value="firefox">Firefox</option>
@@ -820,20 +848,20 @@ onMounted(() => {
 
                   <!-- Domain field (for TLS-based presets) -->
                   <div v-if="presets.find(p => p.id === id)?.needsDomain">
-                    <label class="block text-xs font-medium text-slate-500 mb-1">Domain (for TLS certificate) <span class="text-rose-400">*</span></label>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.domain') }} <span class="text-rose-400">*</span></label>
                     <input v-model="presetConfigs[id].domain" class="input-field text-sm w-full" placeholder="example.com" />
-                    <p class="text-xs text-slate-400 mt-1">Required for TLS. Use your domain pointed to this server.</p>
+                    <p class="text-xs text-slate-400 mt-1">{{ $t('proxy.quickSetup.fields.domainRequired') }}</p>
                   </div>
 
                   <!-- Certificate fields -->
                   <template v-if="presets.find(p => p.id === id)?.needsCert">
                     <div class="grid grid-cols-2 gap-3">
                       <div>
-                        <label class="block text-xs font-medium text-slate-500 mb-1">Certificate File</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.certFile') }}</label>
                         <input v-model="presetConfigs[id].certFile" class="input-field text-sm w-full font-mono text-xs" />
                       </div>
                       <div>
-                        <label class="block text-xs font-medium text-slate-500 mb-1">Key File</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.keyFile') }}</label>
                         <input v-model="presetConfigs[id].keyFile" class="input-field text-sm w-full font-mono text-xs" />
                       </div>
                     </div>
@@ -841,7 +869,7 @@ onMounted(() => {
 
                   <!-- WebSocket path -->
                   <div v-if="id === 'vless-ws-tls' || id === 'vmess-ws-tls'">
-                    <label class="block text-xs font-medium text-slate-500 mb-1">WebSocket Path</label>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.wsPath') }}</label>
                     <input v-model="presetConfigs[id].wsPath" class="input-field text-sm w-full font-mono" />
                   </div>
 
@@ -849,7 +877,7 @@ onMounted(() => {
                   <template v-if="id === 'shadowsocks'">
                     <div class="grid grid-cols-2 gap-3">
                       <div>
-                        <label class="block text-xs font-medium text-slate-500 mb-1">Encryption Method</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.encryptionMethod') }}</label>
                         <select v-model="presetConfigs[id].method" class="input-field text-sm w-full">
                           <option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm</option>
                           <option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm</option>
@@ -858,7 +886,7 @@ onMounted(() => {
                         </select>
                       </div>
                       <div>
-                        <label class="block text-xs font-medium text-slate-500 mb-1">Password (auto-generated)</label>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.password') }}</label>
                         <input v-model="presetConfigs[id].password" class="input-field text-sm w-full font-mono text-xs" />
                       </div>
                     </div>
@@ -869,17 +897,17 @@ onMounted(() => {
 
             <!-- Additional options -->
             <div class="mt-6 pt-4 border-t border-slate-200 space-y-3">
-              <h4 class="text-sm font-medium text-slate-700">Additional Setup</h4>
+              <h4 class="text-sm font-medium text-slate-700">{{ $t('proxy.quickSetup.additionalSetup') }}</h4>
               <label class="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" v-model="addDefaultRouting" class="rounded border-slate-300 text-primary-600 focus:ring-primary-500" />
-                <span class="text-sm text-slate-600">Add recommended routing rules (block ads & private IPs)</span>
+                <span class="text-sm text-slate-600">{{ $t('proxy.quickSetup.addRoutingRules') }}</span>
               </label>
               <div class="flex items-center gap-2 flex-wrap">
                 <label class="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" v-model="addDefaultClient" class="rounded border-slate-300 text-primary-600 focus:ring-primary-500" />
-                  <span class="text-sm text-slate-600">Create first client</span>
+                  <span class="text-sm text-slate-600">{{ $t('proxy.quickSetup.createFirstClient') }}</span>
                 </label>
-                <input v-if="addDefaultClient" v-model="defaultClientEmail" class="input-field text-sm w-40" placeholder="Email / Username" />
+                <input v-if="addDefaultClient" v-model="defaultClientEmail" class="input-field text-sm w-40" :placeholder="$t('proxy.clients.email')" />
               </div>
             </div>
           </div>
@@ -889,8 +917,8 @@ onMounted(() => {
             <div class="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <CheckCircleIcon class="h-8 w-8 text-emerald-600" />
             </div>
-            <h3 class="text-xl font-bold text-slate-800 mb-2">Setup Complete!</h3>
-            <p class="text-sm text-slate-500 mb-6">Your proxy nodes are configured and ready to use.</p>
+            <h3 class="text-xl font-bold text-slate-800 mb-2">{{ $t('proxy.quickSetup.completeTitle') }}</h3>
+            <p class="text-sm text-slate-500 mb-6">{{ $t('proxy.quickSetup.completeDesc') }}</p>
 
             <div class="max-w-sm mx-auto space-y-2 text-left">
               <div
@@ -902,11 +930,11 @@ onMounted(() => {
                 ]"
               >
                 <span class="text-sm font-medium" :class="result.success ? 'text-emerald-700' : 'text-rose-700'">{{ result.tag }}</span>
-                <span class="text-xs font-medium" :class="result.success ? 'text-emerald-500' : 'text-rose-500'">{{ result.success ? 'Created' : result.error }}</span>
+                <span class="text-xs font-medium" :class="result.success ? 'text-emerald-500' : 'text-rose-500'">{{ result.success ? $t('proxy.quickSetup.created') : result.error }}</span>
               </div>
             </div>
 
-            <p class="text-sm text-slate-500 mt-6">Add clients, adjust settings, or click <strong>Apply Configuration</strong> to activate.</p>
+            <p class="text-sm text-slate-500 mt-6" v-html="$t('proxy.quickSetup.applyHint', { apply: '<strong>' + $t('proxy.applyConfig') + '</strong>' })"></p>
           </div>
         </div>
 
@@ -917,33 +945,94 @@ onMounted(() => {
               v-if="quickSetupStep === 2"
               @click="quickSetupStep = 1"
               class="text-sm text-slate-600 hover:text-slate-800 font-medium transition"
-            >Back</button>
+            >{{ $t('common.back') }}</button>
           </div>
           <div class="flex gap-2">
             <template v-if="quickSetupStep === 1">
               <button
                 @click="useRecommended"
                 class="bg-primary-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 transition"
-              >Use Recommended</button>
+              >{{ $t('proxy.quickSetup.useRecommended') }}</button>
               <button
                 v-if="selectedPresetIds.length > 0"
                 @click="proceedToReview"
                 class="bg-slate-800 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition"
-              >Continue ({{ selectedPresetIds.length }} selected)</button>
+              >{{ $t('proxy.quickSetup.continueN', { n: selectedPresetIds.length }) }}</button>
             </template>
             <template v-else-if="quickSetupStep === 2">
               <button
                 @click="executeQuickSetup"
                 :disabled="quickSetupCreating"
                 class="bg-primary-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-              >{{ quickSetupCreating ? 'Creating...' : 'Create All' }}</button>
+              >{{ quickSetupCreating ? $t('proxy.quickSetup.creating') : $t('proxy.quickSetup.createAll') }}</button>
             </template>
             <template v-else>
               <button
                 @click="showQuickSetup = false"
                 class="bg-primary-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 transition"
-              >Done</button>
+              >{{ $t('common.done') }}</button>
             </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- QR Code Modal -->
+    <div v-if="showQrModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
+        <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h2 class="text-lg font-bold text-slate-800">{{ $t('proxy.qr.title') }}</h2>
+            <p class="text-xs text-slate-500 mt-0.5">{{ qrEmail }}</p>
+          </div>
+          <button @click="showQrModal = false" class="text-slate-400 hover:text-slate-600 transition">
+            <XMarkIcon class="h-5 w-5" />
+          </button>
+        </div>
+
+        <div class="p-6">
+          <!-- Format Toggle -->
+          <div class="flex rounded-lg bg-slate-100 p-1 mb-5">
+            <button
+              @click="qrFormat = 'v2ray'; generateQr()"
+              :class="[
+                'flex-1 px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                qrFormat === 'v2ray' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              ]"
+            >{{ $t('proxy.qr.v2ray') }}</button>
+            <button
+              @click="qrFormat = 'clash'; generateQr()"
+              :class="[
+                'flex-1 px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                qrFormat === 'clash' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              ]"
+            >{{ $t('proxy.qr.clash') }}</button>
+          </div>
+
+          <!-- QR Code Image -->
+          <div class="flex justify-center mb-4">
+            <div v-if="qrDataUrl" class="p-3 bg-white border border-slate-200 rounded-xl">
+              <img :src="qrDataUrl" alt="QR Code" class="w-[280px] h-[280px]" />
+            </div>
+            <div v-else class="w-[280px] h-[280px] bg-slate-100 rounded-xl flex items-center justify-center">
+              <span class="text-sm text-slate-400">{{ $t('proxy.qr.generating') }}</span>
+            </div>
+          </div>
+
+          <p class="text-xs text-slate-400 text-center mb-4">
+            {{ qrFormat === 'v2ray' ? $t('proxy.qr.scanWith', { clients: $t('proxy.qr.v2rayClients') }) : $t('proxy.qr.scanWith', { clients: $t('proxy.qr.clashClients') }) }}
+          </p>
+
+          <!-- Actions -->
+          <div class="flex gap-2">
+            <button
+              @click="downloadQr"
+              class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition"
+            >{{ $t('proxy.qr.downloadPng') }}</button>
+            <button
+              @click="copySubLink(qrUuid)"
+              class="flex-1 bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition"
+            >{{ copiedUuid === qrUuid ? $t('proxy.clients.copied') : $t('proxy.qr.copyLink') }}</button>
           </div>
         </div>
       </div>

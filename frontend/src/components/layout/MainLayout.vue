@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
+import { useI18n } from 'vue-i18n'
+import { setLocale, availableLocales } from '@/i18n'
 import {
   HomeIcon,
   ServerIcon,
@@ -10,20 +12,32 @@ import {
   UsersIcon,
   ArrowLeftOnRectangleIcon,
   Bars3Icon,
-  XMarkIcon
+  XMarkIcon,
+  LanguageIcon
 } from '@heroicons/vue/24/outline'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const { t, locale } = useI18n()
 const sidebarOpen = ref(false)
+const showLangMenu = ref(false)
 
-const navigation = [
-  { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
-  { name: 'Servers & Files', href: '/servers', icon: ServerIcon },
-  { name: 'Proxy Nodes', href: '/nodes', icon: GlobeAltIcon },
-  { name: 'Users & Subs', href: '/users', icon: UsersIcon },
-  { name: 'Security', href: '/security', icon: ShieldCheckIcon },
-]
+const navigation = computed(() => [
+  { name: t('nav.dashboard'), href: '/dashboard', icon: HomeIcon },
+  { name: t('nav.servers'), href: '/servers', icon: ServerIcon },
+  { name: t('nav.proxyNodes'), href: '/nodes', icon: GlobeAltIcon },
+  { name: t('nav.usersSubs'), href: '/users', icon: UsersIcon },
+  { name: t('nav.security'), href: '/security', icon: ShieldCheckIcon },
+])
+
+const currentLocaleName = computed(() => {
+  return availableLocales.find(l => l.code === locale.value)?.name || 'English'
+})
+
+function switchLang(code: string) {
+  setLocale(code)
+  showLangMenu.value = false
+}
 
 const handleLogout = () => {
   authStore.logout()
@@ -64,7 +78,7 @@ const handleNavClick = () => {
       <div class="flex-1 py-6 px-4 space-y-1 overflow-y-auto">
         <router-link
           v-for="item in navigation"
-          :key="item.name"
+          :key="item.href"
           :to="item.href"
           @click="handleNavClick"
           class="flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-300 group"
@@ -80,13 +94,40 @@ const handleNavClick = () => {
         </router-link>
       </div>
 
-      <div class="p-4 border-t border-slate-800">
+      <div class="p-4 border-t border-slate-800 space-y-1">
+        <!-- Language Switcher -->
+        <div class="relative">
+          <button
+            @click="showLangMenu = !showLangMenu"
+            class="flex w-full items-center px-4 py-2.5 text-sm font-medium text-slate-400 rounded-xl hover:bg-slate-800 hover:text-white transition-all duration-300"
+          >
+            <LanguageIcon class="mr-3 h-5 w-5" />
+            {{ currentLocaleName }}
+          </button>
+          <div
+            v-if="showLangMenu"
+            class="absolute bottom-full left-0 mb-1 w-full bg-slate-800 rounded-xl border border-slate-700 shadow-lg overflow-hidden"
+          >
+            <button
+              v-for="lang in availableLocales"
+              :key="lang.code"
+              @click="switchLang(lang.code)"
+              :class="[
+                'w-full px-4 py-2.5 text-sm text-left transition-colors',
+                locale === lang.code ? 'bg-primary-600/20 text-primary-400' : 'text-slate-300 hover:bg-slate-700'
+              ]"
+            >
+              {{ lang.name }}
+            </button>
+          </div>
+        </div>
+
         <button
           @click="handleLogout"
           class="flex w-full items-center px-4 py-3 text-sm font-medium text-slate-400 rounded-xl hover:bg-slate-800 hover:text-white transition-all duration-300"
         >
           <ArrowLeftOnRectangleIcon class="mr-3 h-5 w-5" />
-          Logout
+          {{ $t('nav.logout') }}
         </button>
       </div>
     </div>

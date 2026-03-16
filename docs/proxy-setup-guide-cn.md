@@ -236,7 +236,9 @@ GET /api/v1/proxy/config/xray
 | Select Inbound| 选择第一步创建的入站节点 |
 | Traffic Limit | `0`（无限制）或字节数（如 `107374182400` = 100GB） |
 
-UUID 会自动生成。创建后，点击 **Sub Link** 复制订阅链接。
+UUID 会自动生成。创建后：
+- 点击 **Sub Link** 复制订阅链接。
+- 点击 **QR Code** 生成手机客户端可扫描的二维码（支持 V2Ray/Base64 和 Clash/YAML 两种格式）。
 
 ---
 

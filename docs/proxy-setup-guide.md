@@ -236,7 +236,9 @@ Navigate to **Users & Subs** tab and click **Add Client**.
 | Select Inbound| Choose the inbound created in Step 1 |
 | Traffic Limit | `0` (unlimited) or bytes (e.g., `107374182400` for 100GB) |
 
-The UUID is auto-generated. After creation, click **Sub Link** to copy the subscription URL.
+The UUID is auto-generated. After creation:
+- Click **Sub Link** to copy the subscription URL.
+- Click **QR Code** to generate a scannable QR code for mobile clients (supports V2Ray/Base64 and Clash/YAML formats).
 
 ---
 

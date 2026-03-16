@@ -56,12 +56,17 @@ graph TD;
 - **底层通信**: Go 后端集成官方 `docker/docker/client` SDK，直接通过 Unix Socket (`/var/run/docker.sock`) 与 Docker deamon 交互。这样无需暴露 2375 端口，保证安全。
 - **应用市场抽象**: 通过解析外部配置仓库（例如维护一个 GitHub 仓库的 `apps.json` 和目录结构），动态渲染 `docker-compose.yml` 并调用容器 API 拉起应用。用户端只需进行简单的表单填空即可部署 WordPress、MySQL 等容器。
 
-### 3.4 节点系统监控与 Web 终端层
+### 3.4 国际化 (i18n)
+- **多语言界面**: 前端使用 `vue-i18n` 支持多种语言：英语 (English)、简体中文、繁體中文和日本語。
+- **语言自动检测**: 自动检测浏览器语言偏好，默认回退到英语。用户可随时从侧边栏切换语言。
+- **持久化**: 语言偏好保存在 `localStorage` 中，后续访问时自动恢复。
+
+### 3.5 节点系统监控与 Web 终端层
 - **资源采集**: 采用 `shirou/gopsutil` 等库跨平台收集 CPU(单核/多核负载)、内存使用率、磁盘分区占用率和 IO 上下行速率。
 - **SSH 终端**: 内置 Web 终端，基于 `golang.org/x/crypto/ssh` 实现一个本机的 SSH 客户端连接自己获取 PTY 终端设备，然后将 PTY 的 I/O 流通过 WebSocket 转发给前端的 `xterm.js`。
 - **网络综合体检 (Network Diagnostics)**: 后端集成一键执行环境下的 `vps_check.sh` 脚本，该脚本具备浏览器拟真 UA (突破 Cloudflare 无头审查)，通过 `curl` 针对原生 IP 直连质量、流媒体平台（Netflix/YouTube）及各大 AI 平台（Claude/ChatGPT）进行可用性、延迟与限流状态侦测，并将结果格式化流发送给前端展示。
 
-### 3.5 系统自动化装配与部署脚本 (Deployment Scripts)
+### 3.6 系统自动化装配与部署脚本 (Deployment Scripts)
 采用 `bash` 编写一键自动安装流水线 (`install.sh`)，其承担以下任务：
 - **依赖预装**: 探测系统类型并预装 curl, wget, jq, docker(如需容器环境) 等基础工具。
 - **防火墙穿透**: 自动探测系统防墙（UFW, firewalld, iptables），并放行控制面板自身依赖的基础端口。

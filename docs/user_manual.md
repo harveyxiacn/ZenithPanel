@@ -112,3 +112,26 @@ For full control, you can still manually configure nodes:
 4. In the `Subscriptions` panel, click the copy button and update your client!
 
 See the [Proxy Setup Guide](proxy-setup-guide.md) for detailed JSON examples per protocol.
+
+---
+
+## 📱 QR Codes for Subscription
+
+Each client in the **Users & Subs** tab has a **QR Code** button that generates scannable QR codes for mobile clients:
+
+- **V2Ray / V2RayN** format: Generates a Base64 subscription QR code for V2RayN, V2RayNG, and Shadowrocket.
+- **Clash / Mihomo** format: Generates a Clash YAML subscription QR code for Clash, Mihomo, and Stash.
+
+You can switch between formats with the toggle, download the QR code as PNG, or copy the subscription link directly from the modal.
+
+---
+
+## 🌐 Multi-Language Support
+
+ZenithPanel supports 4 languages:
+- **English** (default)
+- **简体中文** (Simplified Chinese)
+- **繁體中文** (Traditional Chinese)
+- **日本語** (Japanese)
+
+To switch language, click the language selector at the bottom of the sidebar. Your preference is saved automatically and persists across sessions. The panel auto-detects your browser language on first visit.

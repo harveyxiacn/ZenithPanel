@@ -1,18 +1,21 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { CommandLineIcon, FolderIcon, WrenchIcon, ShieldCheckIcon, ChevronRightIcon, DocumentIcon, ArrowUpIcon, PlusIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { useAuthStore } from '@/store/auth'
 import { listContainers, startContainer, stopContainer, restartContainer, removeContainer } from '@/api/docker'
 import { listDirectory, readFile, writeFile } from '@/api/fs'
 import { listFirewallRules, addFirewallRule, deleteFirewallRule } from '@/api/firewall'
 
+const { t } = useI18n()
+
 const activeTab = ref('terminal')
-const tabs = [
-  { id: 'terminal', name: 'Web Terminal', icon: CommandLineIcon },
-  { id: 'files', name: 'File Explorer', icon: FolderIcon },
-  { id: 'docker', name: 'Containers', icon: WrenchIcon },
-  { id: 'firewall', name: 'Firewall', icon: ShieldCheckIcon },
-]
+const tabs = computed(() => [
+  { id: 'terminal', name: t('servers.tabs.terminal'), icon: CommandLineIcon },
+  { id: 'files', name: t('servers.tabs.files'), icon: FolderIcon },
+  { id: 'docker', name: t('servers.tabs.docker'), icon: WrenchIcon },
+  { id: 'firewall', name: t('servers.tabs.firewall'), icon: ShieldCheckIcon },
+])
 
 // ---- Terminal ----
 const terminalEl = ref<HTMLElement | null>(null)
@@ -148,14 +151,14 @@ async function dockerAction(action: string, id: string) {
     if (action === 'start') await startContainer(id)
     else if (action === 'stop') await stopContainer(id)
     else if (action === 'restart') await restartContainer(id)
-    else if (action === 'remove' && confirm('Remove this container?')) await removeContainer(id)
+    else if (action === 'remove' && confirm(t('servers.docker.confirmRemove'))) await removeContainer(id)
     await fetchContainers()
   } catch { /* ignore */ }
 }
 
 function containerStatus(state: string) {
-  if (state === 'running') return { text: 'Running', class: 'bg-emerald-100 text-emerald-800' }
-  if (state === 'exited') return { text: 'Exited', class: 'bg-rose-100 text-rose-800' }
+  if (state === 'running') return { text: t('servers.docker.running'), class: 'bg-emerald-100 text-emerald-800' }
+  if (state === 'exited') return { text: t('servers.docker.exited'), class: 'bg-rose-100 text-rose-800' }
   return { text: state, class: 'bg-amber-100 text-amber-800' }
 }
 
@@ -184,7 +187,7 @@ async function addFwRule() {
 }
 
 async function deleteFwRule(num: string) {
-  if (!confirm('Delete this rule?')) return
+  if (!confirm(t('servers.firewall.confirmDelete'))) return
   try {
     await deleteFirewallRule(num)
     await fetchFwRules()
@@ -217,8 +220,8 @@ watch(activeTab, (tab) => {
     <!-- Header -->
     <div class="mb-8 flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold text-slate-800 tracking-tight">Servers & Files</h1>
-        <p class="text-slate-500 mt-1">Manage underlying VPS, file system, and Docker engine.</p>
+        <h1 class="text-3xl font-bold text-slate-800 tracking-tight">{{ $t('servers.title') }}</h1>
+        <p class="text-slate-500 mt-1">{{ $t('servers.subtitle') }}</p>
       </div>
     </div>
 
@@ -259,14 +262,14 @@ watch(activeTab, (tab) => {
             <div class="h-3 w-3 rounded-full bg-amber-500"></div>
             <div class="h-3 w-3 rounded-full bg-emerald-500"></div>
           </div>
-          <span class="text-xs text-slate-400 font-mono">{{ termInitialized ? 'shell@' + hostname : 'Connecting...' }}</span>
+          <span class="text-xs text-slate-400 font-mono">{{ termInitialized ? 'shell@' + hostname : $t('servers.terminal.connecting') }}</span>
           <div class="w-16"></div>
         </div>
 
         <!-- Terminal Canvas (must not be hidden when xterm opens, or cols/rows = 0) -->
         <div class="flex-1 relative">
           <div v-if="termConnecting && !termInitialized" class="absolute inset-0 flex items-center justify-center bg-[#1a1b26] z-10">
-            <p class="text-slate-400 text-sm">Connecting to shell...</p>
+            <p class="text-slate-400 text-sm">{{ $t('servers.terminal.connectingToShell') }}</p>
           </div>
           <div ref="terminalEl" class="h-full p-1"></div>
         </div>
@@ -288,9 +291,9 @@ watch(activeTab, (tab) => {
           <div class="flex items-center justify-between mb-2">
             <span class="text-sm font-medium text-slate-700">{{ editingFile }}</span>
             <div class="space-x-2">
-              <button @click="editingFile = null" class="text-sm text-slate-500 hover:text-slate-700 px-3 py-1 border rounded-lg">Close</button>
+              <button @click="editingFile = null" class="text-sm text-slate-500 hover:text-slate-700 px-3 py-1 border rounded-lg">{{ $t('common.close') }}</button>
               <button @click="saveFile" :disabled="fileSaving" class="text-sm bg-primary-600 text-white px-3 py-1 rounded-lg hover:bg-primary-700 disabled:opacity-50">
-                {{ fileSaving ? 'Saving...' : 'Save' }}
+                {{ fileSaving ? $t('servers.files.saving') : $t('common.save') }}
               </button>
             </div>
           </div>
@@ -304,9 +307,9 @@ watch(activeTab, (tab) => {
             <span class="text-sm text-slate-600">..</span>
           </div>
 
-          <div v-if="filesLoading" class="text-sm text-slate-400 text-center py-12">Loading files...</div>
+          <div v-if="filesLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('servers.files.loadingFiles') }}</div>
 
-          <div v-else-if="files.length === 0" class="text-sm text-slate-400 text-center py-12">Empty directory</div>
+          <div v-else-if="files.length === 0" class="text-sm text-slate-400 text-center py-12">{{ $t('servers.files.emptyDir') }}</div>
 
           <div v-for="file in files" :key="file.name"
             class="flex items-center px-3 py-2 hover:bg-slate-50 rounded-lg cursor-pointer transition"
@@ -323,19 +326,19 @@ watch(activeTab, (tab) => {
       <!-- Docker Containers -->
       <div v-else-if="activeTab === 'docker'" class="p-6">
         <div class="flex justify-between items-center mb-6">
-          <h3 class="text-lg font-medium text-slate-800">Docker Engine</h3>
-          <button @click="fetchContainers" class="text-sm text-slate-500 hover:text-slate-700 px-3 py-1 border rounded-lg">Refresh</button>
+          <h3 class="text-lg font-medium text-slate-800">{{ $t('servers.docker.title') }}</h3>
+          <button @click="fetchContainers" class="text-sm text-slate-500 hover:text-slate-700 px-3 py-1 border rounded-lg">{{ $t('common.refresh') }}</button>
         </div>
 
-        <div v-if="dockerLoading" class="text-sm text-slate-400 text-center py-12">Loading containers...</div>
+        <div v-if="dockerLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('servers.docker.loadingContainers') }}</div>
 
         <table v-else class="min-w-full divide-y divide-slate-200">
           <thead>
             <tr>
-              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Container</th>
-              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Image</th>
-              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Status</th>
-              <th class="py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Actions</th>
+              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('servers.docker.container') }}</th>
+              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('servers.docker.image') }}</th>
+              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('servers.docker.status') }}</th>
+              <th class="py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('common.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-200">
@@ -348,14 +351,14 @@ watch(activeTab, (tab) => {
                 </span>
               </td>
               <td class="py-4 whitespace-nowrap text-right text-sm space-x-2">
-                <button v-if="c.State !== 'running'" @click="dockerAction('start', c.Id)" class="text-emerald-600 hover:text-emerald-800">Start</button>
-                <button v-if="c.State === 'running'" @click="dockerAction('stop', c.Id)" class="text-amber-600 hover:text-amber-800">Stop</button>
-                <button v-if="c.State === 'running'" @click="dockerAction('restart', c.Id)" class="text-sky-600 hover:text-sky-800">Restart</button>
-                <button @click="dockerAction('remove', c.Id)" class="text-rose-600 hover:text-rose-800">Remove</button>
+                <button v-if="c.State !== 'running'" @click="dockerAction('start', c.Id)" class="text-emerald-600 hover:text-emerald-800">{{ $t('servers.docker.start') }}</button>
+                <button v-if="c.State === 'running'" @click="dockerAction('stop', c.Id)" class="text-amber-600 hover:text-amber-800">{{ $t('servers.docker.stop') }}</button>
+                <button v-if="c.State === 'running'" @click="dockerAction('restart', c.Id)" class="text-sky-600 hover:text-sky-800">{{ $t('servers.docker.restart') }}</button>
+                <button @click="dockerAction('remove', c.Id)" class="text-rose-600 hover:text-rose-800">{{ $t('servers.docker.remove') }}</button>
               </td>
             </tr>
             <tr v-if="containers.length === 0">
-              <td colspan="4" class="py-8 text-center text-sm text-slate-400">No containers found</td>
+              <td colspan="4" class="py-8 text-center text-sm text-slate-400">{{ $t('servers.docker.noContainers') }}</td>
             </tr>
           </tbody>
         </table>
@@ -365,11 +368,11 @@ watch(activeTab, (tab) => {
       <div v-else-if="activeTab === 'firewall'" class="p-6">
         <div class="flex justify-between items-center mb-6">
           <div>
-            <h3 class="text-lg font-medium text-slate-800">Firewall Rules</h3>
-            <p class="text-sm text-slate-500 mt-1">Manage iptables INPUT chain rules.</p>
+            <h3 class="text-lg font-medium text-slate-800">{{ $t('servers.firewall.title') }}</h3>
+            <p class="text-sm text-slate-500 mt-1">{{ $t('servers.firewall.subtitle') }}</p>
           </div>
           <button @click="showFwForm = !showFwForm" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium flex items-center">
-            <PlusIcon class="h-4 w-4 mr-1" /> Add Rule
+            <PlusIcon class="h-4 w-4 mr-1" /> {{ $t('servers.firewall.addRule') }}
           </button>
         </div>
 
@@ -380,27 +383,27 @@ watch(activeTab, (tab) => {
             <option value="udp">UDP</option>
             <option value="all">ALL</option>
           </select>
-          <input v-model="fwForm.port" placeholder="Port" class="input-field text-sm" />
+          <input v-model="fwForm.port" :placeholder="$t('servers.firewall.port')" class="input-field text-sm" />
           <select v-model="fwForm.action" class="input-field text-sm">
             <option value="ACCEPT">ACCEPT</option>
             <option value="DROP">DROP</option>
             <option value="REJECT">REJECT</option>
           </select>
-          <input v-model="fwForm.source" placeholder="Source IP (opt)" class="input-field text-sm" />
-          <button @click="addFwRule" class="bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700">Add</button>
+          <input v-model="fwForm.source" :placeholder="$t('servers.firewall.sourceIp')" class="input-field text-sm" />
+          <button @click="addFwRule" class="bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700">{{ $t('common.add') }}</button>
         </div>
 
-        <div v-if="fwLoading" class="text-sm text-slate-400 text-center py-12">Loading rules...</div>
+        <div v-if="fwLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('servers.firewall.loadingRules') }}</div>
 
         <table v-else class="min-w-full divide-y divide-slate-200">
           <thead>
             <tr>
               <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">#</th>
-              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">Target</th>
-              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">Protocol</th>
-              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">Source</th>
-              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">Port</th>
-              <th class="py-3 text-right text-xs font-medium text-slate-500 uppercase">Action</th>
+              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('servers.firewall.target') }}</th>
+              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('servers.firewall.protocol') }}</th>
+              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('servers.firewall.source') }}</th>
+              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('servers.firewall.port') }}</th>
+              <th class="py-3 text-right text-xs font-medium text-slate-500 uppercase">{{ $t('common.actions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-200">
@@ -417,7 +420,7 @@ watch(activeTab, (tab) => {
               </td>
             </tr>
             <tr v-if="fwRules.length === 0">
-              <td colspan="6" class="py-8 text-center text-sm text-slate-400">No rules found (iptables may not be available)</td>
+              <td colspan="6" class="py-8 text-center text-sm text-slate-400">{{ $t('servers.firewall.noRules') }}</td>
             </tr>
           </tbody>
         </table>
