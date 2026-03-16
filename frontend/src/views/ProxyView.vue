@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon } from '@heroicons/vue/24/outline'
+import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon } from '@heroicons/vue/24/outline'
 import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys } from '@/api/proxy'
 import apiClient from '@/api/client'
 import QRCode from 'qrcode'
@@ -28,6 +28,155 @@ const inboundsLoading = ref(false)
 const showInboundForm = ref(false)
 const editingInbound = ref<any>(null)
 const inboundForm = ref({ tag: '', protocol: 'vless', listen: '0.0.0.0', port: 443, settings: '{}', stream: '{}' })
+const editMode = ref<'visual' | 'json'>('visual')
+
+// Visual form fields extracted from settings/stream JSON
+const vf = ref({
+  // Settings
+  flow: 'xtls-rprx-vision',
+  decryption: 'none',
+  ssMethod: '2022-blake3-aes-128-gcm',
+  ssPassword: '',
+  // Stream
+  network: 'tcp',
+  security: 'none',
+  // TLS
+  sni: '',
+  fingerprint: 'chrome',
+  alpn: 'h2,http/1.1',
+  certFile: '/opt/zenithpanel/data/certs/fullchain.pem',
+  keyFile: '/opt/zenithpanel/data/certs/privkey.pem',
+  // Reality
+  realityDest: 'www.microsoft.com:443',
+  realityServerNames: 'www.microsoft.com',
+  realityPrivateKey: '',
+  realityPublicKey: '',
+  realityShortId: '',
+  // WebSocket
+  wsPath: '',
+  wsHost: '',
+  // gRPC
+  grpcServiceName: '',
+})
+
+function resetVisualForm() {
+  vf.value = {
+    flow: 'xtls-rprx-vision', decryption: 'none',
+    ssMethod: '2022-blake3-aes-128-gcm', ssPassword: '',
+    network: 'tcp', security: 'none',
+    sni: '', fingerprint: 'chrome', alpn: 'h2,http/1.1',
+    certFile: '/opt/zenithpanel/data/certs/fullchain.pem',
+    keyFile: '/opt/zenithpanel/data/certs/privkey.pem',
+    realityDest: 'www.microsoft.com:443', realityServerNames: 'www.microsoft.com',
+    realityPrivateKey: '', realityPublicKey: '', realityShortId: '',
+    wsPath: '', wsHost: '', grpcServiceName: '',
+  }
+}
+
+function parseJsonToVisual(settingsStr: string, streamStr: string) {
+  resetVisualForm()
+  try {
+    const s = JSON.parse(settingsStr || '{}')
+    if (s.flow) vf.value.flow = s.flow
+    if (s.decryption) vf.value.decryption = s.decryption
+    if (s.method) vf.value.ssMethod = s.method
+    if (s.password) vf.value.ssPassword = s.password
+  } catch { /* keep defaults */ }
+  try {
+    const st = JSON.parse(streamStr || '{}')
+    if (st.network) vf.value.network = st.network
+    if (st.security) vf.value.security = st.security
+    if (st.tlsSettings) {
+      const tls = st.tlsSettings
+      if (tls.serverName) vf.value.sni = tls.serverName
+      if (tls.fingerprint) vf.value.fingerprint = tls.fingerprint
+      if (tls.alpn) vf.value.alpn = Array.isArray(tls.alpn) ? tls.alpn.join(',') : tls.alpn
+      if (tls.certificates?.[0]) {
+        if (tls.certificates[0].certificateFile) vf.value.certFile = tls.certificates[0].certificateFile
+        if (tls.certificates[0].keyFile) vf.value.keyFile = tls.certificates[0].keyFile
+      }
+    }
+    if (st.realitySettings) {
+      const r = st.realitySettings
+      if (r.dest) vf.value.realityDest = r.dest
+      if (r.serverNames) vf.value.realityServerNames = Array.isArray(r.serverNames) ? r.serverNames.join(',') : r.serverNames
+      if (r.privateKey) vf.value.realityPrivateKey = r.privateKey
+      if (r.publicKey) vf.value.realityPublicKey = r.publicKey
+      if (r.shortIds?.[0]) vf.value.realityShortId = r.shortIds[0]
+      if (r.fingerprint) vf.value.fingerprint = r.fingerprint
+    }
+    if (st.wsSettings) {
+      if (st.wsSettings.path) vf.value.wsPath = st.wsSettings.path
+      if (st.wsSettings.headers?.Host) vf.value.wsHost = st.wsSettings.headers.Host
+    }
+    if (st.grpcSettings) {
+      if (st.grpcSettings.serviceName) vf.value.grpcServiceName = st.grpcSettings.serviceName
+    }
+  } catch { /* keep defaults */ }
+}
+
+function buildVisualToJson(protocol: string): { settings: string, stream: string } {
+  const v = vf.value
+  let settings: any = {}
+  let stream: any = { network: v.network, security: v.security }
+
+  // Build settings
+  if (protocol === 'vless') {
+    settings = { decryption: v.decryption || 'none' }
+    if (v.flow && v.security === 'reality') settings.flow = v.flow
+  } else if (protocol === 'vmess') {
+    settings = {}
+  } else if (protocol === 'trojan') {
+    settings = {}
+  } else if (protocol === 'shadowsocks') {
+    settings = { method: v.ssMethod, password: v.ssPassword }
+  } else if (protocol === 'hysteria2') {
+    settings = {}
+  }
+
+  // Build stream TLS settings
+  if (v.security === 'tls') {
+    stream.tlsSettings = {
+      serverName: v.sni,
+      certificates: [{ certificateFile: v.certFile, keyFile: v.keyFile }],
+    }
+    if (v.alpn) stream.tlsSettings.alpn = v.alpn.split(',').map((a: string) => a.trim()).filter(Boolean)
+    if (v.fingerprint) stream.tlsSettings.fingerprint = v.fingerprint
+  } else if (v.security === 'reality') {
+    stream.realitySettings = {
+      dest: v.realityDest,
+      serverNames: v.realityServerNames.split(',').map((s: string) => s.trim()).filter(Boolean),
+      privateKey: v.realityPrivateKey,
+      publicKey: v.realityPublicKey,
+      shortIds: [v.realityShortId],
+      fingerprint: v.fingerprint || 'chrome',
+    }
+  }
+
+  // Build transport
+  if (v.network === 'ws') {
+    stream.wsSettings = { path: v.wsPath || '/' }
+    if (v.wsHost) stream.wsSettings.headers = { Host: v.wsHost }
+  } else if (v.network === 'grpc') {
+    stream.grpcSettings = { serviceName: v.grpcServiceName }
+  }
+
+  return { settings: JSON.stringify(settings), stream: JSON.stringify(stream) }
+}
+
+const regenLoading = ref(false)
+async function regenRealityKeys() {
+  regenLoading.value = true
+  try {
+    const res = await generateRealityKeys() as any
+    if (res.code === 200 && res.data) {
+      vf.value.realityPrivateKey = res.data.private_key
+      vf.value.realityPublicKey = res.data.public_key
+      vf.value.realityShortId = res.data.short_id
+    }
+  } catch { /* ignore */ }
+  regenLoading.value = false
+}
 
 async function fetchInbounds() {
   inboundsLoading.value = true
@@ -39,26 +188,46 @@ async function fetchInbounds() {
 }
 
 function openInboundForm(inbound?: any) {
+  editMode.value = 'visual'
   if (inbound) {
     editingInbound.value = inbound
+    const settingsStr = typeof inbound.settings === 'string' ? inbound.settings : JSON.stringify(inbound.settings || {})
+    const streamStr = typeof inbound.stream === 'string' ? inbound.stream : JSON.stringify(inbound.stream || {})
     inboundForm.value = {
       tag: inbound.tag || '',
       protocol: inbound.protocol || 'vless',
       listen: inbound.listen || '0.0.0.0',
       port: inbound.port || 443,
-      settings: typeof inbound.settings === 'string' ? inbound.settings : JSON.stringify(inbound.settings || {}, null, 2),
-      stream: typeof inbound.stream === 'string' ? inbound.stream : JSON.stringify(inbound.stream || {}, null, 2),
+      settings: JSON.stringify(JSON.parse(settingsStr || '{}'), null, 2),
+      stream: JSON.stringify(JSON.parse(streamStr || '{}'), null, 2),
     }
+    parseJsonToVisual(settingsStr, streamStr)
   } else {
     editingInbound.value = null
     inboundForm.value = { tag: '', protocol: 'vless', listen: '0.0.0.0', port: 443, settings: '{}', stream: '{}' }
+    resetVisualForm()
   }
   showInboundForm.value = true
 }
 
+function syncVisualToJson() {
+  const { settings, stream } = buildVisualToJson(inboundForm.value.protocol)
+  inboundForm.value.settings = JSON.stringify(JSON.parse(settings), null, 2)
+  inboundForm.value.stream = JSON.stringify(JSON.parse(stream), null, 2)
+}
+
+function syncJsonToVisual() {
+  parseJsonToVisual(inboundForm.value.settings, inboundForm.value.stream)
+}
+
 async function saveInbound() {
   try {
-    const data = { ...inboundForm.value }
+    let data = { ...inboundForm.value }
+    if (editMode.value === 'visual') {
+      const built = buildVisualToJson(data.protocol)
+      data.settings = built.settings
+      data.stream = built.stream
+    }
     if (editingInbound.value) {
       await updateInbound(editingInbound.value.id, data)
     } else {
@@ -189,6 +358,38 @@ async function removeRoutingRule(id: number) {
     await deleteRoutingRule(id)
     await fetchRoutingRules()
   } catch { /* ignore */ }
+}
+
+// ---- Routing Presets ----
+const routingPresets = [
+  { id: 'block-ads', rule_tag: 'Block Ads', domain: 'geosite:category-ads-all', ip: '', outbound_tag: 'block' },
+  { id: 'block-private', rule_tag: 'Block Private IP', domain: '', ip: 'geoip:private', outbound_tag: 'block' },
+  { id: 'cn-direct', rule_tag: 'China Direct', domain: 'geosite:cn', ip: 'geoip:cn', outbound_tag: 'direct' },
+  { id: 'block-quic', rule_tag: 'Block QUIC', domain: '', ip: '', port: '443', outbound_tag: 'block' },
+  { id: 'ir-direct', rule_tag: 'Iran Direct', domain: 'geosite:category-ir', ip: 'geoip:ir', outbound_tag: 'direct' },
+  { id: 'ru-direct', rule_tag: 'Russia Direct', domain: 'geosite:category-ru', ip: 'geoip:ru', outbound_tag: 'direct' },
+]
+
+const addingPresets = ref(false)
+async function addRoutingPreset(preset: typeof routingPresets[0]) {
+  addingPresets.value = true
+  try {
+    await createRoutingRule({ rule_tag: preset.rule_tag, domain: preset.domain, ip: preset.ip, port: preset.port || '', outbound_tag: preset.outbound_tag, enable: true })
+    await fetchRoutingRules()
+  } catch { /* ignore */ }
+  addingPresets.value = false
+}
+
+async function addRecommendedRules() {
+  addingPresets.value = true
+  const recommended = routingPresets.filter(p => ['block-ads', 'block-private', 'cn-direct'].includes(p.id))
+  for (const preset of recommended) {
+    try {
+      await createRoutingRule({ rule_tag: preset.rule_tag, domain: preset.domain, ip: preset.ip, outbound_tag: preset.outbound_tag, enable: true })
+    } catch { /* ignore */ }
+  }
+  await fetchRoutingRules()
+  addingPresets.value = false
 }
 
 // ---- Helpers ----
@@ -519,9 +720,22 @@ onMounted(() => {
         <div v-if="showInboundForm" class="p-6 border-b border-slate-100 bg-slate-50">
           <div class="flex items-center justify-between mb-4">
             <h4 class="font-medium text-slate-700">{{ editingInbound ? $t('proxy.inbounds.editInbound') : $t('proxy.inbounds.addInbound') }}</h4>
-            <button @click="showInboundForm = false"><XMarkIcon class="h-5 w-5 text-slate-400" /></button>
+            <div class="flex items-center gap-2">
+              <!-- Visual / JSON toggle -->
+              <div class="flex rounded-lg bg-slate-200 p-0.5">
+                <button @click="editMode = 'visual'; syncJsonToVisual()" :class="['px-2.5 py-1 text-xs font-medium rounded-md transition', editMode === 'visual' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500']">
+                  <AdjustmentsHorizontalIcon class="h-3.5 w-3.5 inline mr-1" />{{ $t('proxy.inbounds.visual') }}
+                </button>
+                <button @click="editMode = 'json'; syncVisualToJson()" :class="['px-2.5 py-1 text-xs font-medium rounded-md transition', editMode === 'json' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500']">
+                  <CodeBracketIcon class="h-3.5 w-3.5 inline mr-1" />JSON
+                </button>
+              </div>
+              <button @click="showInboundForm = false"><XMarkIcon class="h-5 w-5 text-slate-400" /></button>
+            </div>
           </div>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+
+          <!-- Basic fields (always visible) -->
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
             <input v-model="inboundForm.tag" :placeholder="$t('proxy.inbounds.tag')" class="input-field text-sm" />
             <select v-model="inboundForm.protocol" class="input-field text-sm">
               <option value="vless">VLESS</option>
@@ -533,17 +747,168 @@ onMounted(() => {
             <input v-model="inboundForm.listen" :placeholder="$t('proxy.inbounds.listen')" class="input-field text-sm" />
             <input v-model.number="inboundForm.port" type="number" :placeholder="$t('proxy.inbounds.port')" class="input-field text-sm" />
           </div>
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+
+          <!-- Visual Mode -->
+          <div v-if="editMode === 'visual'" class="space-y-4">
+            <!-- Network & Security -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.network') }}</label>
+                <select v-model="vf.network" class="input-field text-sm w-full">
+                  <option value="tcp">TCP</option>
+                  <option value="ws">WebSocket</option>
+                  <option value="grpc">gRPC</option>
+                  <option value="h2">HTTP/2</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.security') }}</label>
+                <select v-model="vf.security" class="input-field text-sm w-full">
+                  <option value="none">None</option>
+                  <option value="tls">TLS</option>
+                  <option value="reality">Reality</option>
+                </select>
+              </div>
+              <div v-if="inboundForm.protocol === 'vless'">
+                <label class="block text-xs font-medium text-slate-500 mb-1">Flow</label>
+                <select v-model="vf.flow" class="input-field text-sm w-full">
+                  <option value="">None</option>
+                  <option value="xtls-rprx-vision">xtls-rprx-vision</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.fingerprint') }}</label>
+                <select v-model="vf.fingerprint" class="input-field text-sm w-full">
+                  <option value="chrome">Chrome</option>
+                  <option value="firefox">Firefox</option>
+                  <option value="safari">Safari</option>
+                  <option value="edge">Edge</option>
+                  <option value="random">Random</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- TLS settings -->
+            <template v-if="vf.security === 'tls'">
+              <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">SNI</label>
+                  <input v-model="vf.sni" class="input-field text-sm w-full" placeholder="example.com" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">ALPN</label>
+                  <input v-model="vf.alpn" class="input-field text-sm w-full" placeholder="h2,http/1.1" />
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.certFile') }}</label>
+                  <input v-model="vf.certFile" class="input-field text-sm w-full font-mono text-xs" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.keyFile') }}</label>
+                  <input v-model="vf.keyFile" class="input-field text-sm w-full font-mono text-xs" />
+                </div>
+              </div>
+            </template>
+
+            <!-- Reality settings -->
+            <template v-if="vf.security === 'reality'">
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.destSni') }}</label>
+                  <input v-model="vf.realityDest" class="input-field text-sm w-full" placeholder="www.microsoft.com:443" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.serverNames') }}</label>
+                  <input v-model="vf.realityServerNames" class="input-field text-sm w-full" placeholder="www.microsoft.com" />
+                </div>
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.privateKey') }}</label>
+                  <input v-model="vf.realityPrivateKey" class="input-field text-sm w-full font-mono text-xs" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.publicKey') }}</label>
+                  <input v-model="vf.realityPublicKey" class="input-field text-sm w-full font-mono text-xs" />
+                </div>
+              </div>
+              <div class="grid grid-cols-2 md:grid-cols-3 gap-3 items-end">
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">Short ID</label>
+                  <input v-model="vf.realityShortId" class="input-field text-sm w-full font-mono" />
+                </div>
+                <div>
+                  <button
+                    @click="regenRealityKeys"
+                    :disabled="regenLoading"
+                    class="inline-flex items-center px-3 py-2 text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition disabled:opacity-50"
+                  >
+                    <KeyIcon class="h-3.5 w-3.5 mr-1.5" :class="{ 'animate-spin': regenLoading }" />
+                    {{ $t('proxy.inbounds.regenKeys') }}
+                  </button>
+                </div>
+              </div>
+            </template>
+
+            <!-- WebSocket settings -->
+            <template v-if="vf.network === 'ws'">
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.wsPath') }}</label>
+                  <input v-model="vf.wsPath" class="input-field text-sm w-full font-mono" placeholder="/path" />
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.wsHost') }}</label>
+                  <input v-model="vf.wsHost" class="input-field text-sm w-full" placeholder="example.com" />
+                </div>
+              </div>
+            </template>
+
+            <!-- gRPC settings -->
+            <template v-if="vf.network === 'grpc'">
+              <div>
+                <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.grpcService') }}</label>
+                <input v-model="vf.grpcServiceName" class="input-field text-sm w-full font-mono" placeholder="grpc-service" />
+              </div>
+            </template>
+
+            <!-- Shadowsocks settings -->
+            <template v-if="inboundForm.protocol === 'shadowsocks'">
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.ssMethod') }}</label>
+                  <select v-model="vf.ssMethod" class="input-field text-sm w-full">
+                    <option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm</option>
+                    <option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm</option>
+                    <option value="aes-256-gcm">aes-256-gcm</option>
+                    <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.ssPassword') }}</label>
+                  <input v-model="vf.ssPassword" class="input-field text-sm w-full font-mono text-xs" />
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- JSON Mode -->
+          <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
             <div>
               <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.settingsJson') }}</label>
-              <textarea v-model="inboundForm.settings" placeholder='{"decryption":"none","flow":"xtls-rprx-vision"}' rows="4" class="input-field text-sm w-full font-mono"></textarea>
+              <textarea v-model="inboundForm.settings" rows="6" class="input-field text-sm w-full font-mono"></textarea>
             </div>
             <div>
               <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.streamJson') }}</label>
-              <textarea v-model="inboundForm.stream" placeholder='{"network":"tcp","security":"tls","tlsSettings":{...}}' rows="4" class="input-field text-sm w-full font-mono"></textarea>
+              <textarea v-model="inboundForm.stream" rows="6" class="input-field text-sm w-full font-mono"></textarea>
             </div>
           </div>
-          <button @click="saveInbound" class="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-primary-700">{{ $t('common.save') }}</button>
+
+          <div class="mt-4">
+            <button @click="saveInbound" class="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-primary-700">{{ $t('common.save') }}</button>
+          </div>
         </div>
 
         <div v-if="inboundsLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('common.loading') }}</div>
@@ -596,9 +961,35 @@ onMounted(() => {
             <h3 class="text-lg font-medium text-slate-800">{{ $t('proxy.routing.title') }}</h3>
             <p class="text-sm text-slate-500 mt-1">{{ $t('proxy.routing.subtitle') }}</p>
           </div>
-          <button @click="showRoutingForm = !showRoutingForm" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium flex items-center">
-            <PlusIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.routing.addRule') }}
-          </button>
+          <div class="flex gap-2">
+            <button @click="addRecommendedRules" :disabled="addingPresets" class="text-sm bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg font-medium transition flex items-center disabled:opacity-50">
+              <SparklesIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.routing.addRecommended') }}
+            </button>
+            <button @click="showRoutingForm = !showRoutingForm" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium flex items-center">
+              <PlusIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.routing.addRule') }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Routing Presets -->
+        <div class="px-6 py-3 border-b border-slate-100 bg-slate-50/50">
+          <p class="text-xs font-medium text-slate-500 mb-2">{{ $t('proxy.routing.presets') }}</p>
+          <div class="flex flex-wrap gap-2">
+            <button
+              v-for="preset in routingPresets"
+              :key="preset.id"
+              @click="addRoutingPreset(preset)"
+              :disabled="addingPresets"
+              class="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-full border transition disabled:opacity-50"
+              :class="preset.outbound_tag === 'block'
+                ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'"
+            >
+              <PlusIcon class="h-3 w-3 mr-1" />
+              {{ preset.rule_tag }}
+              <span class="ml-1.5 text-[10px] opacity-60">→ {{ preset.outbound_tag }}</span>
+            </button>
+          </div>
         </div>
 
         <!-- Add Routing Rule Form -->
