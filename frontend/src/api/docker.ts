@@ -5,17 +5,17 @@ export function listContainers() {
 }
 
 export function startContainer(id: string) {
-  return apiClient.post(`/v1/docker/containers/${id}/start`)
+  return apiClient.post(`/v1/docker/containers/${encodeURIComponent(id)}/start`)
 }
 
 export function stopContainer(id: string) {
-  return apiClient.post(`/v1/docker/containers/${id}/stop`)
+  return apiClient.post(`/v1/docker/containers/${encodeURIComponent(id)}/stop`)
 }
 
 export function restartContainer(id: string) {
-  return apiClient.post(`/v1/docker/containers/${id}/restart`)
+  return apiClient.post(`/v1/docker/containers/${encodeURIComponent(id)}/restart`)
 }
 
 export function removeContainer(id: string) {
-  return apiClient.delete(`/v1/docker/containers/${id}`)
+  return apiClient.delete(`/v1/docker/containers/${encodeURIComponent(id)}`)
 }

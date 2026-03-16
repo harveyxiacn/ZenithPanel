@@ -17,6 +17,7 @@ const errorMsg = ref('')
 
 const form = reactive({
   initialPassword: '',
+  adminUsername: '',
   newPassword: '',
   confirmPassword: '',
   customPanelPath: '/zenith',
@@ -49,6 +50,10 @@ const handleInitialLogin = async () => {
 
 const handleCompleteSetup = async () => {
   errorMsg.value = ''
+  if (!form.adminUsername || form.adminUsername.length < 3 || form.adminUsername.length > 32) {
+    errorMsg.value = t('setup.errorUsernameLength')
+    return
+  }
   if (form.newPassword !== form.confirmPassword) {
     errorMsg.value = t('setup.errorPasswordMismatch')
     return
@@ -62,7 +67,7 @@ const handleCompleteSetup = async () => {
 
   try {
     const res: any = await setupComplete({
-      username: 'admin',
+      username: form.adminUsername,
       password: form.newPassword,
       panel_path: form.customPanelPath
     })
@@ -84,7 +89,7 @@ const goToLogin = () => {
 </script>
 
 <template>
-  <div class="min-h-screen flex items-center justify-center bg-gray-900 bg-[url('https://www.transparenttextures.com/patterns/stardust.png')] p-4">
+  <div class="min-h-screen flex items-center justify-center bg-gray-900 p-4">
     <!-- Backdrop blur effect for modern UI -->
     <div class="absolute inset-0 bg-gradient-to-br from-primary-900/40 via-gray-900/80 to-gray-900 pointer-events-none"></div>
 
@@ -137,6 +142,18 @@ const goToLogin = () => {
         <div class="flex items-center space-x-2 text-green-400 mb-6">
           <ShieldCheckIcon class="w-5 h-5" />
           <span class="font-medium text-sm">{{ $t('setup.identityVerified') }}</span>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-300 mb-2">{{ $t('setup.adminUsername') }}</label>
+          <input
+            type="text"
+            v-model="form.adminUsername"
+            class="w-full bg-gray-900/50 border border-gray-600 text-white rounded-xl px-4 py-3 outline-none focus:border-primary-500 transition-all"
+            placeholder="3-32 characters"
+            :disabled="loading"
+            autocomplete="username"
+          />
         </div>
 
         <div>

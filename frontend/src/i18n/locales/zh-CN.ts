@@ -44,6 +44,7 @@ export default {
     initialPassword: '初始一次性密码',
     verifyIdentity: '验证身份',
     identityVerified: '身份已验证。配置面板安全设置。',
+    adminUsername: '管理员用户名',
     newAdminPassword: '新管理员密码',
     confirmPassword: '确认密码',
     minChars: '最少 8 个字符',
@@ -57,6 +58,7 @@ export default {
     goToLogin: '前往登录',
     errorPasswordMismatch: '两次密码不一致',
     errorPasswordShort: '新密码至少需要 8 个字符',
+    errorUsernameLength: '用户名长度必须在 3 到 32 个字符之间',
   },
 
   dashboard: {

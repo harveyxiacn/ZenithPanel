@@ -29,7 +29,7 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
     if (error.response && error.response.status === 401 && !originalRequest._retry) {
-      // Token expired or unauthorized
+      originalRequest._retry = true;
       const authStore = useAuthStore();
       authStore.logout();
       router.push('/login');
