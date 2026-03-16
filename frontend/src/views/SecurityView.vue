@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon, GlobeAltIcon, Cog6ToothIcon } from '@heroicons/vue/24/outline'
-import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel } from '@/api/system'
+import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection } from '@/api/system'
 
 const { t } = useI18n()
 
@@ -284,6 +284,45 @@ async function onRestartPanel() {
   }
 }
 
+// ---- Cloudflare Protection ----
+const cfEnabled = ref(false)
+const cfLoading = ref(false)
+const cfMsg = ref('')
+const cfMsgType = ref<'success' | 'error'>('success')
+const cfPort = ref('')
+
+async function loadCFStatus() {
+  try {
+    const res = await getCFProtectionStatus() as any
+    if (res.code === 200) {
+      cfEnabled.value = res.data.enabled
+      cfPort.value = res.data.port
+    }
+  } catch { /* ignore */ }
+}
+
+async function onToggleCF() {
+  cfLoading.value = true
+  cfMsg.value = ''
+  try {
+    const res = cfEnabled.value
+      ? await disableCFProtection() as any
+      : await enableCFProtection() as any
+    if (res.code === 200) {
+      cfEnabled.value = !cfEnabled.value
+      cfMsg.value = res.msg
+      cfMsgType.value = 'success'
+    } else {
+      cfMsg.value = res.msg || 'Failed'
+      cfMsgType.value = 'error'
+    }
+  } catch (e: any) {
+    cfMsg.value = e?.response?.data?.msg || 'Failed'
+    cfMsgType.value = 'error'
+  }
+  cfLoading.value = false
+}
+
 // ---- Update ----
 const updateChecking = ref(false)
 const updateAvailable = ref(false)
@@ -353,6 +392,7 @@ onMounted(() => {
   load2FAStatus()
   loadTLSStatus()
   loadAccessConfig()
+  loadCFStatus()
 })
 </script>
 
@@ -509,6 +549,41 @@ onMounted(() => {
                 {{ accessRestarting ? $t('security.update.restarting', { n: '...' }) : $t('security.access.applyRestart') }}
               </button>
             </div>
+          </div>
+        </div>
+
+        <!-- Cloudflare Protection -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div class="flex items-center">
+              <div class="bg-orange-500/10 text-orange-500 p-2 rounded-lg mr-4">
+                <ShieldCheckIcon class="h-6 w-6" />
+              </div>
+              <div>
+                <h3 class="text-lg font-medium text-slate-800">{{ $t('security.cloudflare.title') }}</h3>
+                <p class="text-sm text-slate-500">{{ $t('security.cloudflare.subtitle') }}</p>
+              </div>
+            </div>
+            <span :class="['px-2.5 py-0.5 rounded-full text-xs font-medium', cfEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500']">
+              {{ cfEnabled ? $t('common.enabled') : $t('common.disabled') }}
+            </span>
+          </div>
+          <div class="p-6 space-y-4">
+            <p class="text-sm text-slate-600">{{ $t('security.cloudflare.desc') }}</p>
+            <div class="bg-slate-50 rounded-lg p-3 text-xs text-slate-500 space-y-1">
+              <p>{{ $t('security.cloudflare.howItWorks') }}</p>
+              <ul class="list-disc list-inside space-y-0.5 ml-1">
+                <li>{{ $t('security.cloudflare.step1', { port: cfPort || accessPort }) }}</li>
+                <li>{{ $t('security.cloudflare.step2') }}</li>
+              </ul>
+            </div>
+            <div v-if="cfMsg" :class="['text-sm p-2 rounded-lg', cfMsgType === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700']">{{ cfMsg }}</div>
+            <button @click="onToggleCF" :disabled="cfLoading" :class="[
+              'px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50',
+              cfEnabled ? 'bg-rose-100 hover:bg-rose-200 text-rose-700' : 'bg-orange-500 hover:bg-orange-600 text-white'
+            ]">
+              {{ cfLoading ? $t('common.loading') : (cfEnabled ? $t('security.cloudflare.disable') : $t('security.cloudflare.enable')) }}
+            </button>
           </div>
         </div>
 

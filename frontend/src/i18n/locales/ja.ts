@@ -358,6 +358,16 @@ export default {
       portWarning: '一般的にスキャンされるポートを使用しています。セキュリティ向上のためランダムな高ポート（10000+）への変更を推奨します。',
       portGood: '安全 — 非標準ポートを使用中。',
     },
+    cloudflare: {
+      title: 'Cloudflare 保護',
+      subtitle: 'パネルアクセスを Cloudflare プロキシのみに制限',
+      desc: '有効にすると、Cloudflare サーバーのみがパネルポートにアクセスできます。他の IP からの直接アクセスはファイアウォールでブロックされます。',
+      howItWorks: '仕組み：',
+      step1: 'ポート {port} に対して全 Cloudflare IPv4 レンジの許可ルールを追加',
+      step2: 'その他すべての IP をブロックする拒否ルールを追加',
+      enable: 'Cloudflare 保護を有効化',
+      disable: 'Cloudflare 保護を無効化',
+    },
   },
 
   language: {

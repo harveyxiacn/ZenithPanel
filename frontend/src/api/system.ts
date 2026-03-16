@@ -50,6 +50,19 @@ export function restartPanel() {
   return apiClient.post('/v1/admin/restart', null, { timeout: 120000 })
 }
 
+// Cloudflare Protection
+export function getCFProtectionStatus() {
+  return apiClient.get('/v1/firewall/cloudflare/status')
+}
+
+export function enableCFProtection() {
+  return apiClient.post('/v1/firewall/cloudflare/enable')
+}
+
+export function disableCFProtection() {
+  return apiClient.post('/v1/firewall/cloudflare/disable')
+}
+
 // TLS
 export function getTLSStatus() {
   return apiClient.get('/v1/admin/tls/status')

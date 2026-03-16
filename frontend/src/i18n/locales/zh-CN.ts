@@ -358,6 +358,16 @@ export default {
       portWarning: '您正在使用常被扫描的端口，建议更换为随机高端口（10000+）以提高安全性。',
       portGood: '安全 — 正在使用非标准端口。',
     },
+    cloudflare: {
+      title: 'Cloudflare 防护',
+      subtitle: '限制面板仅允许 Cloudflare 代理访问',
+      desc: '启用后，只有 Cloudflare 服务器可以访问面板端口。其他任何 IP 的直接访问将被防火墙拦截。',
+      howItWorks: '工作原理：',
+      step1: '为端口 {port} 添加所有 Cloudflare IPv4 地址段的放行规则',
+      step2: '添加拒绝规则，阻止其他所有 IP 访问该端口',
+      enable: '启用 Cloudflare 防护',
+      disable: '关闭 Cloudflare 防护',
+    },
   },
 
   language: {

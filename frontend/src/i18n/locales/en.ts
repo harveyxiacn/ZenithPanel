@@ -367,6 +367,16 @@ export default {
       portWarning: 'You are using a commonly-scanned port. Consider changing to a random high port (10000+) for better security.',
       portGood: 'Good — using a non-standard port.',
     },
+    cloudflare: {
+      title: 'Cloudflare Protection',
+      subtitle: 'Restrict panel access to Cloudflare proxy only',
+      desc: 'When enabled, only Cloudflare servers can reach your panel port. Direct IP access from anyone else will be blocked by the firewall.',
+      howItWorks: 'How it works:',
+      step1: 'Adds ACCEPT rules for all Cloudflare IPv4 ranges on port {port}',
+      step2: 'Adds a DROP rule blocking all other IPs on that port',
+      enable: 'Enable Cloudflare Protection',
+      disable: 'Disable Cloudflare Protection',
+    },
   },
 
   // Language

@@ -358,6 +358,16 @@ export default {
       portWarning: '您正在使用常被掃描的連接埠，建議更換為隨機高連接埠（10000+）以提高安全性。',
       portGood: '安全 — 正在使用非標準連接埠。',
     },
+    cloudflare: {
+      title: 'Cloudflare 防護',
+      subtitle: '限制面板僅允許 Cloudflare 代理存取',
+      desc: '啟用後，只有 Cloudflare 伺服器可以存取面板連接埠。其他任何 IP 的直接存取將被防火牆攔截。',
+      howItWorks: '工作原理：',
+      step1: '為連接埠 {port} 新增所有 Cloudflare IPv4 位址段的放行規則',
+      step2: '新增拒絕規則，阻止其他所有 IP 存取該連接埠',
+      enable: '啟用 Cloudflare 防護',
+      disable: '關閉 Cloudflare 防護',
+    },
   },
 
   language: {

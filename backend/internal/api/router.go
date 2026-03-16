@@ -891,6 +891,29 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			c.JSON(200, gin.H{"code": 200, "msg": "Rule deleted"})
 		})
 
+		// Cloudflare Protection
+		authGroup.GET("/firewall/cloudflare/status", func(c *gin.Context) {
+			port := config.GetSetting("port")
+			enabled := firewall.IsCloudflareProtected(port)
+			c.JSON(200, gin.H{"code": 200, "data": gin.H{"enabled": enabled, "port": port}})
+		})
+
+		authGroup.POST("/firewall/cloudflare/enable", func(c *gin.Context) {
+			port := config.GetSetting("port")
+			if err := firewall.ApplyCloudflareProtection(port); err != nil {
+				log.Printf("Cloudflare protection error: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": fmt.Sprintf("Failed: %v", err)})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Cloudflare protection enabled"})
+		})
+
+		authGroup.POST("/firewall/cloudflare/disable", func(c *gin.Context) {
+			port := config.GetSetting("port")
+			firewall.RemoveCloudflareProtection(port)
+			c.JSON(200, gin.H{"code": 200, "msg": "Cloudflare protection disabled"})
+		})
+
 		// ======================================
 		// Cron Job Management
 		// ======================================
