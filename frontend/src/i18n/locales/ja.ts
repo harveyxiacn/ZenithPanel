@@ -44,6 +44,7 @@ export default {
     initialPassword: '初期ワンタイムパスワード',
     verifyIdentity: '本人確認',
     identityVerified: '本人確認完了。パネルセキュリティを設定します。',
+    adminUsername: '管理者ユーザー名',
     newAdminPassword: '新しい管理者パスワード',
     confirmPassword: 'パスワードの確認',
     minChars: '8文字以上',
@@ -57,6 +58,7 @@ export default {
     goToLogin: 'ログインへ',
     errorPasswordMismatch: 'パスワードが一致しません',
     errorPasswordShort: '新しいパスワードは8文字以上必要です',
+    errorUsernameLength: 'ユーザー名は3〜32文字である必要があります',
   },
 
   dashboard: {

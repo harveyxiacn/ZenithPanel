@@ -48,6 +48,7 @@ export default {
     initialPassword: 'Initial One-Time Password',
     verifyIdentity: 'Verify Identity',
     identityVerified: 'Identity Verified. Configure Panel Security.',
+    adminUsername: 'Admin Username',
     newAdminPassword: 'New Admin Password',
     confirmPassword: 'Confirm Password',
     minChars: 'Minimum 8 characters',
@@ -61,6 +62,7 @@ export default {
     goToLogin: 'Go to Login',
     errorPasswordMismatch: 'Passwords do not match',
     errorPasswordShort: 'New password must be at least 8 characters',
+    errorUsernameLength: 'Username must be between 3 and 32 characters',
   },
 
   // Dashboard
