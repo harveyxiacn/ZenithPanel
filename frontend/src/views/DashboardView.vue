@@ -4,7 +4,7 @@ import { ServerStackIcon, CpuChipIcon, ServerIcon, SignalIcon } from '@heroicons
 import { getSystemMonitor } from '@/api/system'
 import { useI18n } from 'vue-i18n'
 
-const { t } = useI18n()
+useI18n()
 
 const loading = ref(true)
 const cpuPercent = ref(0)
