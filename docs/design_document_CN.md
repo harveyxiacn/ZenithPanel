@@ -47,9 +47,10 @@ graph TD;
 
 ### 3.2 代理引擎调度 (Proxy Core Engine)
 现有的代理面板往往是界面通过接口去零散地修改 `config.json`，在多核心或者多出/入站配置下极易出错。ZenithPanel 引入了**声明式的配置管理层**：
-- **统一节点元数据**: 数据库中仅记录“这是一个 VLESS 节点”或者“该节点目标是香港节点B”，而不直接保存原生 JSON 碎片。
+- **统一节点元数据**: 数据库中仅记录”这是一个 VLESS 节点”或者”该节点目标是香港节点B”，而不直接保存原生 JSON 碎片。
 - **模板渲染机制**: 面板后端将数据库中的各类节点信息、路由规则信息汇聚后，利用 Go 的 `text/template` 生态，**动态渲染** 出完整的 Xray-core / Sing-box 配置文件。
 - **无缝平滑重载**: 配置文件渲染并写入磁盘后，通过执行对应的核心命令 (或发送 SIGHUP 信号) 触发重载，不中断其他正常连接。
+- **快速配置向导 (Quick Setup Wizard)**: 一键式节点配置系统，内置 6 种预设协议方案（VLESS+Reality、VLESS+WS+TLS、VMess+WS+TLS、Trojan+TLS、Hysteria2、Shadowsocks）。后端提供 `POST /api/v1/proxy/generate-reality-keys` 接口，使用 Go `crypto/ecdh` 生成 X25519 密钥对。所有加密素材（密钥、Short ID、密码、WebSocket 路径）均自动生成，管理员可在确认步骤中进行完全自定义调整。
 
 ### 3.3 容器管家与应用市场层 (Container Management)
 - **底层通信**: Go 后端集成官方 `docker/docker/client` SDK，直接通过 Unix Socket (`/var/run/docker.sock`) 与 Docker deamon 交互。这样无需暴露 2375 端口，保证安全。

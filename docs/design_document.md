@@ -49,6 +49,7 @@ Unlike panels that directly manipulate JSON fragments, ZenithPanel introduces a 
 - **Unified Metadata**: The database stores abstract node data rather than raw JSON snippets.
 - **Template Rendering**: The backend uses Go's `text/template` to **dynamically render** full Xray-core / Sing-box config files based on database records.
 - **Graceful Reload**: Triggers a hot-reload of configurations via system signals or commands without dropping existing connections.
+- **Quick Setup Wizard**: A one-click node configuration system with 6 pre-built protocol presets (VLESS+Reality, VLESS+WS+TLS, VMess+WS+TLS, Trojan+TLS, Hysteria2, Shadowsocks). The backend provides a `POST /api/v1/proxy/generate-reality-keys` endpoint that generates X25519 keypairs using Go's `crypto/ecdh` for VLESS Reality. All crypto materials (keys, short IDs, passwords, WebSocket paths) are auto-generated, with a review step allowing full customization before creation.
 
 ### 3.3 Container Management
 - **Underlying Communication**: Integrates the official `docker/docker/client` SDK, communicating with the Docker daemon via Unix Socket (`/var/run/docker.sock`).

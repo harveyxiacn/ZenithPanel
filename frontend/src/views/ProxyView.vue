@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon } from '@heroicons/vue/24/outline'
-import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule } from '@/api/proxy'
+import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon } from '@heroicons/vue/24/outline'
+import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys } from '@/api/proxy'
 
 const route = useRoute()
 const tabFromRoute = route.name === 'Users' ? 'users' : 'inbounds'
@@ -156,6 +156,271 @@ function parseTransport(stream: string): string {
   } catch { return 'tcp' }
 }
 
+// ---- Quick Setup Wizard ----
+const showQuickSetup = ref(false)
+const quickSetupStep = ref(1)
+const selectedPresetIds = ref<string[]>([])
+const presetConfigs = ref<Record<string, any>>({})
+const quickSetupCreating = ref(false)
+const quickSetupResults = ref<{tag: string, success: boolean, error?: string}[]>([])
+const addDefaultRouting = ref(true)
+const addDefaultClient = ref(true)
+const defaultClientEmail = ref('user1')
+const expandedPreset = ref<string | null>(null)
+
+const presets = [
+  {
+    id: 'vless-reality',
+    name: 'VLESS + Reality',
+    protocol: 'vless',
+    badge: 'Recommended',
+    badgeColor: 'bg-emerald-100 text-emerald-700',
+    description: 'Most censorship-resistant. Disguises traffic using Reality fingerprint.',
+    defaultPort: 443,
+    needsRealityKeys: true,
+    needsDomain: false,
+    needsCert: false,
+  },
+  {
+    id: 'vless-ws-tls',
+    name: 'VLESS + WS + TLS',
+    protocol: 'vless',
+    badge: 'CDN Friendly',
+    badgeColor: 'bg-blue-100 text-blue-700',
+    description: 'Works behind CDN like Cloudflare. Great for restricted networks.',
+    defaultPort: 2083,
+    needsRealityKeys: false,
+    needsDomain: true,
+    needsCert: true,
+  },
+  {
+    id: 'vmess-ws-tls',
+    name: 'VMess + WS + TLS',
+    protocol: 'vmess',
+    badge: 'Wide Support',
+    badgeColor: 'bg-violet-100 text-violet-700',
+    description: 'Classic V2Ray protocol. Supported by virtually all clients.',
+    defaultPort: 2087,
+    needsRealityKeys: false,
+    needsDomain: true,
+    needsCert: true,
+  },
+  {
+    id: 'trojan-tls',
+    name: 'Trojan + TLS',
+    protocol: 'trojan',
+    badge: 'Simple & Fast',
+    badgeColor: 'bg-amber-100 text-amber-700',
+    description: 'Simple and fast. Mimics regular HTTPS traffic.',
+    defaultPort: 2096,
+    needsRealityKeys: false,
+    needsDomain: true,
+    needsCert: true,
+  },
+  {
+    id: 'hysteria2',
+    name: 'Hysteria2',
+    protocol: 'hysteria2',
+    badge: 'Ultra Fast',
+    badgeColor: 'bg-rose-100 text-rose-700',
+    description: 'UDP-based QUIC protocol. Best for high-speed, high-latency networks.',
+    defaultPort: 8443,
+    needsRealityKeys: false,
+    needsDomain: true,
+    needsCert: true,
+  },
+  {
+    id: 'shadowsocks',
+    name: 'Shadowsocks',
+    protocol: 'shadowsocks',
+    badge: 'Lightweight',
+    badgeColor: 'bg-slate-200 text-slate-700',
+    description: 'Simple encryption proxy. Wide client support, easy to deploy.',
+    defaultPort: 8388,
+    needsRealityKeys: false,
+    needsDomain: false,
+    needsCert: false,
+  },
+]
+
+function randomHex(bytes: number): string {
+  const arr = new Uint8Array(bytes)
+  crypto.getRandomValues(arr)
+  return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+function randomBase64(bytes: number): string {
+  const arr = new Uint8Array(bytes)
+  crypto.getRandomValues(arr)
+  return btoa(String.fromCharCode(...arr))
+}
+
+function openQuickSetup() {
+  showQuickSetup.value = true
+  quickSetupStep.value = 1
+  selectedPresetIds.value = []
+  presetConfigs.value = {}
+  quickSetupResults.value = []
+  quickSetupCreating.value = false
+}
+
+function togglePreset(id: string) {
+  const idx = selectedPresetIds.value.indexOf(id)
+  if (idx >= 0) selectedPresetIds.value.splice(idx, 1)
+  else selectedPresetIds.value.push(id)
+}
+
+async function useRecommended() {
+  selectedPresetIds.value = ['vless-reality']
+  await proceedToReview()
+}
+
+async function proceedToReview() {
+  if (selectedPresetIds.value.length === 0) return
+  for (const id of selectedPresetIds.value) {
+    const preset = presets.find(p => p.id === id)!
+    const cfg: any = { tag: id, port: preset.defaultPort }
+
+    if (preset.needsRealityKeys) {
+      try {
+        const res = await generateRealityKeys() as any
+        if (res.code === 200) {
+          cfg.privateKey = res.data.private_key
+          cfg.publicKey = res.data.public_key
+          cfg.shortId = res.data.short_id
+        }
+      } catch {
+        cfg.privateKey = ''
+        cfg.publicKey = ''
+        cfg.shortId = randomHex(4)
+      }
+      cfg.dest = 'www.google.com:443'
+      cfg.serverNames = 'www.google.com'
+      cfg.flow = 'xtls-rprx-vision'
+      cfg.fingerprint = 'chrome'
+    }
+    if (preset.needsDomain) {
+      cfg.domain = ''
+    }
+    if (preset.needsCert) {
+      cfg.certFile = '/opt/zenithpanel/certs/fullchain.pem'
+      cfg.keyFile = '/opt/zenithpanel/certs/privkey.pem'
+    }
+    if (id === 'vless-ws-tls' || id === 'vmess-ws-tls') {
+      cfg.wsPath = '/' + randomHex(6)
+    }
+    if (id === 'shadowsocks') {
+      cfg.method = '2022-blake3-aes-128-gcm'
+      cfg.password = randomBase64(16)
+    }
+    presetConfigs.value[id] = cfg
+  }
+  expandedPreset.value = selectedPresetIds.value[0]
+  quickSetupStep.value = 2
+}
+
+function buildPayload(presetId: string) {
+  const preset = presets.find(p => p.id === presetId)!
+  const cfg = presetConfigs.value[presetId]
+  let settings: any = {}
+  let stream: any = {}
+
+  switch (presetId) {
+    case 'vless-reality':
+      settings = { decryption: 'none', flow: cfg.flow }
+      stream = {
+        network: 'tcp', security: 'reality',
+        realitySettings: {
+          dest: cfg.dest,
+          serverNames: cfg.serverNames.split(',').map((s: string) => s.trim()),
+          privateKey: cfg.privateKey,
+          publicKey: cfg.publicKey,
+          shortIds: [cfg.shortId],
+          fingerprint: cfg.fingerprint || 'chrome',
+        },
+      }
+      break
+    case 'vless-ws-tls':
+      settings = { decryption: 'none' }
+      stream = {
+        network: 'ws', security: 'tls',
+        wsSettings: { path: cfg.wsPath },
+        tlsSettings: { serverName: cfg.domain, certificates: [{ certificateFile: cfg.certFile, keyFile: cfg.keyFile }] },
+      }
+      break
+    case 'vmess-ws-tls':
+      settings = {}
+      stream = {
+        network: 'ws', security: 'tls',
+        wsSettings: { path: cfg.wsPath },
+        tlsSettings: { serverName: cfg.domain, certificates: [{ certificateFile: cfg.certFile, keyFile: cfg.keyFile }] },
+      }
+      break
+    case 'trojan-tls':
+      settings = {}
+      stream = {
+        network: 'tcp', security: 'tls',
+        tlsSettings: { serverName: cfg.domain, certificates: [{ certificateFile: cfg.certFile, keyFile: cfg.keyFile }] },
+      }
+      break
+    case 'hysteria2':
+      settings = {}
+      stream = {
+        network: 'tcp', security: 'tls',
+        tlsSettings: { serverName: cfg.domain, certificates: [{ certificateFile: cfg.certFile, keyFile: cfg.keyFile }] },
+      }
+      break
+    case 'shadowsocks':
+      settings = { method: cfg.method, password: cfg.password }
+      stream = { network: 'tcp', security: 'none' }
+      break
+  }
+
+  return {
+    tag: cfg.tag,
+    protocol: preset.protocol,
+    port: cfg.port,
+    listen: '0.0.0.0',
+    settings: JSON.stringify(settings),
+    stream: JSON.stringify(stream),
+    enable: true,
+  }
+}
+
+async function executeQuickSetup() {
+  quickSetupCreating.value = true
+  quickSetupResults.value = []
+
+  for (const id of selectedPresetIds.value) {
+    const cfg = presetConfigs.value[id]
+    try {
+      const payload = buildPayload(id)
+      await createInbound(payload)
+      quickSetupResults.value.push({ tag: cfg.tag, success: true })
+    } catch (e: any) {
+      quickSetupResults.value.push({ tag: cfg.tag, success: false, error: e?.message || 'Failed' })
+    }
+  }
+
+  if (addDefaultRouting.value) {
+    try { await createRoutingRule({ rule_tag: 'Block Ads', domain: 'geosite:category-ads-all', outbound_tag: 'block', enable: true }) } catch {}
+    try { await createRoutingRule({ rule_tag: 'Block Private IP', ip: 'geoip:private', outbound_tag: 'block', enable: true }) } catch {}
+  }
+
+  if (addDefaultClient.value && selectedPresetIds.value.length > 0) {
+    await fetchInbounds()
+    if (inbounds.value.length > 0) {
+      try { await createClient({ email: defaultClientEmail.value, inbound_id: inbounds.value[0].id, enable: true }) } catch {}
+    }
+  }
+
+  quickSetupCreating.value = false
+  quickSetupStep.value = 3
+  fetchInbounds()
+  fetchClients()
+  fetchRoutingRules()
+}
+
 // ---- Lifecycle ----
 onMounted(() => {
   fetchInbounds()
@@ -206,9 +471,14 @@ onMounted(() => {
       <div v-if="activeTab === 'inbounds'" class="flex flex-col h-full">
         <div class="p-6 border-b border-slate-100 flex justify-between items-center">
           <h3 class="text-lg font-medium text-slate-800">Inbound Listeners</h3>
-          <button @click="openInboundForm()" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium transition flex items-center">
-            <PlusIcon class="h-4 w-4 mr-1" /> Add Node
-          </button>
+          <div class="flex gap-2">
+            <button @click="openQuickSetup()" class="text-sm bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg font-medium transition flex items-center">
+              <SparklesIcon class="h-4 w-4 mr-1" /> Quick Setup
+            </button>
+            <button @click="openInboundForm()" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium transition flex items-center">
+              <PlusIcon class="h-4 w-4 mr-1" /> Add Node
+            </button>
+          </div>
         </div>
 
         <!-- Inbound Form Modal -->
@@ -272,7 +542,14 @@ onMounted(() => {
               </td>
             </tr>
             <tr v-if="inbounds.length === 0">
-              <td colspan="5" class="py-8 text-center text-sm text-slate-400">No inbounds configured</td>
+              <td colspan="5" class="py-12 text-center">
+                <SparklesIcon class="h-10 w-10 mx-auto mb-3 text-slate-300" />
+                <p class="text-sm text-slate-400 mb-4">No inbounds configured yet</p>
+                <button @click="openQuickSetup()" class="bg-primary-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-primary-700 transition inline-flex items-center">
+                  <SparklesIcon class="h-4 w-4 mr-1.5" /> Quick Setup
+                </button>
+                <p class="text-xs text-slate-400 mt-2">One-click recommended configuration</p>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -399,5 +676,278 @@ onMounted(() => {
       </div>
 
     </div>
+
+    <!-- Quick Setup Wizard Modal -->
+    <div v-if="showQuickSetup" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+
+        <!-- Modal Header -->
+        <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
+          <div>
+            <h2 class="text-lg font-bold text-slate-800">Quick Setup</h2>
+            <div class="flex items-center gap-3 mt-1">
+              <div v-for="s in 3" :key="s" class="flex items-center gap-1.5">
+                <div :class="[
+                  'w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-colors',
+                  quickSetupStep >= s ? 'bg-primary-600 text-white' : 'bg-slate-200 text-slate-500'
+                ]">{{ s }}</div>
+                <span class="text-xs text-slate-500 hidden sm:inline">{{ ['Select', 'Review', 'Done'][s - 1] }}</span>
+                <div v-if="s < 3" class="w-6 h-px bg-slate-200"></div>
+              </div>
+            </div>
+          </div>
+          <button @click="showQuickSetup = false" class="text-slate-400 hover:text-slate-600 transition">
+            <XMarkIcon class="h-5 w-5" />
+          </button>
+        </div>
+
+        <!-- Modal Content -->
+        <div class="flex-1 overflow-y-auto p-6">
+
+          <!-- Step 1: Select Presets -->
+          <div v-if="quickSetupStep === 1">
+            <p class="text-sm text-slate-600 mb-5">Choose one or more configurations. We recommend <strong>VLESS + Reality</strong> for the best security and performance.</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div
+                v-for="preset in presets"
+                :key="preset.id"
+                @click="togglePreset(preset.id)"
+                :class="[
+                  'relative cursor-pointer rounded-xl border-2 p-4 transition-all',
+                  selectedPresetIds.includes(preset.id)
+                    ? 'border-primary-500 bg-primary-50 shadow-sm'
+                    : 'border-slate-200 hover:border-slate-300 bg-white'
+                ]"
+              >
+                <div class="flex items-start justify-between">
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                      <h4 class="font-semibold text-slate-800 text-sm">{{ preset.name }}</h4>
+                      <span :class="[preset.badgeColor, 'text-xs font-medium px-2 py-0.5 rounded-full whitespace-nowrap']">
+                        {{ preset.badge }}
+                      </span>
+                    </div>
+                    <p class="text-xs text-slate-500 mt-1 leading-relaxed">{{ preset.description }}</p>
+                    <p class="text-xs text-slate-400 mt-1.5">Default port: {{ preset.defaultPort }}</p>
+                  </div>
+                  <div :class="[
+                    'w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ml-3 mt-0.5 transition-colors',
+                    selectedPresetIds.includes(preset.id)
+                      ? 'border-primary-500 bg-primary-500'
+                      : 'border-slate-300'
+                  ]">
+                    <svg v-if="selectedPresetIds.includes(preset.id)" class="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 2: Review & Customize -->
+          <div v-else-if="quickSetupStep === 2">
+            <p class="text-sm text-slate-600 mb-5">Everything is pre-configured with recommended values. Expand each node to customize settings if needed.</p>
+
+            <div class="space-y-3">
+              <div v-for="id in selectedPresetIds" :key="id" class="border border-slate-200 rounded-xl overflow-hidden">
+                <button
+                  @click="expandedPreset = expandedPreset === id ? null : id"
+                  class="w-full px-4 py-3 flex items-center justify-between bg-slate-50 hover:bg-slate-100 transition text-left"
+                >
+                  <div class="flex items-center gap-2">
+                    <span class="font-medium text-slate-800 text-sm">{{ presets.find(p => p.id === id)?.name }}</span>
+                    <span :class="[presets.find(p => p.id === id)?.badgeColor, 'text-xs font-medium px-1.5 py-0.5 rounded-full']">
+                      {{ presets.find(p => p.id === id)?.badge }}
+                    </span>
+                    <span class="text-xs text-slate-400">Port {{ presetConfigs[id]?.port }}</span>
+                  </div>
+                  <component :is="expandedPreset === id ? ChevronDownIcon : ChevronRightIcon" class="h-4 w-4 text-slate-400 flex-shrink-0" />
+                </button>
+
+                <div v-if="expandedPreset === id" class="p-4 space-y-3 border-t border-slate-100">
+                  <!-- Common fields -->
+                  <div class="grid grid-cols-2 gap-3">
+                    <div>
+                      <label class="block text-xs font-medium text-slate-500 mb-1">Tag</label>
+                      <input v-model="presetConfigs[id].tag" class="input-field text-sm w-full" />
+                    </div>
+                    <div>
+                      <label class="block text-xs font-medium text-slate-500 mb-1">Port</label>
+                      <input v-model.number="presetConfigs[id].port" type="number" class="input-field text-sm w-full" />
+                    </div>
+                  </div>
+
+                  <!-- Reality fields -->
+                  <template v-if="presets.find(p => p.id === id)?.needsRealityKeys">
+                    <div class="grid grid-cols-2 gap-3">
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Destination (SNI Target)</label>
+                        <input v-model="presetConfigs[id].dest" class="input-field text-sm w-full" placeholder="www.google.com:443" />
+                      </div>
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Server Names</label>
+                        <input v-model="presetConfigs[id].serverNames" class="input-field text-sm w-full" placeholder="www.google.com" />
+                      </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Private Key (auto-generated)</label>
+                        <input v-model="presetConfigs[id].privateKey" class="input-field text-sm w-full font-mono text-xs" />
+                      </div>
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Public Key (auto-generated)</label>
+                        <input v-model="presetConfigs[id].publicKey" class="input-field text-sm w-full font-mono text-xs" />
+                      </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Short ID</label>
+                        <input v-model="presetConfigs[id].shortId" class="input-field text-sm w-full font-mono" />
+                      </div>
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Fingerprint</label>
+                        <select v-model="presetConfigs[id].fingerprint" class="input-field text-sm w-full">
+                          <option value="chrome">Chrome</option>
+                          <option value="firefox">Firefox</option>
+                          <option value="safari">Safari</option>
+                          <option value="edge">Edge</option>
+                          <option value="random">Random</option>
+                        </select>
+                      </div>
+                    </div>
+                  </template>
+
+                  <!-- Domain field (for TLS-based presets) -->
+                  <div v-if="presets.find(p => p.id === id)?.needsDomain">
+                    <label class="block text-xs font-medium text-slate-500 mb-1">Domain (for TLS certificate) <span class="text-rose-400">*</span></label>
+                    <input v-model="presetConfigs[id].domain" class="input-field text-sm w-full" placeholder="example.com" />
+                    <p class="text-xs text-slate-400 mt-1">Required for TLS. Use your domain pointed to this server.</p>
+                  </div>
+
+                  <!-- Certificate fields -->
+                  <template v-if="presets.find(p => p.id === id)?.needsCert">
+                    <div class="grid grid-cols-2 gap-3">
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Certificate File</label>
+                        <input v-model="presetConfigs[id].certFile" class="input-field text-sm w-full font-mono text-xs" />
+                      </div>
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Key File</label>
+                        <input v-model="presetConfigs[id].keyFile" class="input-field text-sm w-full font-mono text-xs" />
+                      </div>
+                    </div>
+                  </template>
+
+                  <!-- WebSocket path -->
+                  <div v-if="id === 'vless-ws-tls' || id === 'vmess-ws-tls'">
+                    <label class="block text-xs font-medium text-slate-500 mb-1">WebSocket Path</label>
+                    <input v-model="presetConfigs[id].wsPath" class="input-field text-sm w-full font-mono" />
+                  </div>
+
+                  <!-- Shadowsocks fields -->
+                  <template v-if="id === 'shadowsocks'">
+                    <div class="grid grid-cols-2 gap-3">
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Encryption Method</label>
+                        <select v-model="presetConfigs[id].method" class="input-field text-sm w-full">
+                          <option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm</option>
+                          <option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm</option>
+                          <option value="aes-256-gcm">aes-256-gcm</option>
+                          <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label class="block text-xs font-medium text-slate-500 mb-1">Password (auto-generated)</label>
+                        <input v-model="presetConfigs[id].password" class="input-field text-sm w-full font-mono text-xs" />
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+
+            <!-- Additional options -->
+            <div class="mt-6 pt-4 border-t border-slate-200 space-y-3">
+              <h4 class="text-sm font-medium text-slate-700">Additional Setup</h4>
+              <label class="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" v-model="addDefaultRouting" class="rounded border-slate-300 text-primary-600 focus:ring-primary-500" />
+                <span class="text-sm text-slate-600">Add recommended routing rules (block ads & private IPs)</span>
+              </label>
+              <div class="flex items-center gap-2 flex-wrap">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" v-model="addDefaultClient" class="rounded border-slate-300 text-primary-600 focus:ring-primary-500" />
+                  <span class="text-sm text-slate-600">Create first client</span>
+                </label>
+                <input v-if="addDefaultClient" v-model="defaultClientEmail" class="input-field text-sm w-40" placeholder="Email / Username" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3: Complete -->
+          <div v-else-if="quickSetupStep === 3" class="text-center py-8">
+            <div class="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <CheckCircleIcon class="h-8 w-8 text-emerald-600" />
+            </div>
+            <h3 class="text-xl font-bold text-slate-800 mb-2">Setup Complete!</h3>
+            <p class="text-sm text-slate-500 mb-6">Your proxy nodes are configured and ready to use.</p>
+
+            <div class="max-w-sm mx-auto space-y-2 text-left">
+              <div
+                v-for="result in quickSetupResults"
+                :key="result.tag"
+                :class="[
+                  'flex items-center justify-between px-4 py-2.5 rounded-lg',
+                  result.success ? 'bg-emerald-50' : 'bg-rose-50'
+                ]"
+              >
+                <span class="text-sm font-medium" :class="result.success ? 'text-emerald-700' : 'text-rose-700'">{{ result.tag }}</span>
+                <span class="text-xs font-medium" :class="result.success ? 'text-emerald-500' : 'text-rose-500'">{{ result.success ? 'Created' : result.error }}</span>
+              </div>
+            </div>
+
+            <p class="text-sm text-slate-500 mt-6">Add clients, adjust settings, or click <strong>Apply Configuration</strong> to activate.</p>
+          </div>
+        </div>
+
+        <!-- Modal Footer -->
+        <div class="px-6 py-4 border-t border-slate-100 flex justify-between flex-shrink-0">
+          <div>
+            <button
+              v-if="quickSetupStep === 2"
+              @click="quickSetupStep = 1"
+              class="text-sm text-slate-600 hover:text-slate-800 font-medium transition"
+            >Back</button>
+          </div>
+          <div class="flex gap-2">
+            <template v-if="quickSetupStep === 1">
+              <button
+                @click="useRecommended"
+                class="bg-primary-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 transition"
+              >Use Recommended</button>
+              <button
+                v-if="selectedPresetIds.length > 0"
+                @click="proceedToReview"
+                class="bg-slate-800 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-slate-900 transition"
+              >Continue ({{ selectedPresetIds.length }} selected)</button>
+            </template>
+            <template v-else-if="quickSetupStep === 2">
+              <button
+                @click="executeQuickSetup"
+                :disabled="quickSetupCreating"
+                class="bg-primary-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >{{ quickSetupCreating ? 'Creating...' : 'Create All' }}</button>
+            </template>
+            <template v-else>
+              <button
+                @click="showQuickSetup = false"
+                class="bg-primary-600 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-primary-700 transition"
+              >Done</button>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 </template>

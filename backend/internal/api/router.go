@@ -1,7 +1,9 @@
 package api
 
 import (
+	"crypto/ecdh"
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
@@ -691,6 +693,27 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				}
 
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Certificate issued successfully"})
+			})
+
+			// Generate X25519 keypair for VLESS Reality
+			proxyGroup.POST("/generate-reality-keys", func(c *gin.Context) {
+				curve := ecdh.X25519()
+				priv, err := curve.GenerateKey(rand.Reader)
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate keys: " + err.Error()})
+					return
+				}
+				shortIdBytes := make([]byte, 4)
+				rand.Read(shortIdBytes)
+				c.JSON(http.StatusOK, gin.H{
+					"code": 200,
+					"msg":  "Success",
+					"data": gin.H{
+						"private_key": base64.RawURLEncoding.EncodeToString(priv.Bytes()),
+						"public_key":  base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()),
+						"short_id":    fmt.Sprintf("%x", shortIdBytes),
+					},
+				})
 			})
 		}
 

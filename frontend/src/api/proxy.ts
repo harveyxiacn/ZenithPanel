@@ -48,3 +48,7 @@ export function updateRoutingRule(id: number, data: any) {
 export function deleteRoutingRule(id: number) {
   return apiClient.delete(`/v1/routing-rules/${id}`)
 }
+
+export function generateRealityKeys() {
+  return apiClient.post('/v1/proxy/generate-reality-keys')
+}

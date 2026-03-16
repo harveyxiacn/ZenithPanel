@@ -77,10 +77,38 @@ The core of this system—integrating V2ray/Xray and Sing-box engines.
 
 ---
 
-## 💡 Advanced: How to Start a New Node?
+## 💡 Quick Setup: One-Click Node Configuration (Recommended)
 
-1. Go to the `Proxy` panel, select `Nodes -> Add Inbound`.
-2. Choose a protocol (e.g., `VLESS + TCP + XTLS` or `Hysteria2`).
-3. Enter the target listening port, add a remark, and submit.
-4. Go to the `Users` interface to assign a user to this node.
-5. In the `Subscriptions` panel, click the copy button and update your client!
+The fastest way to get started — the **Quick Setup** wizard auto-generates recommended configurations with a single click:
+
+1. Go to **Proxy Services** > **Inbound Nodes** tab.
+2. Click the **Quick Setup** button (or use the call-to-action when the list is empty).
+3. **Step 1 — Select**: Choose from 6 preset configurations (VLESS+Reality is recommended), or click **Use Recommended** for one-click setup.
+4. **Step 2 — Review**: All settings are pre-filled (keys, paths, ports). Expand any node to customize parameters if needed. Toggle options for default routing rules (block ads/private IPs) and creating a first client.
+5. **Step 3 — Done**: Everything is created automatically. Click **Apply Configuration** to activate.
+
+### Available Presets
+
+| Preset | Best For | Domain Needed? |
+|--------|----------|---------------|
+| VLESS + Reality | Most censorship-resistant | No |
+| VLESS + WS + TLS | CDN (Cloudflare) friendly | Yes |
+| VMess + WS + TLS | Maximum client compatibility | Yes |
+| Trojan + TLS | Simple and fast | Yes |
+| Hysteria2 | High-speed UDP/QUIC | Yes |
+| Shadowsocks | Lightweight, easy setup | No |
+
+> Reality key pairs and short IDs are auto-generated server-side. WebSocket paths and Shadowsocks passwords are also randomized automatically.
+
+---
+
+## 🔧 Advanced: Manual Node Setup
+
+For full control, you can still manually configure nodes:
+
+1. Go to the `Proxy` panel, select `Nodes -> Add Node`.
+2. Choose a protocol, enter port, and provide Settings/Stream JSON manually.
+3. Go to the `Users` interface to assign a user to this node.
+4. In the `Subscriptions` panel, click the copy button and update your client!
+
+See the [Proxy Setup Guide](proxy-setup-guide.md) for detailed JSON examples per protocol.

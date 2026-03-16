@@ -68,7 +68,27 @@ ZenithPanel/
 
 ---
 
-## 4. 📦 编译与发布
+## 4. 🌐 API 接口列表
+
+### 代理管理
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/inbounds` | 获取所有入站节点 |
+| POST | `/api/v1/inbounds` | 创建入站节点 |
+| PUT | `/api/v1/inbounds/:id` | 更新入站节点 |
+| DELETE | `/api/v1/inbounds/:id` | 删除入站节点 |
+| GET | `/api/v1/clients` | 获取所有客户端 |
+| POST | `/api/v1/clients` | 创建客户端（UUID 自动生成） |
+| GET | `/api/v1/routing-rules` | 获取路由规则 |
+| POST | `/api/v1/routing-rules` | 创建路由规则 |
+| POST | `/api/v1/proxy/generate-reality-keys` | 生成 VLESS Reality 所需的 X25519 密钥对 + Short ID |
+| GET | `/api/v1/proxy/config/xray` | 预览生成的 Xray 配置 JSON |
+| GET | `/api/v1/proxy/config/singbox` | 预览生成的 Sing-box 配置 JSON |
+| GET | `/api/v1/sub/:uuid` | 订阅接口（自动识别 Clash/Base64 格式） |
+
+---
+
+## 5. 📦 编译与发布
 
 本项目支持**单文件二进制**分发：
 1. `npm run build` 生成前端静态资源。

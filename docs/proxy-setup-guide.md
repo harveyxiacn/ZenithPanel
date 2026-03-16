@@ -30,9 +30,36 @@ docker run -d \
 
 ---
 
-## Step 1: Create an Inbound (Proxy Node)
+## Step 1: Create Inbound Nodes
 
-Navigate to **Proxy Services** > **Inbound Nodes** tab and click **Add Node**.
+### Option A: Quick Setup (Recommended)
+
+The easiest way — one-click auto-configuration:
+
+1. Navigate to **Proxy Services** > **Inbound Nodes** tab.
+2. Click **Quick Setup** (or the call-to-action button when no nodes exist).
+3. **Select**: Choose from 6 presets. Click **Use Recommended** for VLESS+Reality (best censorship resistance, no domain needed).
+4. **Review**: All settings are pre-filled automatically:
+   - Reality keys (X25519) and short IDs are generated server-side
+   - WebSocket paths are randomized
+   - Shadowsocks passwords are auto-generated
+   - Expand any node to customize ports, domains, cert paths, etc.
+5. Toggle **Add recommended routing rules** to auto-create ad-blocking and private IP rules.
+6. Toggle **Create first client** to auto-create a user with subscription link.
+7. Click **Create All** — done!
+
+| Preset | Default Port | Domain Needed? | Notes |
+|--------|-------------|---------------|-------|
+| VLESS + Reality | 443 | No | Most censorship-resistant |
+| VLESS + WS + TLS | 2083 | Yes | CDN (Cloudflare) compatible |
+| VMess + WS + TLS | 2087 | Yes | Wide client support |
+| Trojan + TLS | 2096 | Yes | Simple, fast |
+| Hysteria2 | 8443 | Yes | UDP/QUIC, ultra fast |
+| Shadowsocks | 8388 | No | Lightweight |
+
+### Option B: Manual Setup (Advanced)
+
+For full control, click **Add Node** and configure manually:
 
 ### Example: VLESS + TCP + TLS
 
@@ -99,8 +126,9 @@ Navigate to **Proxy Services** > **Inbound Nodes** tab and click **Add Node**.
 }
 ```
 
-> Generate Reality key pair with: `xray x25519`
+> **Tip**: Quick Setup auto-generates Reality keys. For manual setup, generate a key pair with: `xray x25519`
 > Run this inside the container: `docker exec zenithpanel xray x25519`
+> Or use the panel API: `POST /api/v1/proxy/generate-reality-keys`
 
 ### Example: VMess + WebSocket + TLS
 
@@ -307,7 +335,10 @@ Example: Direct traffic to China:
 - Check that the subscription URL is accessible
 
 **Reality key pair:**
+Quick Setup generates keys automatically. For manual setup:
 ```bash
 docker exec zenithpanel xray x25519
 ```
-This outputs a private key and public key. Put the private key in the server's Stream JSON `realitySettings.privateKey`, and the public key in `realitySettings.publicKey` (this is what clients receive via subscription).
+Or use the API: `POST /api/v1/proxy/generate-reality-keys` — returns `private_key`, `public_key`, and `short_id`.
+
+Put the private key in the server's Stream JSON `realitySettings.privateKey`, and the public key in `realitySettings.publicKey` (this is what clients receive via subscription).

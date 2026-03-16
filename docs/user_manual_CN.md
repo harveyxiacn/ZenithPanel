@@ -77,10 +77,38 @@ docker run -d \
 
 ---
 
-## 💡 进阶：如何开启新的节点服务？
+## 💡 快速配置：一键创建节点（推荐）
 
-1. 进入 `Proxy` 面板，选择 `Nodes -> Add Inbound`
-2. 选择要部署的协议 (如 `VLESS + TCP + XTLS` 或 `Hysteria2`)
-3. 输入欲监听的端口号，为节点设置备注，提交！
-4. 随后请前往 `Users` 界面为此节点发配一个用户。
-5. 进入 `Subscriptions` 面板并点击链接复制按钮，在客户端更新即可直接连接体验！
+最快速的上手方式——**快速配置向导**一键自动生成推荐配置：
+
+1. 进入 **代理服务（Proxy Services）** > **入站节点（Inbound Nodes）** 标签页。
+2. 点击 **Quick Setup（快速配置）** 按钮（节点列表为空时也会显示快速配置入口）。
+3. **第一步 — 选择方案**：从 6 种预设配置中选择（推荐 VLESS+Reality），或点击 **Use Recommended** 一键选择最佳方案。
+4. **第二步 — 检查与自定义**：所有配置已自动填充（密钥、路径、端口等）。展开任意节点可自定义参数。可选开启默认路由规则（屏蔽广告/私有IP）和自动创建首个客户端。
+5. **第三步 — 完成**：所有节点自动创建完毕。点击 **Apply Configuration** 激活配置即可使用。
+
+### 可用预设方案
+
+| 方案 | 最适场景 | 是否需要域名 |
+|------|---------|------------|
+| VLESS + Reality | 抗封锁能力最强 | 否 |
+| VLESS + WS + TLS | 支持 CDN（Cloudflare）转发 | 是 |
+| VMess + WS + TLS | 客户端兼容性最广 | 是 |
+| Trojan + TLS | 简单高速 | 是 |
+| Hysteria2 | UDP/QUIC 高速传输 | 是 |
+| Shadowsocks | 轻量级，易部署 | 否 |
+
+> Reality 密钥对和 Short ID 由服务端自动生成。WebSocket 路径和 Shadowsocks 密码也会自动随机化。
+
+---
+
+## 🔧 进阶：手动节点配置
+
+如需完全自定义控制，仍可手动配置节点：
+
+1. 进入 `Proxy` 面板，选择 `Nodes -> Add Node`
+2. 选择协议，输入端口，手动填写 Settings/Stream JSON
+3. 前往 `Users` 界面为此节点分配用户
+4. 进入 `Subscriptions` 面板，复制订阅链接，在客户端更新即可
+
+详细的 JSON 配置示例请参见[代理设置指南](proxy-setup-guide-cn.md)。
