@@ -221,8 +221,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 		setupGroup.POST("/complete", middleware.JWTAuthMiddleware(), func(c *gin.Context) {
 			var req struct {
-				Username string `json:"username"`
-				Password string `json:"password"`
+				Username  string `json:"username"`
+				Password  string `json:"password"`
+				PanelPath string `json:"panel_path"`
 			}
 			if err := c.ShouldBindJSON(&req); err != nil || req.Username == "" || req.Password == "" {
 				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Username and password are required"})
@@ -254,9 +255,18 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				if err := tx.Create(&admin).Error; err != nil {
 					return err
 				}
-				return tx.Where("`key` = ?", "setup_complete").
+				if err := tx.Where("`key` = ?", "setup_complete").
 					Assign(model.Setting{Key: "setup_complete", Value: "true"}).
-					FirstOrCreate(&model.Setting{}).Error
+					FirstOrCreate(&model.Setting{}).Error; err != nil {
+					return err
+				}
+				// Persist custom panel path if provided
+				if req.PanelPath != "" {
+					return tx.Where("`key` = ?", "panel_path").
+						Assign(model.Setting{Key: "panel_path", Value: req.PanelPath}).
+						FirstOrCreate(&model.Setting{}).Error
+				}
+				return nil
 			})
 			if err != nil {
 				log.Printf("Setup complete error: %v", err)
@@ -265,6 +275,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			cfg := config.GetConfig()
 			cfg.IsSetupComplete = true
+			if req.PanelPath != "" {
+				cfg.PanelPrefix = req.PanelPath
+			}
 
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Setup complete! You can now login with your credentials."})
 		})
@@ -859,6 +872,46 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				})
 			})
 		}
+
+		// ======================================
+		// Admin Password Change
+		// ======================================
+		authGroup.POST("/admin/change-password", func(c *gin.Context) {
+			var req struct {
+				OldPassword string `json:"old_password"`
+				NewPassword string `json:"new_password"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil || req.OldPassword == "" || req.NewPassword == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Old and new passwords are required"})
+				return
+			}
+			if len(req.NewPassword) < 8 {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "New password must be at least 8 characters"})
+				return
+			}
+
+			username, _ := c.Get("username")
+			var admin model.AdminUser
+			if err := config.DB.Where("username = ?", username).First(&admin).Error; err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Admin user not found"})
+				return
+			}
+			if err := bcrypt.CompareHashAndPassword([]byte(admin.PasswordHash), []byte(req.OldPassword)); err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Old password is incorrect"})
+				return
+			}
+			hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to hash password"})
+				return
+			}
+			admin.PasswordHash = string(hash)
+			if err := config.DB.Save(&admin).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to update password"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Password changed successfully"})
+		})
 
 		// ======================================
 		// OTA Update

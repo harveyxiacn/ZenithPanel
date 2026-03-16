@@ -80,10 +80,14 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 // buildXrayInbound constructs a complete Xray inbound entry from the DB model,
 // parsing the Settings/Stream JSON and injecting clients from the Client table.
 func buildXrayInbound(in model.Inbound) (map[string]interface{}, error) {
+	listen := in.Listen
+	if listen == "" {
+		listen = "0.0.0.0"
+	}
 	entry := map[string]interface{}{
 		"tag":      in.Tag,
 		"port":     in.Port,
-		"listen":   "0.0.0.0",
+		"listen":   listen,
 		"protocol": in.Protocol,
 	}
 

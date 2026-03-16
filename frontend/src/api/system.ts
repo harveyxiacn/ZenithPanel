@@ -9,9 +9,13 @@ export function getNetworkDiagnostics() {
 }
 
 export function checkForUpdate() {
-  return apiClient.get('/v1/system/update/check')
+  return apiClient.get('/v1/system/update/check', { timeout: 120000 })
 }
 
 export function applyUpdate() {
-  return apiClient.post('/v1/system/update/apply')
+  return apiClient.post('/v1/system/update/apply', null, { timeout: 120000 })
+}
+
+export function changePassword(oldPassword: string, newPassword: string) {
+  return apiClient.post('/v1/admin/change-password', { old_password: oldPassword, new_password: newPassword })
 }

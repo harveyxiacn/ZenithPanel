@@ -332,7 +332,7 @@ function downloadQr() {
 const routingRules = ref<any[]>([])
 const routingLoading = ref(false)
 const showRoutingForm = ref(false)
-const routingForm = ref({ name: '', domain_keyword: '', domain_suffix: '', geosite: '', geoip: '', outbound_tag: '', priority: 0 })
+const routingForm = ref({ rule_tag: '', domain: '', ip: '', port: '', outbound_tag: '', enable: true })
 
 async function fetchRoutingRules() {
   routingLoading.value = true
@@ -347,7 +347,7 @@ async function saveRoutingRule() {
   try {
     await createRoutingRule(routingForm.value)
     showRoutingForm.value = false
-    routingForm.value = { name: '', domain_keyword: '', domain_suffix: '', geosite: '', geoip: '', outbound_tag: '', priority: 0 }
+    routingForm.value = { rule_tag: '', domain: '', ip: '', port: '', outbound_tag: '', enable: true }
     await fetchRoutingRules()
   } catch { /* ignore */ }
 }
@@ -994,16 +994,11 @@ onMounted(() => {
 
         <!-- Add Routing Rule Form -->
         <div v-if="showRoutingForm" class="p-6 border-b border-slate-100 bg-slate-50">
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-            <input v-model="routingForm.name" :placeholder="$t('proxy.routing.ruleName')" class="input-field text-sm" />
-            <input v-model="routingForm.domain_keyword" :placeholder="$t('proxy.routing.domainKeyword')" class="input-field text-sm" />
-            <input v-model="routingForm.domain_suffix" :placeholder="$t('proxy.routing.domainSuffix')" class="input-field text-sm" />
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
+            <input v-model="routingForm.rule_tag" :placeholder="$t('proxy.routing.ruleName')" class="input-field text-sm" />
+            <input v-model="routingForm.domain" :placeholder="$t('proxy.routing.domainPlaceholder')" class="input-field text-sm" />
+            <input v-model="routingForm.ip" :placeholder="$t('proxy.routing.ipPlaceholder')" class="input-field text-sm" />
             <input v-model="routingForm.outbound_tag" :placeholder="$t('proxy.routing.outboundTag')" class="input-field text-sm" />
-          </div>
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-            <input v-model="routingForm.geosite" :placeholder="$t('proxy.routing.geosite')" class="input-field text-sm" />
-            <input v-model="routingForm.geoip" :placeholder="$t('proxy.routing.geoip')" class="input-field text-sm" />
-            <input v-model.number="routingForm.priority" type="number" :placeholder="$t('proxy.routing.priority')" class="input-field text-sm" />
             <button @click="saveRoutingRule" class="bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700">{{ $t('common.add') }}</button>
           </div>
         </div>
@@ -1015,16 +1010,16 @@ onMounted(() => {
             <tr>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.routing.name') }}</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.routing.domain') }}</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.routing.geo') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">IP</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.routing.outbound') }}</th>
               <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody class="bg-white divide-y divide-slate-200">
             <tr v-for="rule in routingRules" :key="rule.id" class="hover:bg-slate-50">
-              <td class="px-6 py-4 text-sm font-medium text-slate-900">{{ rule.name }}</td>
-              <td class="px-6 py-4 text-sm text-slate-500">{{ rule.domain_keyword || rule.domain_suffix || '-' }}</td>
-              <td class="px-6 py-4 text-sm text-slate-500">{{ [rule.geosite, rule.geoip].filter(Boolean).join(', ') || '-' }}</td>
+              <td class="px-6 py-4 text-sm font-medium text-slate-900">{{ rule.rule_tag }}</td>
+              <td class="px-6 py-4 text-sm text-slate-500">{{ rule.domain || '-' }}</td>
+              <td class="px-6 py-4 text-sm text-slate-500">{{ rule.ip || '-' }}</td>
               <td class="px-6 py-4 text-sm text-slate-500">{{ rule.outbound_tag }}</td>
               <td class="px-6 py-4 text-right">
                 <button @click="removeRoutingRule(rule.id)" class="text-rose-600 hover:text-rose-900">
