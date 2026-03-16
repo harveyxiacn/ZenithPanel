@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -138,19 +139,30 @@ func CheckForUpdate(ctx context.Context) (*UpdateInfo, error) {
 // PerformUpdate recreates the current container with the latest image.
 // A helper container orchestrates the swap: stop old → start new → cleanup.
 // This avoids port conflicts when using --network=host.
-func PerformUpdate(ctx context.Context) error {
+//
+// IMPORTANT: This function uses its own background context (not the HTTP request
+// context) to prevent Docker API calls from being cancelled if the HTTP
+// connection drops or times out during the operation.
+func PerformUpdate(_ context.Context) error {
+	// Use a background context so Docker operations survive HTTP request cancellation.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		return err
+		return fmt.Errorf("docker client: %w", err)
 	}
+	defer cli.Close()
 
-	// 1. Pull latest image
+	// 1. Pull latest image (may already be cached from check)
+	log.Println("OTA: pulling latest image...")
 	reader, err := cli.ImagePull(ctx, DefaultImage, types.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull image: %w", err)
 	}
 	io.Copy(io.Discard, reader)
 	reader.Close()
+	log.Println("OTA: image pull complete")
 
 	// 2. Get current container ID and full config
 	containerID, err := getContainerID()
@@ -164,12 +176,23 @@ func PerformUpdate(ctx context.Context) error {
 		return fmt.Errorf("inspect container %s: %w", containerID, err)
 	}
 
-	// 3. Prepare new container config with updated image
+	// 3. Prepare new container config with updated image.
+	// Clear runtime-only fields that Docker sets during creation and that
+	// would conflict or be meaningless on a brand-new container.
 	newConfig := info.Config
 	newConfig.Image = DefaultImage
+	newConfig.Hostname = ""
+	newConfig.Domainname = ""
 	hostConfig := info.HostConfig
+
+	// Derive the original container name. If a previous failed update left
+	// the container renamed to "<name>-old", strip the suffix so we create
+	// the new container with the correct original name.
 	containerName := strings.TrimPrefix(info.Name, "/")
+	containerName = strings.TrimSuffix(containerName, "-old")
 	oldName := containerName + "-old"
+
+	log.Printf("OTA: container name=%s, will rename to=%s", containerName, oldName)
 
 	// Clean up leftover containers from previous update attempts
 	cli.ContainerStop(ctx, oldName, container.StopOptions{})
@@ -179,15 +202,18 @@ func PerformUpdate(ctx context.Context) error {
 
 	// 4. Rename old container to free the name
 	if err := cli.ContainerRename(ctx, containerID, oldName); err != nil {
-		return fmt.Errorf("rename container: %w", err)
+		return fmt.Errorf("rename container %s -> %s: %w", containerID[:12], oldName, err)
 	}
+	log.Printf("OTA: renamed %s -> %s", containerID[:12], oldName)
 
 	// 5. Create new container with same config + new image
 	resp, err := cli.ContainerCreate(ctx, newConfig, hostConfig, nil, nil, containerName)
 	if err != nil {
+		log.Printf("OTA: create failed, rolling back rename: %v", err)
 		cli.ContainerRename(ctx, containerID, containerName) // rollback
 		return fmt.Errorf("create container: %w", err)
 	}
+	log.Printf("OTA: created new container %s", resp.ID[:12])
 
 	// 6. Spawn a helper container to orchestrate the swap.
 	// The helper stops the old container first (freeing ports), then starts the new one.
@@ -197,19 +223,28 @@ func PerformUpdate(ctx context.Context) error {
 		containerID, resp.ID, containerID,
 	)
 	helperCfg := &container.Config{
-		Image:      DefaultImage,
+		Image:      "alpine:latest",
 		Entrypoint: []string{"sh", "-c"},
-		Cmd:        []string{swapScript},
+		Cmd:        []string{"apk add --no-cache docker-cli > /dev/null 2>&1 && " + swapScript},
 	}
 	helperHC := &container.HostConfig{
 		Binds:      []string{"/var/run/docker.sock:/var/run/docker.sock"},
 		AutoRemove: true,
 	}
+
+	// Try to use a small alpine image for the helper first; fall back to
+	// the panel image if alpine is not available locally.
 	helperResp, err := cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
 	if err != nil {
-		cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-		cli.ContainerRename(ctx, containerID, containerName)
-		return fmt.Errorf("create updater helper: %w", err)
+		log.Printf("OTA: alpine helper failed (%v), falling back to panel image", err)
+		helperCfg.Image = DefaultImage
+		helperCfg.Cmd = []string{swapScript}
+		helperResp, err = cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
+		if err != nil {
+			cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
+			cli.ContainerRename(ctx, containerID, containerName)
+			return fmt.Errorf("create updater helper: %w", err)
+		}
 	}
 	if err := cli.ContainerStart(ctx, helperResp.ID, types.ContainerStartOptions{}); err != nil {
 		cli.ContainerRemove(ctx, helperResp.ID, types.ContainerRemoveOptions{})
