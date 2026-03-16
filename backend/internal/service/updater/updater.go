@@ -22,23 +22,65 @@ type UpdateInfo struct {
 	LatestID  string `json:"latest_id"`
 }
 
-// getContainerID reads the container ID from /proc/self/cgroup.
-// This works even with --pid=host where os.Hostname() returns the host's name.
+// getContainerID detects the current Docker container ID.
+// It tries multiple sources in order of reliability:
+//  1. /proc/self/mountinfo — Docker bind-mounts /etc/hostname from
+//     /var/lib/docker/containers/<id>/hostname, visible in all cgroup versions.
+//  2. /proc/self/cgroup — works on cgroup v1 and some v2 setups.
+//  3. os.Hostname() — fallback, works when hostname equals the container ID.
 func getContainerID() (string, error) {
-	data, err := os.ReadFile("/proc/self/cgroup")
-	if err != nil {
-		return "", fmt.Errorf("read cgroup: %w", err)
+	// Method 1: Parse mountinfo for docker container paths
+	if id, err := getContainerIDFromMountinfo(); err == nil {
+		return id, nil
 	}
 
+	// Method 2: Parse cgroup
+	if id, err := getContainerIDFromCgroup(); err == nil {
+		return id, nil
+	}
+
+	// Method 3: Fallback to hostname
+	return os.Hostname()
+}
+
+// getContainerIDFromMountinfo reads /proc/self/mountinfo looking for Docker's
+// bind-mount of /etc/hostname or /etc/resolv.conf from /var/lib/docker/containers/<id>/.
+// This works on both cgroup v1 and v2, and regardless of --pid=host.
+func getContainerIDFromMountinfo() (string, error) {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return "", err
+	}
 	for _, line := range strings.Split(string(data), "\n") {
-		// cgroup v2: "0::/docker/<id>" or cgroup v1: "N:xyz:/docker/<id>"
+		if idx := strings.Index(line, "/docker/containers/"); idx != -1 {
+			rest := line[idx+len("/docker/containers/"):]
+			if slashIdx := strings.Index(rest, "/"); slashIdx != -1 {
+				id := rest[:slashIdx]
+				if len(id) >= 12 {
+					return id, nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("container ID not found in mountinfo")
+}
+
+// getContainerIDFromCgroup parses /proc/self/cgroup for docker container IDs.
+// Works on cgroup v1 ("N:xyz:/docker/<id>") and some cgroup v2 setups.
+func getContainerIDFromCgroup() (string, error) {
+	data, err := os.ReadFile("/proc/self/cgroup")
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		// "0::/docker/<id>" or "N:xyz:/docker/<id>"
 		if idx := strings.LastIndex(line, "/docker/"); idx != -1 {
 			id := strings.TrimSpace(line[idx+len("/docker/"):])
 			if len(id) >= 12 {
 				return id, nil
 			}
 		}
-		// systemd cgroup: "0::/system.slice/docker-<id>.scope"
+		// systemd: "0::/system.slice/docker-<id>.scope"
 		if idx := strings.Index(line, "docker-"); idx != -1 {
 			id := line[idx+len("docker-"):]
 			if dotIdx := strings.Index(id, "."); dotIdx != -1 {
@@ -50,9 +92,7 @@ func getContainerID() (string, error) {
 			}
 		}
 	}
-
-	// Fallback: try hostname (works when --pid=host is not set)
-	return os.Hostname()
+	return "", fmt.Errorf("container ID not found in cgroup")
 }
 
 // CheckForUpdate pulls the latest image and compares its digest with the current container's image.
