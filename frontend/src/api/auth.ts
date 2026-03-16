@@ -12,6 +12,6 @@ export function setupComplete(data: {
   return apiClient.post('/setup/complete', data)
 }
 
-export function login(username: string, password: string) {
-  return apiClient.post('/v1/login', { username, password })
+export function login(username: string, password: string, totpCode?: string) {
+  return apiClient.post('/v1/login', { username, password, totp_code: totpCode })
 }

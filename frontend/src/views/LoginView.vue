@@ -11,6 +11,8 @@ const { t } = useI18n()
 
 const username = ref('')
 const password = ref('')
+const totpCode = ref('')
+const showTOTP = ref(false)
 const loading = ref(false)
 const errorMsg = ref('')
 
@@ -22,10 +24,20 @@ const handleLogin = async () => {
     return
   }
 
+  if (showTOTP.value && !totpCode.value) {
+    errorMsg.value = t('login.enterTOTP')
+    return
+  }
+
   loading.value = true
 
   try {
-    const res: any = await login(username.value, password.value)
+    const res: any = await login(username.value, password.value, showTOTP.value ? totpCode.value : undefined)
+    if (res.code === 200 && res.data?.requires_2fa) {
+      showTOTP.value = true
+      loading.value = false
+      return
+    }
     if (res.code === 200 && res.data?.token) {
       authStore.setToken(res.data.token)
       router.push('/dashboard')
@@ -34,7 +46,12 @@ const handleLogin = async () => {
     }
   } catch (err: any) {
     if (err.response?.status === 429) {
-      errorMsg.value = t('login.errorRateLimit')
+      const data = err.response?.data?.data
+      if (data?.locked) {
+        errorMsg.value = t('login.errorLocked', { n: data.minutes })
+      } else {
+        errorMsg.value = t('login.errorRateLimit')
+      }
     } else {
       errorMsg.value = err.response?.data?.msg || err.message || 'Network error'
     }
@@ -65,7 +82,7 @@ const handleLogin = async () => {
             v-model="username"
             class="input-field"
             placeholder="admin"
-            :disabled="loading"
+            :disabled="loading || showTOTP"
           />
         </div>
         <div>
@@ -75,9 +92,26 @@ const handleLogin = async () => {
             v-model="password"
             class="input-field"
             placeholder="••••••••"
-            :disabled="loading"
+            :disabled="loading || showTOTP"
           />
         </div>
+
+        <!-- TOTP Input (shown after password verified) -->
+        <div v-if="showTOTP" class="pt-2">
+          <label class="block text-sm font-medium text-slate-600 mb-1">{{ $t('login.totpCode') }}</label>
+          <input
+            type="text"
+            v-model="totpCode"
+            class="input-field text-center text-lg tracking-widest"
+            :placeholder="$t('login.totpPlaceholder')"
+            inputmode="numeric"
+            maxlength="8"
+            autocomplete="one-time-code"
+            :disabled="loading"
+          />
+          <p class="text-xs text-slate-400 mt-1">{{ $t('login.totpHint') }}</p>
+        </div>
+
         <button
           type="submit"
           :disabled="loading"

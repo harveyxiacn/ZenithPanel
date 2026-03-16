@@ -86,9 +86,21 @@ func main() {
 
 	// 8. Run the server in a goroutine so it doesn't block
 	go func() {
-		log.Printf("ZenithPanel listening on http://0.0.0.0:%s", port)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
+		certPath := config.GetSetting("tls_cert_path")
+		keyPath := config.GetSetting("tls_key_path")
+		if certPath != "" && keyPath != "" {
+			log.Printf("ZenithPanel listening on https://0.0.0.0:%s", port)
+			if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
+				log.Printf("TLS failed (%v), falling back to HTTP...", err)
+				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Fatalf("Failed to start server: %v", err)
+				}
+			}
+		} else {
+			log.Printf("ZenithPanel listening on http://0.0.0.0:%s", port)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("Failed to start server: %v", err)
+			}
 		}
 	}()
 

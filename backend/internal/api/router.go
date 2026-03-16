@@ -1,11 +1,17 @@
 package api
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"image/png"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -33,6 +39,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/terminal"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/updater"
+	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
@@ -61,6 +68,98 @@ func getIPLimiter(ip string) *rate.Limiter {
 	ipRateLimiters.m[ip] = limiter
 	ipRateLimiters.Unlock()
 	return limiter
+}
+
+// loginFailures tracks consecutive login failures per IP for lockout.
+var loginFailures = struct {
+	sync.RWMutex
+	m map[string]*failureRecord
+}{m: make(map[string]*failureRecord)}
+
+type failureRecord struct {
+	count    int
+	lockedAt time.Time
+}
+
+const maxLoginFailures = 5
+const lockoutDuration = 15 * time.Minute
+
+func checkIPLockout(ip string) (bool, time.Duration) {
+	loginFailures.RLock()
+	rec, exists := loginFailures.m[ip]
+	loginFailures.RUnlock()
+	if !exists {
+		return false, 0
+	}
+	if rec.count >= maxLoginFailures {
+		remaining := lockoutDuration - time.Since(rec.lockedAt)
+		if remaining > 0 {
+			return true, remaining
+		}
+		// Lockout expired, clear
+		loginFailures.Lock()
+		delete(loginFailures.m, ip)
+		loginFailures.Unlock()
+	}
+	return false, 0
+}
+
+func recordLoginFailure(ip string) {
+	loginFailures.Lock()
+	defer loginFailures.Unlock()
+	rec, exists := loginFailures.m[ip]
+	if !exists {
+		loginFailures.m[ip] = &failureRecord{count: 1, lockedAt: time.Now()}
+		return
+	}
+	rec.count++
+	rec.lockedAt = time.Now()
+}
+
+func clearLoginFailures(ip string) {
+	loginFailures.Lock()
+	delete(loginFailures.m, ip)
+	loginFailures.Unlock()
+}
+
+// tryRecoveryCode checks if the provided code matches any stored recovery code.
+// If matched, the used code is removed from the database.
+func tryRecoveryCode(admin *model.AdminUser, code string) bool {
+	if admin.RecoveryCodes == "" {
+		return false
+	}
+	var codes []string
+	if err := json.Unmarshal([]byte(admin.RecoveryCodes), &codes); err != nil {
+		return false
+	}
+	for i, stored := range codes {
+		if err := bcrypt.CompareHashAndPassword([]byte(stored), []byte(code)); err == nil {
+			// Remove used code
+			codes = append(codes[:i], codes[i+1:]...)
+			updated, _ := json.Marshal(codes)
+			admin.RecoveryCodes = string(updated)
+			config.DB.Save(admin)
+			return true
+		}
+	}
+	return false
+}
+
+// startLockoutCleanup periodically removes expired lockout entries.
+func startLockoutCleanup() {
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			loginFailures.Lock()
+			for ip, rec := range loginFailures.m {
+				if time.Since(rec.lockedAt) >= lockoutDuration {
+					delete(loginFailures.m, ip)
+				}
+			}
+			loginFailures.Unlock()
+		}
+	}()
 }
 
 // isPathSafe ensures the resolved path stays within the sandbox root and is not a symlink.
@@ -293,6 +392,13 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		})
 
 		apiGroup.POST("/login", func(c *gin.Context) {
+			// IP lockout check (5 consecutive failures = 15 min lockout)
+			if locked, remaining := checkIPLockout(c.ClientIP()); locked {
+				mins := int(remaining.Minutes()) + 1
+				c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "msg": fmt.Sprintf("Too many failed attempts. Try again in %d minutes.", mins), "data": gin.H{"locked": true, "minutes": mins}})
+				return
+			}
+
 			// Per-IP rate limiting
 			if !getIPLimiter(c.ClientIP()).Allow() {
 				c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "msg": "Too many login attempts, please try again later"})
@@ -302,6 +408,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			var req struct {
 				Username string `json:"username"`
 				Password string `json:"password"`
+				TOTPCode string `json:"totp_code"`
 			}
 			if err := c.ShouldBindJSON(&req); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid parameters"})
@@ -311,15 +418,39 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			// Find admin user in DB
 			var admin model.AdminUser
 			if err := config.DB.Where("username = ?", req.Username).First(&admin).Error; err != nil {
+				recordLoginFailure(c.ClientIP())
 				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid username or password"})
 				return
 			}
 
 			// Verify bcrypt password
 			if err := bcrypt.CompareHashAndPassword([]byte(admin.PasswordHash), []byte(req.Password)); err != nil {
+				recordLoginFailure(c.ClientIP())
 				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid username or password"})
 				return
 			}
+
+			// 2FA check
+			if admin.TOTPEnabled && admin.TOTPSecret != "" {
+				if req.TOTPCode == "" {
+					// Password OK but 2FA code needed — don't issue token yet
+					c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "2FA required", "data": gin.H{"requires_2fa": true}})
+					return
+				}
+				// Validate TOTP code
+				valid := totp.Validate(req.TOTPCode, admin.TOTPSecret)
+				if !valid {
+					// Try recovery codes
+					valid = tryRecoveryCode(&admin, req.TOTPCode)
+				}
+				if !valid {
+					recordLoginFailure(c.ClientIP())
+					c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid 2FA code"})
+					return
+				}
+			}
+
+			clearLoginFailures(c.ClientIP())
 
 			token, err := jwtutil.GenerateToken(
 				strconv.Itoa(int(admin.ID)),
@@ -934,5 +1065,203 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Update applied. Panel will restart in a few seconds."})
 		})
+
+		// ======================================
+		// Two-Factor Authentication (TOTP)
+		// ======================================
+		authGroup.GET("/admin/2fa/status", func(c *gin.Context) {
+			username, _ := c.Get("username")
+			var admin model.AdminUser
+			if err := config.DB.Where("username = ?", username).First(&admin).Error; err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Admin not found"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"enabled": admin.TOTPEnabled}})
+		})
+
+		authGroup.POST("/admin/2fa/setup", func(c *gin.Context) {
+			username, _ := c.Get("username")
+			var admin model.AdminUser
+			if err := config.DB.Where("username = ?", username).First(&admin).Error; err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Admin not found"})
+				return
+			}
+			if admin.TOTPEnabled {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "2FA is already enabled"})
+				return
+			}
+
+			key, err := totp.Generate(totp.GenerateOpts{
+				Issuer:      "ZenithPanel",
+				AccountName: admin.Username,
+			})
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate TOTP secret"})
+				return
+			}
+
+			// Generate QR code as base64 PNG
+			img, err := key.Image(200, 200)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate QR code"})
+				return
+			}
+			var buf bytes.Buffer
+			if err := png.Encode(&buf, img); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to encode QR"})
+				return
+			}
+			qrBase64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+
+			// Generate 8 recovery codes
+			recoveryCodes := make([]string, 8)
+			recoveryHashes := make([]string, 8)
+			for i := 0; i < 8; i++ {
+				b := make([]byte, 4)
+				rand.Read(b)
+				code := hex.EncodeToString(b)
+				recoveryCodes[i] = code
+				hash, _ := bcrypt.GenerateFromPassword([]byte(code), bcrypt.DefaultCost)
+				recoveryHashes[i] = string(hash)
+			}
+			hashesJSON, _ := json.Marshal(recoveryHashes)
+
+			// Save secret + recovery codes (not yet enabled)
+			admin.TOTPSecret = key.Secret()
+			admin.RecoveryCodes = string(hashesJSON)
+			if err := config.DB.Save(&admin).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to save"})
+				return
+			}
+
+			c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
+				"secret":         key.Secret(),
+				"qr_base64":      qrBase64,
+				"recovery_codes": recoveryCodes,
+			}})
+		})
+
+		authGroup.POST("/admin/2fa/verify", func(c *gin.Context) {
+			var req struct {
+				Code string `json:"code"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil || req.Code == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Code is required"})
+				return
+			}
+			username, _ := c.Get("username")
+			var admin model.AdminUser
+			if err := config.DB.Where("username = ?", username).First(&admin).Error; err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Admin not found"})
+				return
+			}
+			if admin.TOTPSecret == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Run 2FA setup first"})
+				return
+			}
+			if !totp.Validate(req.Code, admin.TOTPSecret) {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid code"})
+				return
+			}
+			admin.TOTPEnabled = true
+			config.DB.Save(&admin)
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "2FA enabled successfully"})
+		})
+
+		authGroup.POST("/admin/2fa/disable", func(c *gin.Context) {
+			var req struct {
+				Password string `json:"password"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil || req.Password == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Password is required"})
+				return
+			}
+			username, _ := c.Get("username")
+			var admin model.AdminUser
+			if err := config.DB.Where("username = ?", username).First(&admin).Error; err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Admin not found"})
+				return
+			}
+			if err := bcrypt.CompareHashAndPassword([]byte(admin.PasswordHash), []byte(req.Password)); err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Password is incorrect"})
+				return
+			}
+			admin.TOTPEnabled = false
+			admin.TOTPSecret = ""
+			admin.RecoveryCodes = ""
+			config.DB.Save(&admin)
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "2FA disabled"})
+		})
+
+		// ======================================
+		// TLS/HTTPS Certificate Management
+		// ======================================
+		authGroup.GET("/admin/tls/status", func(c *gin.Context) {
+			certPath := config.GetSetting("tls_cert_path")
+			keyPath := config.GetSetting("tls_key_path")
+			enabled := certPath != "" && keyPath != ""
+			c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
+				"enabled":   enabled,
+				"cert_path": certPath,
+				"key_path":  keyPath,
+			}})
+		})
+
+		authGroup.POST("/admin/tls/upload", func(c *gin.Context) {
+			certFile, err := c.FormFile("cert")
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Certificate file is required"})
+				return
+			}
+			keyFile, err := c.FormFile("key")
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Key file is required"})
+				return
+			}
+
+			// Read file contents
+			cf, _ := certFile.Open()
+			defer cf.Close()
+			certData, _ := io.ReadAll(cf)
+			kf, _ := keyFile.Open()
+			defer kf.Close()
+			keyData, _ := io.ReadAll(kf)
+
+			// Validate TLS pair
+			if _, err := tls.X509KeyPair(certData, keyData); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": fmt.Sprintf("Invalid certificate/key pair: %v", err)})
+				return
+			}
+
+			// Save to data/tls/
+			tlsDir := "data/tls"
+			os.MkdirAll(tlsDir, 0700)
+			certDst := filepath.Join(tlsDir, "cert.pem")
+			keyDst := filepath.Join(tlsDir, "key.pem")
+			if err := os.WriteFile(certDst, certData, 0600); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to save certificate"})
+				return
+			}
+			if err := os.WriteFile(keyDst, keyData, 0600); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to save key"})
+				return
+			}
+
+			config.SetSetting("tls_cert_path", certDst)
+			config.SetSetting("tls_key_path", keyDst)
+
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "TLS certificates uploaded. Restart panel to enable HTTPS."})
+		})
+
+		authGroup.DELETE("/admin/tls", func(c *gin.Context) {
+			os.Remove("data/tls/cert.pem")
+			os.Remove("data/tls/key.pem")
+			config.SetSetting("tls_cert_path", "")
+			config.SetSetting("tls_key_path", "")
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "TLS disabled. Restart panel to apply."})
+		})
 	}
+
+	// Start background lockout cleanup
+	startLockoutCleanup()
 }
