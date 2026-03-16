@@ -219,9 +219,21 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 	sb.WriteString("\n")
 	sb.WriteString("dns:\n")
 	sb.WriteString("  enable: true\n")
+	sb.WriteString("  enhanced-mode: fake-ip\n")
+	sb.WriteString("  fake-ip-range: 198.18.0.1/16\n")
+	sb.WriteString("  fake-ip-filter:\n")
+	sb.WriteString("    - '*.lan'\n")
+	sb.WriteString("    - '*.local'\n")
+	sb.WriteString("    - 'localhost.ptlogin2.qq.com'\n")
 	sb.WriteString("  nameserver:\n")
-	sb.WriteString("    - 8.8.8.8\n")
-	sb.WriteString("    - 1.1.1.1\n")
+	sb.WriteString("    - https://dns.alidns.com/dns-query\n")
+	sb.WriteString("    - https://doh.pub/dns-query\n")
+	sb.WriteString("  fallback:\n")
+	sb.WriteString("    - https://dns.google/dns-query\n")
+	sb.WriteString("    - https://cloudflare-dns.com/dns-query\n")
+	sb.WriteString("  fallback-filter:\n")
+	sb.WriteString("    geoip: true\n")
+	sb.WriteString("    geoip-code: CN\n")
 	sb.WriteString("\n")
 	sb.WriteString("proxies:\n")
 
@@ -350,8 +362,15 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 
 	// Rules
 	sb.WriteString("rules:\n")
-	sb.WriteString("  - GEOIP,private,DIRECT,no-resolve\n")
-	sb.WriteString("  - GEOIP,cn,DIRECT\n")
+	// LAN / private
+	sb.WriteString("  - DOMAIN-SUFFIX,local,DIRECT\n")
+	sb.WriteString("  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve\n")
+	sb.WriteString("  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve\n")
+	sb.WriteString("  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve\n")
+	sb.WriteString("  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve\n")
+	// China direct
+	sb.WriteString("  - GEOIP,CN,DIRECT\n")
+	// Everything else through proxy
 	sb.WriteString("  - MATCH,PROXY\n")
 
 	return sb.String()
