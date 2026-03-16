@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon } from '@heroicons/vue/24/outline'
 import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys } from '@/api/proxy'
+import apiClient from '@/api/client'
 import QRCode from 'qrcode'
 
 const { t } = useI18n()
@@ -132,10 +133,19 @@ async function openQrCode(uuid: string, email: string) {
 }
 
 async function generateQr() {
-  const format = qrFormat.value === 'clash' ? '?format=clash' : '?format=base64'
-  const link = `${location.origin}/api/v1/sub/${qrUuid.value}${format}`
   try {
-    qrDataUrl.value = await QRCode.toDataURL(link, { width: 280, margin: 2, color: { dark: '#1e293b', light: '#ffffff' } })
+    if (qrFormat.value === 'v2ray') {
+      // Fetch actual proxy links so V2RayNG can scan directly (no subscription fetch needed)
+      const res: any = await apiClient.get(`/v1/sub/${qrUuid.value}`, { params: { format: 'base64' } })
+      const raw = typeof res === 'string' ? res : String(res)
+      const decoded = atob(raw.trim())
+      const firstLink = decoded.split('\n').filter((l: string) => l.trim())[0] || ''
+      qrDataUrl.value = await QRCode.toDataURL(firstLink, { width: 280, margin: 2, color: { dark: '#1e293b', light: '#ffffff' } })
+    } else {
+      // Clash: encode subscription URL (Clash clients fetch it natively)
+      const link = `${location.origin}/api/v1/sub/${qrUuid.value}?format=clash`
+      qrDataUrl.value = await QRCode.toDataURL(link, { width: 280, margin: 2, color: { dark: '#1e293b', light: '#ffffff' } })
+    }
   } catch {
     qrDataUrl.value = ''
   }
