@@ -30,9 +30,36 @@ docker run -d \
 
 ---
 
-## 第一步：创建入站节点（Inbound）
+## 第一步：创建入站节点
 
-进入 **代理服务（Proxy Services）** > **入站节点（Inbound Nodes）** 标签页，点击 **Add Node**。
+### 方式 A：快速配置（推荐）
+
+最简单的方式——一键自动配置：
+
+1. 进入 **代理服务（Proxy Services）** > **入站节点（Inbound Nodes）** 标签页。
+2. 点击 **Quick Setup**（节点列表为空时也会显示快速配置入口）。
+3. **选择方案**：从 6 种预设中选择。点击 **Use Recommended** 一键选择 VLESS+Reality（抗封锁最强，无需域名）。
+4. **检查配置**：所有设置已自动填充：
+   - Reality 密钥（X25519）和 Short ID 由服务端自动生成
+   - WebSocket 路径随机生成
+   - Shadowsocks 密码自动生成
+   - 展开任意节点可自定义端口、域名、证书路径等
+5. 勾选 **Add recommended routing rules** 自动创建广告屏蔽和私有 IP 拦截规则。
+6. 勾选 **Create first client** 自动创建首个用户（含订阅链接）。
+7. 点击 **Create All** — 完成！
+
+| 方案 | 默认端口 | 是否需要域名 | 备注 |
+|------|---------|------------|------|
+| VLESS + Reality | 443 | 否 | 抗封锁能力最强 |
+| VLESS + WS + TLS | 2083 | 是 | 支持 CDN（Cloudflare）转发 |
+| VMess + WS + TLS | 2087 | 是 | 客户端兼容性最广 |
+| Trojan + TLS | 2096 | 是 | 简单高速 |
+| Hysteria2 | 8443 | 是 | UDP/QUIC 超高速 |
+| Shadowsocks | 8388 | 否 | 轻量级 |
+
+### 方式 B：手动配置（高级用户）
+
+如需完全自定义，点击 **Add Node** 手动配置：
 
 ### 示例：VLESS + TCP + TLS
 
@@ -99,8 +126,9 @@ docker run -d \
 }
 ```
 
-> 生成 Reality 密钥对：`xray x25519`
+> **提示**：快速配置会自动生成 Reality 密钥。手动配置时可通过命令生成：`xray x25519`
 > 在容器中执行：`docker exec zenithpanel xray x25519`
+> 或调用面板 API：`POST /api/v1/proxy/generate-reality-keys`
 
 ### 示例：VMess + WebSocket + TLS
 
@@ -307,7 +335,10 @@ iptables -I INPUT -p udp --dport 8388 -j ACCEPT
 - 检查订阅链接是否可访问
 
 **生成 Reality 密钥对：**
+快速配置会自动生成密钥。手动配置时：
 ```bash
 docker exec zenithpanel xray x25519
 ```
-输出包含私钥和公钥。将私钥填入 Stream JSON 的 `realitySettings.privateKey`，公钥填入 `realitySettings.publicKey`（公钥会通过订阅链接下发给客户端）。
+或调用 API：`POST /api/v1/proxy/generate-reality-keys` — 返回 `private_key`、`public_key` 和 `short_id`。
+
+将私钥填入 Stream JSON 的 `realitySettings.privateKey`，公钥填入 `realitySettings.publicKey`（公钥会通过订阅链接下发给客户端）。

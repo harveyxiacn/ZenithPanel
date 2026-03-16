@@ -68,7 +68,27 @@ ZenithPanel/
 
 ---
 
-## 4. 📦 Build & Distribution
+## 4. 🌐 API Endpoints
+
+### Proxy Management
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v1/inbounds` | List all inbound nodes |
+| POST | `/api/v1/inbounds` | Create an inbound node |
+| PUT | `/api/v1/inbounds/:id` | Update an inbound node |
+| DELETE | `/api/v1/inbounds/:id` | Delete an inbound node |
+| GET | `/api/v1/clients` | List all clients |
+| POST | `/api/v1/clients` | Create a client (UUID auto-generated) |
+| GET | `/api/v1/routing-rules` | List routing rules |
+| POST | `/api/v1/routing-rules` | Create a routing rule |
+| POST | `/api/v1/proxy/generate-reality-keys` | Generate X25519 keypair + short ID for VLESS Reality |
+| GET | `/api/v1/proxy/config/xray` | Preview generated Xray config JSON |
+| GET | `/api/v1/proxy/config/singbox` | Preview generated Sing-box config JSON |
+| GET | `/api/v1/sub/:uuid` | Subscription endpoint (auto-detects Clash/Base64 format) |
+
+---
+
+## 5. 📦 Build & Distribution
 
 This project supports **Single Binary** distribution:
 1. `npm run build` in the frontend directory generates static assets.
