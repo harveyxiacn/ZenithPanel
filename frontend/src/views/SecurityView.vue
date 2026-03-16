@@ -1,10 +1,57 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, GlobeAltIcon, ArrowPathIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
-import { checkForUpdate, applyUpdate } from '@/api/system'
+import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
+import { checkForUpdate, applyUpdate, changePassword } from '@/api/system'
 
 const { t } = useI18n()
+
+// ---- Change Password ----
+const showPasswordForm = ref(false)
+const oldPassword = ref('')
+const newPassword = ref('')
+const confirmNewPassword = ref('')
+const passwordChanging = ref(false)
+const passwordMsg = ref('')
+const passwordMsgType = ref<'success' | 'error'>('success')
+
+async function onChangePassword() {
+  passwordMsg.value = ''
+  if (!oldPassword.value || !newPassword.value) {
+    passwordMsg.value = t('security.auth.errorEmpty')
+    passwordMsgType.value = 'error'
+    return
+  }
+  if (newPassword.value !== confirmNewPassword.value) {
+    passwordMsg.value = t('security.auth.errorMismatch')
+    passwordMsgType.value = 'error'
+    return
+  }
+  if (newPassword.value.length < 8) {
+    passwordMsg.value = t('security.auth.errorShort')
+    passwordMsgType.value = 'error'
+    return
+  }
+  passwordChanging.value = true
+  try {
+    const res = await changePassword(oldPassword.value, newPassword.value) as any
+    if (res.code === 200) {
+      passwordMsg.value = t('security.auth.passwordChanged')
+      passwordMsgType.value = 'success'
+      oldPassword.value = ''
+      newPassword.value = ''
+      confirmNewPassword.value = ''
+      showPasswordForm.value = false
+    } else {
+      passwordMsg.value = res.msg || 'Failed'
+      passwordMsgType.value = 'error'
+    }
+  } catch (e: any) {
+    passwordMsg.value = e?.response?.data?.msg || 'Failed to change password'
+    passwordMsgType.value = 'error'
+  }
+  passwordChanging.value = false
+}
 
 // ---- Update ----
 const updateChecking = ref(false)
@@ -41,15 +88,21 @@ async function onApplyUpdate() {
   try {
     const res = await applyUpdate() as any
     if (res.code === 200) {
-      // Panel is restarting — show countdown and reload
-      let countdown = 15
+      // Panel is restarting via helper container — show countdown then poll until ready
+      let countdown = 10
       updateError.value = ''
       const timer = setInterval(() => {
         countdown--
         updateError.value = t('security.update.restarting', { n: countdown })
         if (countdown <= 0) {
           clearInterval(timer)
-          window.location.reload()
+          // Poll until the new panel is up, then reload
+          const poll = setInterval(async () => {
+            try {
+              const r = await fetch('/api/v1/ping', { signal: AbortSignal.timeout(3000) })
+              if (r.ok) { clearInterval(poll); window.location.reload() }
+            } catch { /* still restarting */ }
+          }, 2000)
         }
       }, 1000)
     } else {
@@ -130,38 +183,6 @@ async function onApplyUpdate() {
           </div>
         </div>
 
-        <!-- Panel Settings -->
-        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          <div class="p-6 border-b border-slate-100 flex items-center">
-            <div class="bg-indigo-500/10 text-indigo-500 p-2 rounded-lg mr-4">
-              <GlobeAltIcon class="h-6 w-6" />
-            </div>
-            <div>
-              <h3 class="text-lg font-medium text-slate-800">{{ $t('security.access.title') }}</h3>
-              <p class="text-sm text-slate-500">{{ $t('security.access.subtitle') }}</p>
-            </div>
-          </div>
-          <div class="p-6 space-y-4">
-            <div>
-              <label class="block text-sm font-medium text-slate-700">{{ $t('security.access.securityPath') }}</label>
-              <div class="mt-1 flex rounded-md shadow-sm">
-                <span class="inline-flex items-center rounded-l-md border border-r-0 border-slate-300 bg-slate-50 px-3 text-slate-500 sm:text-sm">
-                  https://ip:port/
-                </span>
-                <input type="text" value="zenith-secret-path" class="block w-full min-w-0 flex-1 rounded-none rounded-r-md border-slate-300 px-3 py-2 text-slate-900 focus:border-primary-500 focus:ring-primary-500 sm:text-sm" />
-              </div>
-            </div>
-
-            <div class="flex items-center justify-between pt-4 border-t border-slate-100">
-              <div>
-                <h4 class="text-sm font-medium text-slate-900">{{ $t('security.access.apiWhitelist') }}</h4>
-                <p class="text-xs text-slate-500">{{ $t('security.access.apiWhitelistDesc') }}</p>
-              </div>
-              <button class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">{{ $t('common.configure') }}</button>
-            </div>
-          </div>
-        </div>
-
         <!-- Authentication Settings -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
           <div class="p-6 border-b border-slate-100 flex items-center">
@@ -182,7 +203,18 @@ async function onApplyUpdate() {
                   <p class="text-xs text-slate-500">{{ $t('security.auth.panelPasswordDesc') }}</p>
                 </div>
               </div>
-              <button class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">{{ $t('common.change') }}</button>
+              <button @click="showPasswordForm = !showPasswordForm" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">{{ $t('common.change') }}</button>
+            </div>
+
+            <!-- Password Change Form -->
+            <div v-if="showPasswordForm" class="pt-3 space-y-3">
+              <input v-model="oldPassword" type="password" :placeholder="$t('security.auth.oldPassword')" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500" />
+              <input v-model="newPassword" type="password" :placeholder="$t('security.auth.newPasswordField')" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500" />
+              <input v-model="confirmNewPassword" type="password" :placeholder="$t('security.auth.confirmNewPassword')" class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500" />
+              <div v-if="passwordMsg" :class="['text-sm p-2 rounded-lg', passwordMsgType === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700']">{{ passwordMsg }}</div>
+              <button @click="onChangePassword" :disabled="passwordChanging" class="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                {{ passwordChanging ? $t('common.loading') : $t('security.auth.savePassword') }}
+              </button>
             </div>
 
             <div class="flex items-center justify-between pt-4 border-t border-slate-100">
@@ -190,10 +222,9 @@ async function onApplyUpdate() {
                 <FingerPrintIcon class="h-5 w-5 text-slate-400 mr-3" />
                 <div>
                   <h4 class="text-sm font-medium text-slate-900">{{ $t('security.auth.twoFactor') }}</h4>
-                  <p class="text-xs text-rose-500 font-medium mt-0.5">{{ $t('security.auth.notConfigured') }}</p>
+                  <p class="text-xs text-slate-400 font-medium mt-0.5">{{ $t('security.auth.comingSoon') }}</p>
                 </div>
               </div>
-              <button class="bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">{{ $t('security.auth.enableAuth') }}</button>
             </div>
           </div>
         </div>

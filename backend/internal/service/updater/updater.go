@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -136,7 +136,8 @@ func CheckForUpdate(ctx context.Context) (*UpdateInfo, error) {
 }
 
 // PerformUpdate recreates the current container with the latest image.
-// It sends the HTTP response before stopping the old container.
+// A helper container orchestrates the swap: stop old → start new → cleanup.
+// This avoids port conflicts when using --network=host.
 func PerformUpdate(ctx context.Context) error {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -156,10 +157,11 @@ func PerformUpdate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("get container ID: %w", err)
 	}
+	log.Printf("OTA: detected self container ID: %s", containerID)
 
 	info, err := cli.ContainerInspect(ctx, containerID)
 	if err != nil {
-		return fmt.Errorf("inspect container: %w", err)
+		return fmt.Errorf("inspect container %s: %w", containerID, err)
 	}
 
 	// 3. Prepare new container config with updated image
@@ -167,9 +169,15 @@ func PerformUpdate(ctx context.Context) error {
 	newConfig.Image = DefaultImage
 	hostConfig := info.HostConfig
 	containerName := strings.TrimPrefix(info.Name, "/")
+	oldName := containerName + "-old"
+
+	// Clean up leftover containers from previous update attempts
+	cli.ContainerStop(ctx, oldName, container.StopOptions{})
+	cli.ContainerRemove(ctx, oldName, types.ContainerRemoveOptions{Force: true})
+	cli.ContainerStop(ctx, "zenith-updater", container.StopOptions{})
+	cli.ContainerRemove(ctx, "zenith-updater", types.ContainerRemoveOptions{Force: true})
 
 	// 4. Rename old container to free the name
-	oldName := containerName + "-old"
 	if err := cli.ContainerRename(ctx, containerID, oldName); err != nil {
 		return fmt.Errorf("rename container: %w", err)
 	}
@@ -181,22 +189,36 @@ func PerformUpdate(ctx context.Context) error {
 		return fmt.Errorf("create container: %w", err)
 	}
 
-	// 6. Start new container
-	if err := cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+	// 6. Spawn a helper container to orchestrate the swap.
+	// The helper stops the old container first (freeing ports), then starts the new one.
+	// This avoids port conflicts when using --network=host or mapped ports.
+	swapScript := fmt.Sprintf(
+		`sleep 2; docker stop -t 10 %s 2>/dev/null; docker start %s; docker rm %s 2>/dev/null; true`,
+		containerID, resp.ID, containerID,
+	)
+	helperCfg := &container.Config{
+		Image:      DefaultImage,
+		Entrypoint: []string{"sh", "-c"},
+		Cmd:        []string{swapScript},
+	}
+	helperHC := &container.HostConfig{
+		Binds:      []string{"/var/run/docker.sock:/var/run/docker.sock"},
+		AutoRemove: true,
+	}
+	helperResp, err := cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
+	if err != nil {
 		cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-		cli.ContainerRename(ctx, containerID, containerName) // rollback
-		return fmt.Errorf("start container: %w", err)
+		cli.ContainerRename(ctx, containerID, containerName)
+		return fmt.Errorf("create updater helper: %w", err)
+	}
+	if err := cli.ContainerStart(ctx, helperResp.ID, types.ContainerStartOptions{}); err != nil {
+		cli.ContainerRemove(ctx, helperResp.ID, types.ContainerRemoveOptions{})
+		cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
+		cli.ContainerRename(ctx, containerID, containerName)
+		return fmt.Errorf("start updater helper: %w", err)
 	}
 
-	// 7. Stop and remove old container after a short delay (lets HTTP response flush)
-	go func() {
-		time.Sleep(5 * time.Second)
-		timeout := 10
-		cli.ContainerStop(context.Background(), containerID, container.StopOptions{Timeout: &timeout})
-		cli.ContainerRemove(context.Background(), containerID, types.ContainerRemoveOptions{Force: true})
-		cli.Close()
-	}()
-
+	log.Printf("OTA: helper container started, will swap %s -> %s in ~2s", containerID[:12], resp.ID[:12])
 	return nil
 }
 
