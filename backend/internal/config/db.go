@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"log"
+	"os"
 	"strconv"
 
 	"github.com/glebarez/sqlite"
@@ -92,24 +93,39 @@ func MarkSetupDone() error {
 	return SetSetting("setup_complete", "true")
 }
 
+// isRunningInDocker checks if the process is running inside a Docker container.
+func isRunningInDocker() bool {
+	_, err := os.Stat("/.dockerenv")
+	return err == nil
+}
+
 // EnsurePort returns the panel's listen port, generating a random one (10000-65535) on first run.
+// When running inside Docker, defaults to 8080 to match the standard port mapping (-p 8080:8080).
 func EnsurePort() string {
 	existing := GetSetting("port")
 	if existing != "" {
 		return existing
 	}
-	// Generate 2 random bytes to derive a port in [10000, 65535]
-	b := make([]byte, 2)
-	if _, err := rand.Read(b); err != nil {
-		log.Fatalf("Failed to generate random port: %v", err)
+
+	var portStr string
+	if isRunningInDocker() {
+		portStr = "8080"
+		log.Printf("Docker environment detected, using default port: %s", portStr)
+	} else {
+		// Generate 2 random bytes to derive a port in [10000, 65535]
+		b := make([]byte, 2)
+		if _, err := rand.Read(b); err != nil {
+			log.Fatalf("Failed to generate random port: %v", err)
+		}
+		n := int(b[0])<<8 | int(b[1])
+		port := 10000 + (n % 55536) // range: 10000–65535
+		portStr = strconv.Itoa(port)
+		log.Printf("Generated random listen port: %s (saved to DB)", portStr)
 	}
-	n := int(b[0])<<8 | int(b[1])
-	port := 10000 + (n % 55536) // range: 10000–65535
-	portStr := strconv.Itoa(port)
+
 	if err := SetSetting("port", portStr); err != nil {
 		log.Fatalf("Failed to persist port: %v", err)
 	}
-	log.Printf("Generated random listen port: %s (saved to DB)", portStr)
 	return portStr
 }
 
