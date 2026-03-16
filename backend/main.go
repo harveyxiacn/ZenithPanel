@@ -23,8 +23,26 @@ func main() {
 	// Initialize the application
 	log.Println("ZenithPanel server starting...")
 	
-	// 1. Initialize Database
-	config.InitDB("zenith.db")
+	// 1. Initialize Database (store in data/ so Docker volumes persist it across updates)
+	dbPath := "data/zenith.db"
+	os.MkdirAll("data", 0700)
+	// Migrate old file locations if they exist (pre-v1.1 stored them outside data/)
+	migrateFile := func(oldPath, newPath string) {
+		if _, err := os.Stat(oldPath); err == nil {
+			if _, err := os.Stat(newPath); os.IsNotExist(err) {
+				log.Printf("Migrating %s -> %s", oldPath, newPath)
+				if err := os.Rename(oldPath, newPath); err != nil {
+					if data, err := os.ReadFile(oldPath); err == nil {
+						os.WriteFile(newPath, data, 0600)
+					}
+				}
+			}
+		}
+	}
+	migrateFile("zenith.db", dbPath)
+	migrateFile("xray_config.json", "data/xray_config.json")
+	migrateFile("/opt/zenithpanel/xray_config.json", "data/xray_config.json")
+	config.InitDB(dbPath)
 
 	// 2. Initialize JWT Secret from persistent storage
 	secret := config.EnsureJWTSecret()

@@ -17,7 +17,7 @@ func NewXrayManager() *XrayManager {
 	return &XrayManager{
 		BaseCore: BaseCore{
 			BinaryPath: "xray",
-			ConfigPath: "/opt/zenithpanel/xray_config.json",
+			ConfigPath: "data/xray_config.json",
 		},
 	}
 }

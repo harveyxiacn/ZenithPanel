@@ -16,7 +16,7 @@ func NewSingboxManager() *SingboxManager {
 	return &SingboxManager{
 		BaseCore: BaseCore{
 			BinaryPath: "sing-box",       // Or absolute path to sing-box binary
-			ConfigPath: "singbox_config.json", // Path to save generated config
+			ConfigPath: "data/singbox_config.json",
 		},
 	}
 }
