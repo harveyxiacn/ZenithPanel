@@ -38,23 +38,32 @@ This script will automatically extract the package, install the required Docker 
 ### Option 3: Docker / Docker Compose
 ```bash
 docker run -d \
-  -p 8080:8080 \
+  --network=host \
   -v /opt/zenithpanel/data:/opt/zenithpanel/data \
   --name zenithpanel \
   --restart always \
-  ghcr.io/harveyxiacn/zenithpanel:latest
+  ghcr.io/harveyxiacn/zenithpanel:main
 ```
-After running, use `docker logs zenithpanel` to find the setup wizard link and temporary security password.
+> Using `--network=host` is recommended because the panel generates a **random port** on first launch for security (prevents port scanning). Check `docker logs zenithpanel` for the assigned port and setup wizard URL.
+>
+> Alternatively, you can specify a fixed port via the `ZENITH_PORT` environment variable:
+> ```bash
+> docker run -d -e ZENITH_PORT=8080 -p 8080:8080 \
+>   -v /opt/zenithpanel/data:/opt/zenithpanel/data \
+>   --name zenithpanel --restart always \
+>   ghcr.io/harveyxiacn/zenithpanel:main
+> ```
 
 ---
 
 ## 🛡️ Security Setup Wizard
 > **Important**: To prevent the panel from being exposed to the public internet without security, you must check the logs during the first run to get a temporary password and security entry link!
 
-1. Open the URL provided in the logs (e.g., `http://your_ip:8080/zenith-setup-AbcD123`).
-2. Log in using the 16-character **one-time password** generated in the logs.
-3. In the setup wizard, set your official administrator **Username** and **Password**, and customize your future panel entrance path.
-4. Once setup is complete, the initial URL will be permanently deactivated.
+1. Run `docker logs zenithpanel` to find the random port, setup URL, and one-time password.
+2. Open the URL provided in the logs (e.g., `http://your_ip:38291/zenith-setup-AbcD123`).
+3. Log in using the 16-character **one-time password** generated in the logs.
+4. In the setup wizard, set your official administrator **Username** and **Password**, and customize your future panel entrance path.
+5. Once setup is complete, the initial URL will be permanently deactivated.
 
 ---
 

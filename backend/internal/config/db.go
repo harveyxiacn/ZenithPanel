@@ -93,39 +93,36 @@ func MarkSetupDone() error {
 	return SetSetting("setup_complete", "true")
 }
 
-// isRunningInDocker checks if the process is running inside a Docker container.
-func isRunningInDocker() bool {
-	_, err := os.Stat("/.dockerenv")
-	return err == nil
-}
-
-// EnsurePort returns the panel's listen port, generating a random one (10000-65535) on first run.
-// When running inside Docker, defaults to 8080 to match the standard port mapping (-p 8080:8080).
+// EnsurePort returns the panel's listen port.
+// Priority: ZENITH_PORT env var > DB setting > random generation (10000-65535).
+// The env var allows Docker users to align the internal port with their -p mapping.
 func EnsurePort() string {
+	// Highest priority: environment variable override
+	if envPort := os.Getenv("ZENITH_PORT"); envPort != "" {
+		// Persist to DB so it's consistent across restarts
+		if err := SetSetting("port", envPort); err != nil {
+			log.Fatalf("Failed to persist port: %v", err)
+		}
+		return envPort
+	}
+
 	existing := GetSetting("port")
 	if existing != "" {
 		return existing
 	}
 
-	var portStr string
-	if isRunningInDocker() {
-		portStr = "8080"
-		log.Printf("Docker environment detected, using default port: %s", portStr)
-	} else {
-		// Generate 2 random bytes to derive a port in [10000, 65535]
-		b := make([]byte, 2)
-		if _, err := rand.Read(b); err != nil {
-			log.Fatalf("Failed to generate random port: %v", err)
-		}
-		n := int(b[0])<<8 | int(b[1])
-		port := 10000 + (n % 55536) // range: 10000–65535
-		portStr = strconv.Itoa(port)
-		log.Printf("Generated random listen port: %s (saved to DB)", portStr)
+	// Generate 2 random bytes to derive a port in [10000, 65535]
+	b := make([]byte, 2)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("Failed to generate random port: %v", err)
 	}
-
+	n := int(b[0])<<8 | int(b[1])
+	port := 10000 + (n % 55536) // range: 10000–65535
+	portStr := strconv.Itoa(port)
 	if err := SetSetting("port", portStr); err != nil {
 		log.Fatalf("Failed to persist port: %v", err)
 	}
+	log.Printf("Generated random listen port: %s (saved to DB)", portStr)
 	return portStr
 }
 

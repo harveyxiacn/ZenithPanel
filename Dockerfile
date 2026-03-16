@@ -44,8 +44,6 @@ COPY --from=backend-builder /zenithpanel /opt/zenithpanel/zenithpanel
 # Ensure the database and logs directories exist
 RUN mkdir -p /opt/zenithpanel/data /opt/zenithpanel/logs
 
-EXPOSE 8080
-
 # Environment variables
 ENV GIN_MODE=release
 ENV TZ=Asia/Shanghai
