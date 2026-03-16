@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/subtle"
@@ -1191,6 +1192,59 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			admin.RecoveryCodes = ""
 			config.DB.Save(&admin)
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "2FA disabled"})
+		})
+
+		// ======================================
+		// Access Configuration
+		// ======================================
+		authGroup.GET("/admin/access", func(c *gin.Context) {
+			panelPath := config.GetSetting("panel_path")
+			port := config.GetSetting("port")
+			c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
+				"panel_path": panelPath,
+				"port":       port,
+			}})
+		})
+
+		authGroup.PUT("/admin/access", func(c *gin.Context) {
+			var req struct {
+				PanelPath *string `json:"panel_path"`
+				Port      *string `json:"port"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid request"})
+				return
+			}
+			changed := false
+			if req.PanelPath != nil {
+				config.SetSetting("panel_path", *req.PanelPath)
+				changed = true
+			}
+			if req.Port != nil && *req.Port != "" {
+				// Validate port is a number in range
+				p, err := strconv.Atoi(*req.Port)
+				if err != nil || p < 1 || p > 65535 {
+					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Port must be 1-65535"})
+					return
+				}
+				config.SetSetting("port", *req.Port)
+				changed = true
+			}
+			msg := "Settings saved."
+			if changed {
+				msg = "Settings saved. Restart panel to apply changes."
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": msg})
+		})
+
+		authGroup.POST("/admin/restart", func(c *gin.Context) {
+			port := config.GetSetting("port")
+			go func() {
+				if err := updater.RestartSelf(context.Background(), port); err != nil {
+					log.Printf("Restart failed: %v", err)
+				}
+			}()
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Panel restarting with new configuration..."})
 		})
 
 		// ======================================

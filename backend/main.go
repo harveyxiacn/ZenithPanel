@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	cryptotls "crypto/tls"
 	"log"
 	"net/http"
 	"os"
@@ -89,18 +90,31 @@ func main() {
 		certPath := config.GetSetting("tls_cert_path")
 		keyPath := config.GetSetting("tls_key_path")
 		if certPath != "" && keyPath != "" {
-			log.Printf("ZenithPanel listening on https://0.0.0.0:%s", port)
-			if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
-				log.Printf("TLS failed (%v), falling back to HTTP...", err)
-				if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					log.Fatalf("Failed to start server: %v", err)
+			// Verify cert files exist and are valid before attempting TLS
+			certData, certErr := os.ReadFile(certPath)
+			keyData, keyErr := os.ReadFile(keyPath)
+			if certErr != nil || keyErr != nil {
+				log.Printf("TLS cert/key files not found (cert: %v, key: %v), falling back to HTTP...", certErr, keyErr)
+				config.SetSetting("tls_cert_path", "")
+				config.SetSetting("tls_key_path", "")
+			} else if _, err := cryptotls.X509KeyPair(certData, keyData); err != nil {
+				log.Printf("TLS cert/key invalid (%v), falling back to HTTP...", err)
+				config.SetSetting("tls_cert_path", "")
+				config.SetSetting("tls_key_path", "")
+			} else {
+				log.Printf("ZenithPanel listening on https://0.0.0.0:%s", port)
+				if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {
+					log.Printf("TLS listen failed (%v), falling back to HTTP...", err)
+				} else {
+					return
 				}
+				// Create a fresh server for HTTP fallback
+				srv = &http.Server{Addr: ":" + port, Handler: r}
 			}
-		} else {
-			log.Printf("ZenithPanel listening on http://0.0.0.0:%s", port)
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("Failed to start server: %v", err)
-			}
+		}
+		log.Printf("ZenithPanel listening on http://0.0.0.0:%s", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()
 
