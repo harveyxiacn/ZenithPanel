@@ -138,6 +138,84 @@ func AddRule(protocol, port, action, source, comment string) error {
 	return nil
 }
 
+// CloudflareIPv4Ranges contains the official Cloudflare IPv4 ranges.
+// Source: https://www.cloudflare.com/ips-v4/
+var CloudflareIPv4Ranges = []string{
+	"173.245.48.0/20",
+	"103.21.244.0/22",
+	"103.22.200.0/22",
+	"103.31.4.0/22",
+	"141.101.64.0/18",
+	"108.162.192.0/18",
+	"190.93.240.0/20",
+	"188.114.96.0/20",
+	"197.234.240.0/22",
+	"198.41.128.0/17",
+	"162.158.0.0/15",
+	"104.16.0.0/13",
+	"104.24.0.0/14",
+	"172.64.0.0/13",
+	"131.0.72.0/22",
+}
+
+// ApplyCloudflareProtection adds iptables rules to only allow Cloudflare IPs
+// on the specified port, then drops all other traffic to that port.
+// It first removes any existing Cloudflare rules for that port.
+func ApplyCloudflareProtection(port string) error {
+	if port == "" {
+		return fmt.Errorf("port is required")
+	}
+	if err := validateRule("tcp", port, "ACCEPT", ""); err != nil {
+		return err
+	}
+
+	// Remove existing Cloudflare rules for this port first
+	RemoveCloudflareProtection(port)
+
+	// Add ACCEPT rules for each Cloudflare IP range
+	for _, cidr := range CloudflareIPv4Ranges {
+		if err := AddRule("tcp", port, "ACCEPT", cidr, "Cloudflare"); err != nil {
+			return fmt.Errorf("failed to add rule for %s: %w", cidr, err)
+		}
+	}
+
+	// Add final DROP rule for all other traffic on this port
+	if err := AddRule("tcp", port, "DROP", "", "CF-Block-Others"); err != nil {
+		return fmt.Errorf("failed to add drop rule: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveCloudflareProtection removes all Cloudflare-related firewall rules for the given port.
+func RemoveCloudflareProtection(port string) {
+	// List rules and remove matching ones in reverse order (to preserve numbering)
+	rules, err := ListRules()
+	if err != nil {
+		return
+	}
+	for i := len(rules) - 1; i >= 0; i-- {
+		r := rules[i]
+		if r.Port == port && (strings.Contains(r.Extra, "Cloudflare") || strings.Contains(r.Extra, "CF-Block-Others")) {
+			DeleteRule(r.Num)
+		}
+	}
+}
+
+// IsCloudflareProtected checks if Cloudflare protection rules exist for the given port.
+func IsCloudflareProtected(port string) bool {
+	rules, err := ListRules()
+	if err != nil {
+		return false
+	}
+	for _, r := range rules {
+		if r.Port == port && strings.Contains(r.Extra, "Cloudflare") {
+			return true
+		}
+	}
+	return false
+}
+
 // DeleteRule removes a rule from the INPUT chain by line number
 func DeleteRule(num string) error {
 	if !ruleNumRe.MatchString(num) {
