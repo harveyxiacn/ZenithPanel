@@ -3,9 +3,11 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import { login } from '@/api/auth'
+import { useI18n } from 'vue-i18n'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const { t } = useI18n()
 
 const username = ref('')
 const password = ref('')
@@ -16,7 +18,7 @@ const handleLogin = async () => {
   errorMsg.value = ''
 
   if (!username.value || !password.value) {
-    errorMsg.value = 'Please enter both username and password'
+    errorMsg.value = t('login.errorEmpty')
     return
   }
 
@@ -32,7 +34,7 @@ const handleLogin = async () => {
     }
   } catch (err: any) {
     if (err.response?.status === 429) {
-      errorMsg.value = 'Too many login attempts. Please try again later.'
+      errorMsg.value = t('login.errorRateLimit')
     } else {
       errorMsg.value = err.response?.data?.msg || err.message || 'Network error'
     }
@@ -46,7 +48,7 @@ const handleLogin = async () => {
   <div class="min-h-screen flex items-center justify-center bg-slate-50 p-4">
     <div class="glass-panel w-full max-w-md p-8 rounded-2xl shadow-xl bg-white">
       <div class="text-center mb-8">
-        <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Login to Zenith</h1>
+        <h1 class="text-2xl font-bold text-slate-800 tracking-tight">{{ $t('login.title') }}</h1>
       </div>
 
       <!-- Error Alert -->
@@ -57,7 +59,7 @@ const handleLogin = async () => {
 
       <form @submit.prevent="handleLogin" class="space-y-4">
         <div>
-          <label class="block text-sm font-medium text-slate-600 mb-1">Username</label>
+          <label class="block text-sm font-medium text-slate-600 mb-1">{{ $t('login.username') }}</label>
           <input
             type="text"
             v-model="username"
@@ -67,7 +69,7 @@ const handleLogin = async () => {
           />
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-600 mb-1">Password</label>
+          <label class="block text-sm font-medium text-slate-600 mb-1">{{ $t('login.password') }}</label>
           <input
             type="password"
             v-model="password"
@@ -82,7 +84,7 @@ const handleLogin = async () => {
           class="btn-primary w-full mt-2 flex justify-center items-center"
         >
           <span v-if="loading" class="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-          <span v-else>Login</span>
+          <span v-else>{{ $t('login.submit') }}</span>
         </button>
       </form>
     </div>

@@ -2,6 +2,9 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ServerStackIcon, CpuChipIcon, ServerIcon, SignalIcon } from '@heroicons/vue/24/outline'
 import { getSystemMonitor } from '@/api/system'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const loading = ref(true)
 const cpuPercent = ref(0)
@@ -88,12 +91,12 @@ onUnmounted(() => {
     <!-- Header -->
     <div class="mb-8 flex items-center justify-between">
       <div>
-        <h1 class="text-3xl font-bold text-slate-800 tracking-tight">System Overview</h1>
-        <p class="text-slate-500 mt-1">Real-time performance metrics and proxy status.</p>
+        <h1 class="text-3xl font-bold text-slate-800 tracking-tight">{{ $t('dashboard.title') }}</h1>
+        <p class="text-slate-500 mt-1">{{ $t('dashboard.subtitle') }}</p>
       </div>
       <div class="bg-white rounded-full px-4 py-2 shadow-sm border border-slate-100 flex items-center space-x-2">
          <span class="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-         <span class="text-sm font-medium text-slate-600">{{ hostname || 'Loading...' }}</span>
+         <span class="text-sm font-medium text-slate-600">{{ hostname || $t('common.loading') }}</span>
       </div>
     </div>
 
@@ -118,7 +121,7 @@ onUnmounted(() => {
             <CpuChipIcon class="h-6 w-6" />
           </div>
           <div>
-            <p class="text-sm font-medium text-slate-500">CPU Usage</p>
+            <p class="text-sm font-medium text-slate-500">{{ $t('dashboard.cpuUsage') }}</p>
             <p class="text-2xl font-bold text-slate-800 mt-1">{{ cpuPercent }}%</p>
           </div>
         </div>
@@ -130,7 +133,7 @@ onUnmounted(() => {
             <ServerStackIcon class="h-6 w-6" />
           </div>
           <div>
-            <p class="text-sm font-medium text-slate-500">Memory</p>
+            <p class="text-sm font-medium text-slate-500">{{ $t('dashboard.memory') }}</p>
             <p class="text-2xl font-bold text-slate-800 mt-1">{{ memPercent }}%</p>
             <p class="text-xs text-slate-400">{{ memUsed }} / {{ memTotal }}</p>
           </div>
@@ -143,7 +146,7 @@ onUnmounted(() => {
             <ServerIcon class="h-6 w-6" />
           </div>
           <div>
-            <p class="text-sm font-medium text-slate-500">Disk Usage</p>
+            <p class="text-sm font-medium text-slate-500">{{ $t('dashboard.diskUsage') }}</p>
             <p class="text-2xl font-bold text-slate-800 mt-1">{{ diskPercent }}%</p>
           </div>
         </div>
@@ -155,9 +158,9 @@ onUnmounted(() => {
             <SignalIcon class="h-6 w-6" />
           </div>
           <div>
-            <p class="text-sm font-medium text-slate-500">Network</p>
+            <p class="text-sm font-medium text-slate-500">{{ $t('dashboard.network') }}</p>
             <p class="text-lg font-bold text-slate-800 mt-1">{{ formatBytes(netIn) }}/s</p>
-            <p class="text-xs text-slate-400">Up: {{ formatBytes(netOut) }}/s</p>
+            <p class="text-xs text-slate-400">{{ $t('dashboard.up') }}: {{ formatBytes(netOut) }}/s</p>
           </div>
         </div>
       </div>
@@ -166,29 +169,29 @@ onUnmounted(() => {
     <!-- Large Content Area -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div class="lg:col-span-2 glass-panel p-6 rounded-2xl bg-white min-h-[300px]">
-        <h3 class="text-lg font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-3">System Info</h3>
+        <h3 class="text-lg font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-3">{{ $t('dashboard.systemInfo') }}</h3>
         <div class="space-y-3">
           <div class="flex justify-between text-sm">
-            <span class="text-slate-500">Uptime</span>
+            <span class="text-slate-500">{{ $t('dashboard.uptime') }}</span>
             <span class="text-slate-800 font-medium">{{ uptime || '-' }}</span>
           </div>
           <div class="flex justify-between text-sm">
-            <span class="text-slate-500">Load Average</span>
+            <span class="text-slate-500">{{ $t('dashboard.loadAverage') }}</span>
             <span class="text-slate-800 font-medium">{{ loadAvg || '-' }}</span>
           </div>
           <div class="flex justify-between text-sm">
-            <span class="text-slate-500">Hostname</span>
+            <span class="text-slate-500">{{ $t('dashboard.hostname') }}</span>
             <span class="text-slate-800 font-medium">{{ hostname || '-' }}</span>
           </div>
         </div>
       </div>
 
       <div class="glass-panel p-6 rounded-2xl bg-white min-h-[300px]">
-        <h3 class="text-lg font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-3">Quick Stats</h3>
+        <h3 class="text-lg font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-3">{{ $t('dashboard.quickStats') }}</h3>
         <div class="space-y-4">
           <div>
             <div class="flex justify-between text-sm mb-1">
-              <span class="text-slate-500">CPU</span>
+              <span class="text-slate-500">{{ $t('dashboard.cpu') }}</span>
               <span class="text-slate-700">{{ cpuPercent }}%</span>
             </div>
             <div class="w-full bg-slate-200 rounded-full h-2">
@@ -197,7 +200,7 @@ onUnmounted(() => {
           </div>
           <div>
             <div class="flex justify-between text-sm mb-1">
-              <span class="text-slate-500">Memory</span>
+              <span class="text-slate-500">{{ $t('dashboard.memory') }}</span>
               <span class="text-slate-700">{{ memPercent }}%</span>
             </div>
             <div class="w-full bg-slate-200 rounded-full h-2">
@@ -206,7 +209,7 @@ onUnmounted(() => {
           </div>
           <div>
             <div class="flex justify-between text-sm mb-1">
-              <span class="text-slate-500">Disk</span>
+              <span class="text-slate-500">{{ $t('dashboard.disk') }}</span>
               <span class="text-slate-700">{{ diskPercent }}%</span>
             </div>
             <div class="w-full bg-slate-200 rounded-full h-2">

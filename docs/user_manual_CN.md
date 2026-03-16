@@ -112,3 +112,26 @@ docker run -d \
 4. 进入 `Subscriptions` 面板，复制订阅链接，在客户端更新即可
 
 详细的 JSON 配置示例请参见[代理设置指南](proxy-setup-guide-cn.md)。
+
+---
+
+## 📱 订阅二维码
+
+**用户与订阅（Users & Subs）** 标签页中，每个客户端都有 **QR Code** 按钮，可生成手机客户端可扫描的二维码：
+
+- **V2Ray / V2RayN** 格式：生成 Base64 订阅二维码，适用于 V2RayN、V2RayNG、Shadowrocket。
+- **Clash / Mihomo** 格式：生成 Clash YAML 订阅二维码，适用于 Clash、Mihomo、Stash。
+
+支持切换格式、下载 PNG 图片，或直接从弹窗复制订阅链接。
+
+---
+
+## 🌐 多语言支持
+
+ZenithPanel 支持 4 种语言：
+- **English**（英语，默认）
+- **简体中文**
+- **繁體中文**（繁体中文）
+- **日本語**（日语）
+
+切换语言请点击侧边栏底部的语言选择器。您的偏好会自动保存，跨会话持久化。首次访问时面板会自动检测浏览器语言。

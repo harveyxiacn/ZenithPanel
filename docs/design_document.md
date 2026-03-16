@@ -55,12 +55,17 @@ Unlike panels that directly manipulate JSON fragments, ZenithPanel introduces a 
 - **Underlying Communication**: Integrates the official `docker/docker/client` SDK, communicating with the Docker daemon via Unix Socket (`/var/run/docker.sock`).
 - **App Store Abstraction**: Parses an external repository to dynamically render `docker-compose.yml` files, allowing one-click deployment of apps like WordPress or MySQL.
 
-### 3.4 Monitoring & Web Terminal
+### 3.4 Internationalization (i18n)
+- **Multi-language UI**: The frontend uses `vue-i18n` to support multiple languages: English, Simplified Chinese (简体中文), Traditional Chinese (繁體中文), and Japanese (日本語).
+- **Locale Detection**: Automatically detects the browser's language preference and falls back to English. Users can switch language from the sidebar at any time.
+- **Persistence**: Language preference is saved in `localStorage` and restored on subsequent visits.
+
+### 3.5 Monitoring & Web Terminal
 - **Resource Collection**: Uses `shirou/gopsutil` for cross-platform data collection (CPU, RAM, Disk I/O).
 - **SSH Terminal**: Implements a native SSH client that connects to the local host via `golang.org/x/crypto/ssh` to provide a PTY, forwarded to the frontend's `xterm.js` via WebSocket.
 - **Network Diagnostics**: Integrates a `vps_check.sh` script to test connectivity for streaming (Netflix/YouTube) and AI platforms (ChatGPT/Claude) using simulated browser User-Agents.
 
-### 3.5 Deployment Pipelines
+### 3.6 Deployment Pipelines
 A `bash` based installer (`install.sh`) handles:
 - **Dependency Installation**: Detects OS and installs pre-requisites like curl, jq, and Docker.
 - **Firewall Configuration**: Automatically configures UFW/firewalld for necessary ports.
