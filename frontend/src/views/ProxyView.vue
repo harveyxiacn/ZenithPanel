@@ -315,7 +315,7 @@ async function proceedToReview() {
     }
     presetConfigs.value[id] = cfg
   }
-  expandedPreset.value = selectedPresetIds.value[0]
+  expandedPreset.value = selectedPresetIds.value[0] ?? null
   quickSetupStep.value = 2
 }
 
