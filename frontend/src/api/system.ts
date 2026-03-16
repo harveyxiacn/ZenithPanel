@@ -19,3 +19,35 @@ export function applyUpdate() {
 export function changePassword(oldPassword: string, newPassword: string) {
   return apiClient.post('/v1/admin/change-password', { old_password: oldPassword, new_password: newPassword })
 }
+
+// 2FA
+export function get2FAStatus() {
+  return apiClient.get('/v1/admin/2fa/status')
+}
+
+export function setup2FA() {
+  return apiClient.post('/v1/admin/2fa/setup')
+}
+
+export function verify2FA(code: string) {
+  return apiClient.post('/v1/admin/2fa/verify', { code })
+}
+
+export function disable2FA(password: string) {
+  return apiClient.post('/v1/admin/2fa/disable', { password })
+}
+
+// TLS
+export function getTLSStatus() {
+  return apiClient.get('/v1/admin/tls/status')
+}
+
+export function uploadTLSCerts(formData: FormData) {
+  return apiClient.post('/v1/admin/tls/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
+export function removeTLS() {
+  return apiClient.delete('/v1/admin/tls')
+}
