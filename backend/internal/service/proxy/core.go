@@ -17,7 +17,7 @@ type CoreManager interface {
 
 // WriteConfigToFile writes the given configuration string to a file
 func WriteConfigToFile(path, content string) error {
-	return os.WriteFile(path, []byte(content), 0644)
+	return os.WriteFile(path, []byte(content), 0600)
 }
 
 // BaseCore provides common functionalities for proxy cores

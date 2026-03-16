@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"log"
@@ -34,6 +35,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/updater"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/time/rate"
+	"gorm.io/gorm"
 )
 
 // fsSandboxRoot restricts file manager operations to /home to prevent
@@ -110,6 +112,16 @@ func isValidContainerID(id string) bool {
 		}
 	}
 	return true
+}
+
+// parseUintID safely parses a URL parameter as a uint to prevent GORM injection.
+func parseUintID(c *gin.Context) (uint, bool) {
+	n, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || n == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid ID"})
+		return 0, false
+	}
+	return uint(n), true
 }
 
 // SetupRoutes configures all the Gin routes.
@@ -191,7 +203,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			cfg := config.GetConfig()
-			if req.Password != cfg.SetupOneTimeToken {
+			// Constant-time comparison to prevent timing attacks on the one-time password
+			if subtle.ConstantTimeCompare([]byte(req.Password), []byte(cfg.SetupOneTimeToken)) != 1 {
 				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid one-time password"})
 				return
 			}
@@ -231,19 +244,23 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 
-			// Create admin user in DB
-			admin := model.AdminUser{
-				Username:     req.Username,
-				PasswordHash: string(hash),
-			}
-			if err := config.DB.Create(&admin).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to create admin user"})
-				return
-			}
-
-			// Mark setup as complete in persistent storage
-			if err := config.MarkSetupDone(); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to persist setup state"})
+			// Wrap admin creation + setup completion in a transaction to prevent
+			// partial state (admin exists but setup not marked complete).
+			err = config.DB.Transaction(func(tx *gorm.DB) error {
+				admin := model.AdminUser{
+					Username:     req.Username,
+					PasswordHash: string(hash),
+				}
+				if err := tx.Create(&admin).Error; err != nil {
+					return err
+				}
+				return tx.Where("`key` = ?", "setup_complete").
+					Assign(model.Setting{Key: "setup_complete", Value: "true"}).
+					FirstOrCreate(&model.Setting{}).Error
+			})
+			if err != nil {
+				log.Printf("Setup complete error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to complete setup"})
 				return
 			}
 			cfg := config.GetConfig()
@@ -495,7 +512,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.GET("/inbounds", func(c *gin.Context) {
 			var inbounds []model.Inbound
 			if err := config.DB.Find(&inbounds).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("DB error listing inbounds: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to list inbounds"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": inbounds})
@@ -508,16 +526,20 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			if err := config.DB.Create(&inbound).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("DB error creating inbound: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create inbound"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": inbound})
 		})
 
 		authGroup.PUT("/inbounds/:id", func(c *gin.Context) {
-			id := c.Param("id")
+			id, ok := parseUintID(c)
+			if !ok {
+				return
+			}
 			var inbound model.Inbound
-			if err := config.DB.First(&inbound, id).Error; err != nil {
+			if err := config.DB.First(&inbound, "id = ?", id).Error; err != nil {
 				c.JSON(404, gin.H{"code": 404, "msg": "Inbound not found"})
 				return
 			}
@@ -526,16 +548,19 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			if err := config.DB.Save(&inbound).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update inbound"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": inbound})
 		})
 
 		authGroup.DELETE("/inbounds/:id", func(c *gin.Context) {
-			id := c.Param("id")
-			if err := config.DB.Delete(&model.Inbound{}, id).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+			id, ok := parseUintID(c)
+			if !ok {
+				return
+			}
+			if err := config.DB.Delete(&model.Inbound{}, "id = ?", id).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete inbound"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
@@ -551,7 +576,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				query = query.Where("inbound_id = ?", inboundID)
 			}
 			if err := query.Find(&clients).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("DB error listing clients: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to list clients"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": clients})
@@ -571,16 +597,20 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 			}
 			if err := config.DB.Create(&client).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("DB error creating client: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create client"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": client})
 		})
 
 		authGroup.PUT("/clients/:id", func(c *gin.Context) {
-			id := c.Param("id")
+			id, ok := parseUintID(c)
+			if !ok {
+				return
+			}
 			var client model.Client
-			if err := config.DB.First(&client, id).Error; err != nil {
+			if err := config.DB.First(&client, "id = ?", id).Error; err != nil {
 				c.JSON(404, gin.H{"code": 404, "msg": "Client not found"})
 				return
 			}
@@ -589,16 +619,19 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			if err := config.DB.Save(&client).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update client"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": client})
 		})
 
 		authGroup.DELETE("/clients/:id", func(c *gin.Context) {
-			id := c.Param("id")
-			if err := config.DB.Delete(&model.Client{}, id).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+			id, ok := parseUintID(c)
+			if !ok {
+				return
+			}
+			if err := config.DB.Delete(&model.Client{}, "id = ?", id).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete client"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
@@ -610,7 +643,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.GET("/routing-rules", func(c *gin.Context) {
 			var rules []model.RoutingRule
 			if err := config.DB.Find(&rules).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("DB error listing rules: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to list routing rules"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": rules})
@@ -623,16 +657,20 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			if err := config.DB.Create(&rule).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("DB error creating rule: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create rule"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": rule})
 		})
 
 		authGroup.PUT("/routing-rules/:id", func(c *gin.Context) {
-			id := c.Param("id")
+			id, ok := parseUintID(c)
+			if !ok {
+				return
+			}
 			var rule model.RoutingRule
-			if err := config.DB.First(&rule, id).Error; err != nil {
+			if err := config.DB.First(&rule, "id = ?", id).Error; err != nil {
 				c.JSON(404, gin.H{"code": 404, "msg": "Routing rule not found"})
 				return
 			}
@@ -641,16 +679,19 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			if err := config.DB.Save(&rule).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update rule"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": rule})
 		})
 
 		authGroup.DELETE("/routing-rules/:id", func(c *gin.Context) {
-			id := c.Param("id")
-			if err := config.DB.Delete(&model.RoutingRule{}, id).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+			id, ok := parseUintID(c)
+			if !ok {
+				return
+			}
+			if err := config.DB.Delete(&model.RoutingRule{}, "id = ?", id).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete rule"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
@@ -662,7 +703,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.GET("/firewall/rules", func(c *gin.Context) {
 			rules, err := firewall.ListRules()
 			if err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("Firewall list error: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to list firewall rules"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": rules})
@@ -681,7 +723,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			if err := firewall.AddRule(req.Protocol, req.Port, req.Action, req.Source, req.Comment); err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("Firewall add error: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to add firewall rule"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Rule added"})
@@ -696,7 +739,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			if err := firewall.DeleteRule(req.Num); err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("Firewall delete error: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete firewall rule"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Rule deleted"})
@@ -708,7 +752,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.GET("/cron/jobs", func(c *gin.Context) {
 			jobs, err := sched.ListJobs()
 			if err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("Cron list error: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to list cron jobs"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": jobs})
@@ -726,7 +771,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			id, err := sched.AddJob(job)
 			if err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("Cron add error: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create cron job"})
 				return
 			}
 			job.ID = id
@@ -734,11 +780,13 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		})
 
 		authGroup.DELETE("/cron/jobs/:id", func(c *gin.Context) {
-			id := c.Param("id")
-			var jobID uint
-			fmt.Sscanf(id, "%d", &jobID)
-			if err := sched.RemoveJob(jobID); err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": err.Error()})
+			id, ok := parseUintID(c)
+			if !ok {
+				return
+			}
+			if err := sched.RemoveJob(id); err != nil {
+				log.Printf("Cron delete error: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete cron job"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Job deleted"})
@@ -752,7 +800,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			proxyGroup.GET("/config/xray", func(c *gin.Context) {
 				cfg, err := xm.GenerateConfig()
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+					log.Printf("Xray config error: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate Xray config"})
 					return
 				}
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": cfg})
@@ -761,7 +810,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			proxyGroup.GET("/config/singbox", func(c *gin.Context) {
 				cfg, err := sm.GenerateConfig()
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+					log.Printf("Singbox config error: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate Sing-box config"})
 					return
 				}
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": cfg})
@@ -792,7 +842,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				curve := ecdh.X25519()
 				priv, err := curve.GenerateKey(rand.Reader)
 				if err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate keys: " + err.Error()})
+					log.Printf("Reality key gen error: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate keys"})
 					return
 				}
 				shortIdBytes := make([]byte, 4)
@@ -815,7 +866,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.GET("/system/update/check", func(c *gin.Context) {
 			info, err := updater.CheckForUpdate(c.Request.Context())
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Update check failed: " + err.Error()})
+				log.Printf("Update check error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Update check failed"})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": info})
@@ -823,7 +875,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 		authGroup.POST("/system/update/apply", func(c *gin.Context) {
 			if err := updater.PerformUpdate(c.Request.Context()); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Update failed: " + err.Error()})
+				log.Printf("Update apply error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Update failed"})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Update applied. Panel will restart in a few seconds."})

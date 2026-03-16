@@ -114,13 +114,20 @@ func AddRule(protocol, port, action, source, comment string) error {
 		args = append(args, "-s", source)
 	}
 	if comment != "" {
-		// Sanitize comment: strip quotes and cap length
-		comment = strings.ReplaceAll(comment, `"`, "")
-		comment = strings.ReplaceAll(comment, `'`, "")
+		// Allowlist safe characters only (alphanumeric, spaces, hyphens, underscores)
+		var safe []byte
+		for _, c := range []byte(comment) {
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == ' ' || c == '-' || c == '_' || c == '.' {
+				safe = append(safe, c)
+			}
+		}
+		comment = string(safe)
 		if len(comment) > 64 {
 			comment = comment[:64]
 		}
-		args = append(args, "-m", "comment", "--comment", comment)
+		if comment != "" {
+			args = append(args, "-m", "comment", "--comment", comment)
+		}
 	}
 	args = append(args, "-j", strings.ToUpper(action))
 

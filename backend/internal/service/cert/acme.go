@@ -5,8 +5,11 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"os"
+	"path/filepath"
+	"regexp"
 	"time"
 )
 
@@ -50,9 +53,25 @@ func GenerateSelfSignedCert(certPath, keyPath string) error {
 	return nil
 }
 
+// domainRe validates domain names to prevent path traversal via crafted domains.
+var domainRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$`)
+
+// certDir is the fixed directory for storing certificates.
+const certDir = "/opt/zenithpanel/data/certs"
+
 // IssueCertificate triggers Lego ACME flow for a specific domain
 func IssueCertificate(domain string, email string) error {
+	// Validate domain to prevent path traversal (e.g. "../../etc/cron.d/backdoor")
+	if !domainRe.MatchString(domain) || len(domain) > 253 {
+		return fmt.Errorf("invalid domain name")
+	}
+
+	// Store certs in a fixed directory using only the base name
+	os.MkdirAll(certDir, 0700)
+	certPath := filepath.Join(certDir, filepath.Base(domain)+".crt")
+	keyPath := filepath.Join(certDir, filepath.Base(domain)+".key")
+
 	// TODO: Integrate github.com/go-acme/lego/v4
 	// For now just simulate creating the cert files
-	return GenerateSelfSignedCert(domain+".crt", domain+".key")
+	return GenerateSelfSignedCert(certPath, keyPath)
 }
