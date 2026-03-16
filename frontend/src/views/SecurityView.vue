@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon, GlobeAltIcon } from '@heroicons/vue/24/outline'
-import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS } from '@/api/system'
+import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon, GlobeAltIcon, Cog6ToothIcon } from '@heroicons/vue/24/outline'
+import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel } from '@/api/system'
 
 const { t } = useI18n()
 
@@ -197,6 +197,93 @@ async function onRemoveTLS() {
   tlsLoading.value = false
 }
 
+// ---- Access Configuration ----
+const accessPath = ref('')
+const accessPort = ref('')
+const accessLoading = ref(false)
+const accessMsg = ref('')
+const accessMsgType = ref<'success' | 'error'>('success')
+
+async function loadAccessConfig() {
+  try {
+    const res = await getAccessConfig() as any
+    if (res.code === 200) {
+      accessPath.value = res.data.panel_path || ''
+      accessPort.value = res.data.port || ''
+      accessOriginalPort.value = res.data.port || ''
+    }
+  } catch { /* ignore */ }
+}
+
+const accessRestarting = ref(false)
+const accessOriginalPort = ref('')
+
+async function onSaveAccess() {
+  accessLoading.value = true
+  accessMsg.value = ''
+  try {
+    const res = await updateAccessConfig({
+      panel_path: accessPath.value,
+      port: accessPort.value,
+    }) as any
+    if (res.code === 200) {
+      accessMsg.value = res.msg
+      accessMsgType.value = 'success'
+    } else {
+      accessMsg.value = res.msg || 'Failed'
+      accessMsgType.value = 'error'
+    }
+  } catch (e: any) {
+    accessMsg.value = e?.response?.data?.msg || 'Failed to save'
+    accessMsgType.value = 'error'
+  }
+  accessLoading.value = false
+}
+
+const accessNeedsRestart = computed(() => accessPort.value !== accessOriginalPort.value && accessPort.value !== '')
+
+async function onRestartPanel() {
+  const newPort = accessPort.value
+  const newPath = accessPath.value
+  if (!confirm(t('security.access.confirmRestart'))) return
+  accessRestarting.value = true
+  accessMsg.value = ''
+  try {
+    // Save first, then restart
+    await updateAccessConfig({ panel_path: newPath, port: newPort })
+    const res = await restartPanel() as any
+    if (res.code === 200) {
+      let countdown = 10
+      const timer = setInterval(() => {
+        countdown--
+        accessMsg.value = t('security.update.restarting', { n: countdown })
+        if (countdown <= 0) {
+          clearInterval(timer)
+          // Build new URL with potentially new port
+          const proto = window.location.protocol
+          const host = window.location.hostname
+          const path = newPath ? '/' + newPath + '/' : '/'
+          const newUrl = `${proto}//${host}:${newPort}${path}`
+          const poll = setInterval(async () => {
+            try {
+              const r = await fetch(`${proto}//${host}:${newPort}/api/v1/ping`, { signal: AbortSignal.timeout(3000) })
+              if (r.ok) { clearInterval(poll); window.location.href = newUrl }
+            } catch { /* still restarting */ }
+          }, 2000)
+        }
+      }, 1000)
+    } else {
+      accessMsg.value = res.msg || 'Restart failed'
+      accessMsgType.value = 'error'
+      accessRestarting.value = false
+    }
+  } catch (e: any) {
+    accessMsg.value = e?.response?.data?.msg || 'Restart failed'
+    accessMsgType.value = 'error'
+    accessRestarting.value = false
+  }
+}
+
 // ---- Update ----
 const updateChecking = ref(false)
 const updateAvailable = ref(false)
@@ -265,6 +352,7 @@ const isCommonPort = computed(() => commonPorts.includes(Number(panelPort.value)
 onMounted(() => {
   load2FAStatus()
   loadTLSStatus()
+  loadAccessConfig()
 })
 </script>
 
@@ -381,6 +469,45 @@ onMounted(() => {
                 </ol>
                 <p class="text-xs text-slate-400 mt-2">{{ $t('security.tls.cfNote') }}</p>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Access Configuration -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-6 border-b border-slate-100 flex items-center">
+            <div class="bg-violet-500/10 text-violet-500 p-2 rounded-lg mr-4">
+              <Cog6ToothIcon class="h-6 w-6" />
+            </div>
+            <div>
+              <h3 class="text-lg font-medium text-slate-800">{{ $t('security.access.title') }}</h3>
+              <p class="text-sm text-slate-500">{{ $t('security.access.subtitle') }}</p>
+            </div>
+          </div>
+          <div class="p-6 space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ $t('security.access.panelPort') }}</label>
+              <div class="flex items-center space-x-2">
+                <input v-model="accessPort" type="text" inputmode="numeric" maxlength="5" class="w-32 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500" />
+                <span class="text-xs text-slate-400">{{ $t('security.access.portHint') }}</span>
+              </div>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">{{ $t('security.access.securityPath') }}</label>
+              <div class="flex items-center space-x-2">
+                <span class="text-sm text-slate-400">/</span>
+                <input v-model="accessPath" type="text" :placeholder="'my-secret-path'" class="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500" />
+              </div>
+              <p class="text-xs text-slate-400 mt-1">{{ $t('security.access.pathHint') }}</p>
+            </div>
+            <div v-if="accessMsg" :class="['text-sm p-2 rounded-lg', accessMsgType === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700']">{{ accessMsg }}</div>
+            <div class="flex items-center space-x-3">
+              <button @click="onSaveAccess" :disabled="accessLoading || accessRestarting" class="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                {{ accessLoading ? $t('common.loading') : $t('common.save') }}
+              </button>
+              <button v-if="accessNeedsRestart" @click="onRestartPanel" :disabled="accessRestarting" class="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                {{ accessRestarting ? $t('security.update.restarting', { n: '...' }) : $t('security.access.applyRestart') }}
+              </button>
             </div>
           </div>
         </div>

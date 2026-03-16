@@ -12,6 +12,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 )
 
 const DefaultImage = "ghcr.io/harveyxiacn/zenithpanel:main"
@@ -254,6 +255,122 @@ func PerformUpdate(_ context.Context) error {
 	}
 
 	log.Printf("OTA: helper container started, will swap %s -> %s in ~2s", containerID[:12], resp.ID[:12])
+	return nil
+}
+
+// RestartSelf recreates the current container with the same image but updated
+// port mapping and environment. Used when the user changes the panel port.
+func RestartSelf(_ context.Context, newPort string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return fmt.Errorf("docker client: %w", err)
+	}
+	defer cli.Close()
+
+	containerID, err := getContainerID()
+	if err != nil {
+		return fmt.Errorf("get container ID: %w", err)
+	}
+	log.Printf("Restart: detected self container ID: %s", containerID)
+
+	info, err := cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("inspect container %s: %w", containerID, err)
+	}
+
+	newConfig := info.Config
+	newConfig.Hostname = ""
+	newConfig.Domainname = ""
+	hostConfig := info.HostConfig
+
+	// Update port mapping if a new port is specified
+	if newPort != "" {
+		tcpPort := nat.Port(newPort + "/tcp")
+		newConfig.ExposedPorts = nat.PortSet{tcpPort: struct{}{}}
+
+		// Update ZENITH_PORT env var
+		envUpdated := false
+		for i, e := range newConfig.Env {
+			if strings.HasPrefix(e, "ZENITH_PORT=") {
+				newConfig.Env[i] = "ZENITH_PORT=" + newPort
+				envUpdated = true
+				break
+			}
+		}
+		if !envUpdated {
+			newConfig.Env = append(newConfig.Env, "ZENITH_PORT="+newPort)
+		}
+
+		// Update host port bindings: map container port to same host port
+		hostConfig.PortBindings = nat.PortMap{
+			tcpPort: []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: newPort}},
+		}
+	}
+
+	containerName := strings.TrimPrefix(info.Name, "/")
+	containerName = strings.TrimSuffix(containerName, "-old")
+	oldName := containerName + "-old"
+
+	log.Printf("Restart: container name=%s, will rename to=%s", containerName, oldName)
+
+	// Clean up leftovers
+	cli.ContainerStop(ctx, oldName, container.StopOptions{})
+	cli.ContainerRemove(ctx, oldName, types.ContainerRemoveOptions{Force: true})
+	cli.ContainerStop(ctx, "zenith-updater", container.StopOptions{})
+	cli.ContainerRemove(ctx, "zenith-updater", types.ContainerRemoveOptions{Force: true})
+
+	// Rename old container
+	if err := cli.ContainerRename(ctx, containerID, oldName); err != nil {
+		return fmt.Errorf("rename container: %w", err)
+	}
+	log.Printf("Restart: renamed %s -> %s", containerID[:12], oldName)
+
+	// Create new container with same image, updated config
+	resp, err := cli.ContainerCreate(ctx, newConfig, hostConfig, nil, nil, containerName)
+	if err != nil {
+		log.Printf("Restart: create failed, rolling back: %v", err)
+		cli.ContainerRename(ctx, containerID, containerName)
+		return fmt.Errorf("create container: %w", err)
+	}
+	log.Printf("Restart: created new container %s", resp.ID[:12])
+
+	// Helper container to swap
+	swapScript := fmt.Sprintf(
+		`sleep 2; docker stop -t 10 %s 2>/dev/null; docker start %s; docker rm %s 2>/dev/null; true`,
+		containerID, resp.ID, containerID,
+	)
+	helperCfg := &container.Config{
+		Image:      "alpine:latest",
+		Entrypoint: []string{"sh", "-c"},
+		Cmd:        []string{"apk add --no-cache docker-cli > /dev/null 2>&1 && " + swapScript},
+	}
+	helperHC := &container.HostConfig{
+		Binds:      []string{"/var/run/docker.sock:/var/run/docker.sock"},
+		AutoRemove: true,
+	}
+	helperResp, err := cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
+	if err != nil {
+		log.Printf("Restart: alpine helper failed (%v), falling back to panel image", err)
+		helperCfg.Image = newConfig.Image
+		helperCfg.Cmd = []string{swapScript}
+		helperResp, err = cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
+		if err != nil {
+			cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
+			cli.ContainerRename(ctx, containerID, containerName)
+			return fmt.Errorf("create helper: %w", err)
+		}
+	}
+	if err := cli.ContainerStart(ctx, helperResp.ID, types.ContainerStartOptions{}); err != nil {
+		cli.ContainerRemove(ctx, helperResp.ID, types.ContainerRemoveOptions{})
+		cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
+		cli.ContainerRename(ctx, containerID, containerName)
+		return fmt.Errorf("start helper: %w", err)
+	}
+
+	log.Printf("Restart: helper started, will swap to new port %s in ~2s", newPort)
 	return nil
 }
 

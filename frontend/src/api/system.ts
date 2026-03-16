@@ -37,6 +37,19 @@ export function disable2FA(password: string) {
   return apiClient.post('/v1/admin/2fa/disable', { password })
 }
 
+// Access Configuration
+export function getAccessConfig() {
+  return apiClient.get('/v1/admin/access')
+}
+
+export function updateAccessConfig(data: { panel_path?: string; port?: string }) {
+  return apiClient.put('/v1/admin/access', data)
+}
+
+export function restartPanel() {
+  return apiClient.post('/v1/admin/restart', null, { timeout: 120000 })
+}
+
 // TLS
 export function getTLSStatus() {
   return apiClient.get('/v1/admin/tls/status')
