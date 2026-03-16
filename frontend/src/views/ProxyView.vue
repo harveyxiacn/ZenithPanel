@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon } from '@heroicons/vue/24/outline'
 import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys } from '@/api/proxy'
@@ -9,8 +9,19 @@ import QRCode from 'qrcode'
 
 const { t } = useI18n()
 const route = useRoute()
+const router = useRouter()
 const tabFromRoute = route.name === 'Users' ? 'users' : 'inbounds'
 const activeTab = ref(tabFromRoute)
+
+// Sync sidebar highlight: switching tabs updates the route so the
+// left nav correctly highlights "Proxy Nodes" vs "Users & Subs".
+function switchTab(tabId: string) {
+  activeTab.value = tabId
+  const targetRoute = tabId === 'users' ? '/users' : '/nodes'
+  if (route.path !== targetRoute) {
+    router.replace(targetRoute)
+  }
+}
 
 watch(() => route.name, (name) => {
   if (name === 'Users') activeTab.value = 'users'
@@ -686,7 +697,7 @@ onMounted(() => {
         <button
           v-for="tab in tabs"
           :key="tab.id"
-          @click="activeTab = tab.id"
+          @click="switchTab(tab.id)"
           :class="[
             activeTab === tab.id
               ? 'border-primary-500 text-primary-600'
