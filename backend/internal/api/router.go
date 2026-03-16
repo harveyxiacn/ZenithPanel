@@ -929,7 +929,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.POST("/system/update/apply", func(c *gin.Context) {
 			if err := updater.PerformUpdate(c.Request.Context()); err != nil {
 				log.Printf("Update apply error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Update failed"})
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": fmt.Sprintf("Update failed: %v", err)})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Update applied. Panel will restart in a few seconds."})
