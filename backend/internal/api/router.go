@@ -5,11 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -33,11 +36,30 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// fsSandboxRoot is the allowed root for file operations.
-var fsSandboxRoot = "/"
+// fsSandboxRoot restricts file manager operations to /home to prevent
+// unauthorized access to system files, credentials, and configs.
+var fsSandboxRoot = "/home"
 
-// loginLimiter restricts login attempts to 5 per second
-var loginLimiter = rate.NewLimiter(rate.Every(time.Second), 5)
+// ipRateLimiters provides per-IP rate limiting to prevent brute-force attacks.
+// Each IP gets its own limiter (max 5 req/sec for auth endpoints).
+var ipRateLimiters = struct {
+	sync.RWMutex
+	m map[string]*rate.Limiter
+}{m: make(map[string]*rate.Limiter)}
+
+func getIPLimiter(ip string) *rate.Limiter {
+	ipRateLimiters.RLock()
+	limiter, exists := ipRateLimiters.m[ip]
+	ipRateLimiters.RUnlock()
+	if exists {
+		return limiter
+	}
+	ipRateLimiters.Lock()
+	limiter = rate.NewLimiter(rate.Every(time.Second), 5)
+	ipRateLimiters.m[ip] = limiter
+	ipRateLimiters.Unlock()
+	return limiter
+}
 
 // isPathSafe ensures the resolved path stays within the sandbox root and is not a symlink.
 func isPathSafe(userPath string) (string, bool) {
@@ -70,6 +92,26 @@ func isPathSafe(userPath string) (string, bool) {
 	return abs, true
 }
 
+// dockerIDRe validates Docker container IDs (hex strings, 12-64 chars).
+var dockerIDRe = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
+
+// isValidContainerID ensures the parameter is a valid Docker container ID or name.
+func isValidContainerID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	// Allow hex IDs and container names (alphanumeric, hyphens, underscores, dots)
+	if dockerIDRe.MatchString(id) {
+		return true
+	}
+	for _, c := range id {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.') {
+			return false
+		}
+	}
+	return true
+}
+
 // SetupRoutes configures all the Gin routes.
 func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *proxy.SingboxManager, sched *scheduler.Scheduler) {
 
@@ -91,13 +133,20 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 	// Apply Setup Guard Globally
 	r.Use(middleware.SetupGuardMiddleware())
 
-	// CORS Middleware
+	// CORS Middleware — in production the frontend is embedded (same-origin),
+	// so cross-origin requests are only allowed for development (localhost).
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"},
+		AllowOriginFunc: func(origin string) bool {
+			if gin.Mode() != gin.ReleaseMode {
+				return true // allow all in dev mode
+			}
+			// In production, only allow same-host origins (e.g. http://host:port)
+			return strings.HasPrefix(origin, "http://localhost") || strings.HasPrefix(origin, "http://127.0.0.1")
+		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: false,
+		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
 
@@ -129,6 +178,11 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 	setupGroup := r.Group("/api/setup")
 	{
 		setupGroup.POST("/login", func(c *gin.Context) {
+			// Per-IP rate limiting on setup login
+			if !getIPLimiter(c.ClientIP()).Allow() {
+				c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "msg": "Too many attempts, please try again later"})
+				return
+			}
 			var req struct {
 				Password string `json:"password"`
 			}
@@ -159,6 +213,14 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			if err := c.ShouldBindJSON(&req); err != nil || req.Username == "" || req.Password == "" {
 				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Username and password are required"})
+				return
+			}
+			if len(req.Username) < 3 || len(req.Username) > 32 {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Username must be 3-32 characters"})
+				return
+			}
+			if len(req.Password) < 8 {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Password must be at least 8 characters"})
 				return
 			}
 
@@ -201,8 +263,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		})
 
 		apiGroup.POST("/login", func(c *gin.Context) {
-			// Rate limiting
-			if !loginLimiter.Allow() {
+			// Per-IP rate limiting
+			if !getIPLimiter(c.ClientIP()).Allow() {
 				c.JSON(http.StatusTooManyRequests, gin.H{"code": 429, "msg": "Too many login attempts, please try again later"})
 				return
 			}
@@ -270,7 +332,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			containers, err := dm.ListContainers(c.Request.Context(), true)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				log.Printf("Docker list error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to list containers"})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": containers})
@@ -281,8 +344,14 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
 				return
 			}
-			if err := dm.StartContainer(c.Request.Context(), c.Param("id")); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+			id := c.Param("id")
+			if !isValidContainerID(id) {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
+				return
+			}
+			if err := dm.StartContainer(c.Request.Context(), id); err != nil {
+				log.Printf("Docker start error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to start container"})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container started"})
@@ -293,8 +362,14 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
 				return
 			}
-			if err := dm.StopContainer(c.Request.Context(), c.Param("id")); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+			id := c.Param("id")
+			if !isValidContainerID(id) {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
+				return
+			}
+			if err := dm.StopContainer(c.Request.Context(), id); err != nil {
+				log.Printf("Docker stop error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to stop container"})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container stopped"})
@@ -305,8 +380,14 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
 				return
 			}
-			if err := dm.RestartContainer(c.Request.Context(), c.Param("id")); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+			id := c.Param("id")
+			if !isValidContainerID(id) {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
+				return
+			}
+			if err := dm.RestartContainer(c.Request.Context(), id); err != nil {
+				log.Printf("Docker restart error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to restart container"})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container restarted"})
@@ -317,9 +398,15 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
 				return
 			}
+			id := c.Param("id")
+			if !isValidContainerID(id) {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
+				return
+			}
 			force := c.Query("force") == "true"
-			if err := dm.RemoveContainer(c.Request.Context(), c.Param("id"), force); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+			if err := dm.RemoveContainer(c.Request.Context(), id, force); err != nil {
+				log.Printf("Docker remove error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to remove container"})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container removed"})
@@ -345,7 +432,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				}
 				files, err := fs.ListDirectory(safePath)
 				if err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+					log.Printf("FS list error: %v", err)
+					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Failed to list directory"})
 					return
 				}
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": files})
@@ -360,7 +448,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				}
 				content, err := fs.ReadFileContent(safePath)
 				if err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": err.Error()})
+					log.Printf("FS read error: %v", err)
+					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Failed to read file"})
 					return
 				}
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": content})
@@ -381,7 +470,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					return
 				}
 				if err := fs.WriteFileContent(safePath, req.Content); err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+					log.Printf("FS write error: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to write file"})
 					return
 				}
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "File saved"})
@@ -392,7 +482,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.GET("/diagnostics/network", func(c *gin.Context) {
 			output, err := diagnostic.RunNetworkDiagnostic()
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error(), "data": output})
+				log.Printf("Diagnostic error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Diagnostic failed", "data": output})
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": output})
@@ -688,7 +779,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				}
 
 				if err := cert.IssueCertificate(req.Domain, req.Email); err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to issue certificate: " + err.Error()})
+					log.Printf("Cert issue error: %v", err)
+					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to issue certificate"})
 					return
 				}
 

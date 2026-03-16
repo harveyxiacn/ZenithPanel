@@ -5,9 +5,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/creack/pty"
 	"github.com/gin-gonic/gin"
@@ -15,17 +15,23 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	// Only allow WebSocket connections from the same host (prevents Cross-Site WebSocket Hijacking)
+	// Only allow WebSocket connections from the same host (prevents Cross-Site WebSocket Hijacking).
+	// Uses strict URL parsing instead of substring matching to prevent bypass.
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		if origin == "" {
-			return true // non-browser clients
+			return true // non-browser clients (curl, proxy apps)
 		}
-		host := r.Host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
+		parsed, err := url.Parse(origin)
+		if err != nil {
+			return false
 		}
-		return strings.Contains(origin, host)
+		originHost := parsed.Hostname()
+		reqHost := r.Host
+		if h, _, err := net.SplitHostPort(reqHost); err == nil {
+			reqHost = h
+		}
+		return originHost == reqHost
 	},
 }
 
