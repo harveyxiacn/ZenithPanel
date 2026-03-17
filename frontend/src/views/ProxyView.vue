@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon } from '@heroicons/vue/24/outline'
+import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon } from '@heroicons/vue/24/outline'
 import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys } from '@/api/proxy'
 import apiClient from '@/api/client'
 import QRCode from 'qrcode'
@@ -288,6 +288,25 @@ async function removeClient(id: number) {
     await deleteClient(id)
     await fetchClients()
   } catch { /* ignore */ }
+}
+
+function addClientForInbound(inboundId: number) {
+  switchTab('users')
+  clientForm.value = { email: '', inbound_id: inboundId, traffic_limit: 0, enable: true }
+  showClientForm.value = true
+}
+
+function formatTraffic(bytes: number): string {
+  if (!bytes || bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+function inboundTagById(id: number): string {
+  const ib = inbounds.value.find((i: any) => i.id === id)
+  return ib ? ib.tag : `#${id}`
 }
 
 function copySubLink(uuid: string) {
@@ -944,8 +963,12 @@ onMounted(() => {
               </td>
               <td class="px-6 py-4 text-sm text-slate-500">{{ node.port }}</td>
               <td class="px-6 py-4 text-sm text-slate-500">{{ parseTransport(node.stream) }}</td>
-              <td class="px-6 py-4 text-right text-sm font-medium">
-                <button @click="openInboundForm(node)" class="text-primary-600 hover:text-primary-900 mr-4">{{ $t('common.edit') }}</button>
+              <td class="px-6 py-4 text-right text-sm font-medium space-x-2">
+                <button @click="addClientForInbound(node.id)" class="text-emerald-600 hover:text-emerald-900 inline-flex items-center" :title="$t('proxy.clients.addClient')">
+                  <UserPlusIcon class="h-4 w-4 mr-1" />
+                  {{ $t('proxy.inbounds.addUser') }}
+                </button>
+                <button @click="openInboundForm(node)" class="text-primary-600 hover:text-primary-900">{{ $t('common.edit') }}</button>
                 <button @click="removeInbound(node.id)" class="text-rose-600 hover:text-rose-900">
                   <TrashIcon class="h-4 w-4 inline" />
                 </button>
@@ -1073,7 +1096,7 @@ onMounted(() => {
           <thead class="bg-slate-50">
             <tr>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.email') }}</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.uuid') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.inbounds.tag') }}</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.traffic') }}</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.status') }}</th>
               <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
@@ -1081,9 +1104,17 @@ onMounted(() => {
           </thead>
           <tbody class="bg-white divide-y divide-slate-200">
             <tr v-for="user in clients" :key="user.id" class="hover:bg-slate-50">
-              <td class="px-6 py-4 text-sm font-medium text-slate-900">{{ user.email }}</td>
-              <td class="px-6 py-4 text-sm text-slate-500 font-mono">{{ (user.uuid || '').slice(0, 8) }}...</td>
-              <td class="px-6 py-4 text-sm text-slate-500">{{ user.traffic_used || 0 }} / {{ user.traffic_limit || $t('proxy.clients.unlimited') }}</td>
+              <td class="px-6 py-4 text-sm font-medium text-slate-900">
+                <div>{{ user.email }}</div>
+                <div class="text-xs text-slate-400 font-mono">{{ (user.uuid || '').slice(0, 8) }}...</div>
+              </td>
+              <td class="px-6 py-4 text-sm">
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700">{{ inboundTagById(user.inbound_id) }}</span>
+              </td>
+              <td class="px-6 py-4 text-sm text-slate-500">
+                <div>↑ {{ formatTraffic(user.up_load) }} / ↓ {{ formatTraffic(user.down_load) }}</div>
+                <div class="text-xs text-slate-400">{{ $t('proxy.clients.trafficLimit') }}: {{ user.total ? formatTraffic(user.total) : $t('proxy.clients.unlimited') }}</div>
+              </td>
               <td class="px-6 py-4">
                 <span :class="[user.enable ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-800', 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full']">
                   {{ user.enable ? $t('common.active') : $t('common.disabled') }}

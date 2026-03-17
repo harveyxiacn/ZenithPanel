@@ -566,8 +566,11 @@ async function onRunCleanup() {
 
 // ---- Port Security ----
 const panelPort = ref(window.location.port || (window.location.protocol === 'https:' ? '443' : '80'))
-const commonPorts = [80, 443, 8080, 8443, 8888, 2053, 2083, 2087, 2096, 3000, 5000]
-const isCommonPort = computed(() => commonPorts.includes(Number(panelPort.value)))
+const cloudflarePorts = [443, 2053, 2083, 2087, 2096, 8443]
+const scannedPorts = [80, 8080, 8888, 3000, 5000]
+const portNumber = computed(() => Number(panelPort.value))
+const isCFPort = computed(() => cloudflarePorts.includes(portNumber.value))
+const isCommonPort = computed(() => scannedPorts.includes(portNumber.value))
 
 onMounted(() => {
   load2FAStatus()
@@ -1091,6 +1094,9 @@ onMounted(() => {
               </div>
               <div v-if="isCommonPort" class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700">
                 {{ $t('security.tips.portWarning') }}
+              </div>
+              <div v-else-if="isCFPort" class="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700">
+                {{ $t('security.tips.portCF') }}
               </div>
               <div v-else class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-700">
                 {{ $t('security.tips.portGood') }}

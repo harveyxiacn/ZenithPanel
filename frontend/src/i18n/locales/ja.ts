@@ -81,6 +81,7 @@ export default {
     hostname: 'ホスト名',
     cpu: 'CPU',
     disk: 'ディスク',
+    customizeCards: 'カードをカスタマイズ',
   },
 
   servers: {
@@ -172,6 +173,7 @@ export default {
       grpcService: 'gRPC サービス名',
       ssMethod: '暗号化方式',
       ssPassword: 'パスワード',
+      addUser: 'ユーザー追加',
     },
     routing: {
       title: 'ルーティングルール',
@@ -355,7 +357,8 @@ export default {
       useHttps: '有効な証明書で HTTPS を使用',
       restrictApi: '可能であれば IP で API アクセスを制限',
       portLabel: '現在のパネルポート',
-      portWarning: '一般的にスキャンされるポートを使用しています。セキュリティ向上のためランダムな高ポート（10000+）への変更を推奨します。',
+      portWarning: '一般的にスキャンされるポート（80、8080 など）を使用しています。セキュリティ向上のためランダムな高ポート（10000+）への変更を推奨します。',
+      portCF: 'Cloudflare 対応の HTTPS ポートを使用中。ドメインが Cloudflare プロキシ経由の場合、推奨される選択です。',
       portGood: '安全 — 非標準ポートを使用中。',
     },
     cloudflare: {

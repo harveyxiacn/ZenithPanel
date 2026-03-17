@@ -81,6 +81,7 @@ export default {
     hostname: '主機名稱',
     cpu: 'CPU',
     disk: '磁碟',
+    customizeCards: '自訂卡片',
   },
 
   servers: {
@@ -172,6 +173,7 @@ export default {
       grpcService: 'gRPC 服務名稱',
       ssMethod: '加密方法',
       ssPassword: '密碼',
+      addUser: '新增用戶',
     },
     routing: {
       title: '路由規則',
@@ -355,7 +357,8 @@ export default {
       useHttps: '使用 HTTPS 和有效憑證',
       restrictApi: '儘可能按 IP 限制 API 存取',
       portLabel: '目前面板連接埠',
-      portWarning: '您正在使用常被掃描的連接埠，建議更換為隨機高連接埠（10000+）以提高安全性。',
+      portWarning: '您正在使用常被掃描的連接埠（80、8080 等），建議更換為隨機高連接埠（10000+）以提高安全性。',
+      portCF: '正在使用 Cloudflare 相容的 HTTPS 連接埠。如果網域已通過 Cloudflare 代理，這是推薦的選擇。',
       portGood: '安全 — 正在使用非標準連接埠。',
     },
     cloudflare: {
