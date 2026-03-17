@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon, GlobeAltIcon, Cog6ToothIcon } from '@heroicons/vue/24/outline'
-import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection } from '@/api/system'
+import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon, GlobeAltIcon, Cog6ToothIcon, BoltIcon, CpuChipIcon, AdjustmentsHorizontalIcon, TrashIcon } from '@heroicons/vue/24/outline'
+import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup } from '@/api/system'
 
 const { t } = useI18n()
 
@@ -383,6 +383,187 @@ async function onApplyUpdate() {
   }
 }
 
+// ---- BBR ----
+const bbrEnabled = ref(false)
+const bbrCurrent = ref('')
+const bbrAvailable = ref('')
+const bbrLoading = ref(false)
+const bbrMsg = ref('')
+const bbrMsgType = ref<'success' | 'error'>('success')
+
+async function loadBBRStatus() {
+  try {
+    const res = await getBBRStatus() as any
+    if (res.code === 200) {
+      bbrEnabled.value = res.data.enabled
+      bbrCurrent.value = res.data.current
+      bbrAvailable.value = res.data.available
+    }
+  } catch { /* ignore */ }
+}
+
+async function onToggleBBR() {
+  bbrLoading.value = true
+  bbrMsg.value = ''
+  try {
+    const res = bbrEnabled.value
+      ? await disableBBR() as any
+      : await enableBBR() as any
+    if (res.code === 200) {
+      bbrMsg.value = res.msg
+      bbrMsgType.value = 'success'
+      await loadBBRStatus()
+    } else {
+      bbrMsg.value = res.msg || 'Failed'
+      bbrMsgType.value = 'error'
+    }
+  } catch (e: any) {
+    bbrMsg.value = e?.response?.data?.msg || 'Failed'
+    bbrMsgType.value = 'error'
+  }
+  bbrLoading.value = false
+}
+
+// ---- Swap ----
+const swapEnabled = ref(false)
+const swapTotalMB = ref(0)
+const swapUsedMB = ref(0)
+const swapFilePath = ref('')
+const swapLoading = ref(false)
+const swapMsg = ref('')
+const swapMsgType = ref<'success' | 'error'>('success')
+const swapSizeMB = ref(1024)
+
+async function loadSwapStatus() {
+  try {
+    const res = await getSwapStatus() as any
+    if (res.code === 200) {
+      swapEnabled.value = res.data.enabled
+      swapTotalMB.value = res.data.total_mb
+      swapUsedMB.value = res.data.used_mb
+      swapFilePath.value = res.data.file_path
+    }
+  } catch { /* ignore */ }
+}
+
+async function onCreateSwap() {
+  swapLoading.value = true
+  swapMsg.value = ''
+  try {
+    const res = await createSwap(swapSizeMB.value) as any
+    if (res.code === 200) {
+      swapMsg.value = res.msg
+      swapMsgType.value = 'success'
+      await loadSwapStatus()
+    } else {
+      swapMsg.value = res.msg || 'Failed'
+      swapMsgType.value = 'error'
+    }
+  } catch (e: any) {
+    swapMsg.value = e?.response?.data?.msg || 'Failed'
+    swapMsgType.value = 'error'
+  }
+  swapLoading.value = false
+}
+
+async function onRemoveSwap() {
+  if (!confirm(t('optimize.swap.confirmRemove'))) return
+  swapLoading.value = true
+  swapMsg.value = ''
+  try {
+    const res = await removeSwap() as any
+    if (res.code === 200) {
+      swapMsg.value = res.msg
+      swapMsgType.value = 'success'
+      await loadSwapStatus()
+    } else {
+      swapMsg.value = res.msg || 'Failed'
+      swapMsgType.value = 'error'
+    }
+  } catch (e: any) {
+    swapMsg.value = e?.response?.data?.msg || 'Failed'
+    swapMsgType.value = 'error'
+  }
+  swapLoading.value = false
+}
+
+// ---- Sysctl Network Tuning ----
+const sysctlEnabled = ref(false)
+const sysctlLoading = ref(false)
+const sysctlMsg = ref('')
+const sysctlMsgType = ref<'success' | 'error'>('success')
+
+async function loadSysctlStatus() {
+  try {
+    const res = await getSysctlStatus() as any
+    if (res.code === 200) {
+      sysctlEnabled.value = res.data.enabled
+    }
+  } catch { /* ignore */ }
+}
+
+async function onToggleSysctl() {
+  sysctlLoading.value = true
+  sysctlMsg.value = ''
+  try {
+    const res = sysctlEnabled.value
+      ? await disableSysctl() as any
+      : await enableSysctl() as any
+    if (res.code === 200) {
+      sysctlMsg.value = res.msg
+      sysctlMsgType.value = 'success'
+      await loadSysctlStatus()
+    } else {
+      sysctlMsg.value = res.msg || 'Failed'
+      sysctlMsgType.value = 'error'
+    }
+  } catch (e: any) {
+    sysctlMsg.value = e?.response?.data?.msg || 'Failed'
+    sysctlMsgType.value = 'error'
+  }
+  sysctlLoading.value = false
+}
+
+// ---- System Cleanup ----
+const cleanupInfo = ref<any>(null)
+const cleanupResult = ref<any>(null)
+const cleanupScanning = ref(false)
+const cleanupRunning = ref(false)
+const cleanupMsg = ref('')
+const cleanupMsgType = ref<'success' | 'error'>('success')
+
+async function onScanCleanup() {
+  cleanupScanning.value = true
+  cleanupResult.value = null
+  try {
+    const res = await getCleanupInfo() as any
+    if (res.code === 200) cleanupInfo.value = res.data
+  } catch { /* ignore */ }
+  cleanupScanning.value = false
+}
+
+async function onRunCleanup() {
+  if (!confirm(t('optimize.cleanup.confirmRun'))) return
+  cleanupRunning.value = true
+  cleanupMsg.value = ''
+  try {
+    const res = await runCleanup() as any
+    if (res.code === 200) {
+      cleanupResult.value = res.data
+      cleanupMsg.value = res.msg
+      cleanupMsgType.value = 'success'
+      cleanupInfo.value = null
+    } else {
+      cleanupMsg.value = res.msg || 'Failed'
+      cleanupMsgType.value = 'error'
+    }
+  } catch (e: any) {
+    cleanupMsg.value = e?.response?.data?.msg || 'Failed'
+    cleanupMsgType.value = 'error'
+  }
+  cleanupRunning.value = false
+}
+
 // ---- Port Security ----
 const panelPort = ref(window.location.port || (window.location.protocol === 'https:' ? '443' : '80'))
 const commonPorts = [80, 443, 8080, 8443, 8888, 2053, 2083, 2087, 2096, 3000, 5000]
@@ -393,6 +574,9 @@ onMounted(() => {
   loadTLSStatus()
   loadAccessConfig()
   loadCFStatus()
+  loadBBRStatus()
+  loadSwapStatus()
+  loadSysctlStatus()
 })
 </script>
 
@@ -584,6 +768,194 @@ onMounted(() => {
             ]">
               {{ cfLoading ? $t('common.loading') : (cfEnabled ? $t('security.cloudflare.disable') : $t('security.cloudflare.enable')) }}
             </button>
+          </div>
+        </div>
+
+        <!-- ====== System Optimization Section ====== -->
+        <div class="pt-2">
+          <h2 class="text-xl font-bold text-slate-800 tracking-tight mb-1">{{ $t('optimize.title') }}</h2>
+          <p class="text-slate-500 text-sm mb-4">{{ $t('optimize.subtitle') }}</p>
+        </div>
+
+        <!-- BBR Congestion Control -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div class="flex items-center">
+              <div class="bg-cyan-500/10 text-cyan-500 p-2 rounded-lg mr-4">
+                <BoltIcon class="h-6 w-6" />
+              </div>
+              <div>
+                <h3 class="text-lg font-medium text-slate-800">{{ $t('optimize.bbr.title') }}</h3>
+                <p class="text-sm text-slate-500">{{ $t('optimize.bbr.subtitle') }}</p>
+              </div>
+            </div>
+            <span :class="['px-2.5 py-0.5 rounded-full text-xs font-medium', bbrEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500']">
+              {{ bbrEnabled ? $t('common.enabled') : $t('common.disabled') }}
+            </span>
+          </div>
+          <div class="p-6 space-y-4">
+            <p class="text-sm text-slate-600">{{ $t('optimize.bbr.desc') }}</p>
+            <div class="bg-slate-50 rounded-lg p-3 text-xs text-slate-500 space-y-1">
+              <div class="flex items-center justify-between">
+                <span>{{ $t('optimize.bbr.current') }}</span>
+                <code class="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700">{{ bbrCurrent || '—' }}</code>
+              </div>
+              <div class="flex items-center justify-between">
+                <span>{{ $t('optimize.bbr.available') }}</span>
+                <code class="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700">{{ bbrAvailable || '—' }}</code>
+              </div>
+            </div>
+            <p class="text-xs text-slate-400">{{ $t('optimize.bbr.kernelNote') }}</p>
+            <div v-if="bbrMsg" :class="['text-sm p-2 rounded-lg', bbrMsgType === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700']">{{ bbrMsg }}</div>
+            <button @click="onToggleBBR" :disabled="bbrLoading" :class="[
+              'px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50',
+              bbrEnabled ? 'bg-slate-100 hover:bg-slate-200 text-slate-700' : 'bg-cyan-500 hover:bg-cyan-600 text-white'
+            ]">
+              {{ bbrLoading ? $t('common.loading') : (bbrEnabled ? $t('optimize.bbr.disable') : $t('optimize.bbr.enable')) }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Swap Memory -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div class="flex items-center">
+              <div class="bg-purple-500/10 text-purple-500 p-2 rounded-lg mr-4">
+                <CpuChipIcon class="h-6 w-6" />
+              </div>
+              <div>
+                <h3 class="text-lg font-medium text-slate-800">{{ $t('optimize.swap.title') }}</h3>
+                <p class="text-sm text-slate-500">{{ $t('optimize.swap.subtitle') }}</p>
+              </div>
+            </div>
+            <span :class="['px-2.5 py-0.5 rounded-full text-xs font-medium', swapEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500']">
+              {{ swapEnabled ? $t('common.enabled') : $t('common.disabled') }}
+            </span>
+          </div>
+          <div class="p-6 space-y-4">
+            <p class="text-sm text-slate-600">{{ $t('optimize.swap.desc') }}</p>
+            <div v-if="swapEnabled" class="bg-slate-50 rounded-lg p-3 text-xs text-slate-500 space-y-1">
+              <div class="flex items-center justify-between">
+                <span>{{ $t('optimize.swap.totalMb') }}</span>
+                <code class="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700">{{ swapTotalMB }} MB</code>
+              </div>
+              <div class="flex items-center justify-between">
+                <span>{{ $t('optimize.swap.usedMb') }}</span>
+                <code class="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700">{{ swapUsedMB }} MB</code>
+              </div>
+              <div v-if="swapFilePath" class="flex items-center justify-between">
+                <span>{{ $t('optimize.swap.filePath') }}</span>
+                <code class="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700">{{ swapFilePath }}</code>
+              </div>
+            </div>
+            <div v-if="!swapEnabled" class="space-y-2">
+              <label class="block text-sm font-medium text-slate-700">{{ $t('optimize.swap.sizeLabel') }}</label>
+              <div class="flex items-center space-x-3">
+                <select v-model="swapSizeMB" class="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:border-primary-500 focus:ring-primary-500">
+                  <option :value="256">256 MB</option>
+                  <option :value="512">512 MB</option>
+                  <option :value="1024">1 GB</option>
+                  <option :value="2048">2 GB</option>
+                  <option :value="4096">4 GB</option>
+                </select>
+              </div>
+            </div>
+            <div v-if="swapMsg" :class="['text-sm p-2 rounded-lg', swapMsgType === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700']">{{ swapMsg }}</div>
+            <div class="flex items-center space-x-3">
+              <button v-if="!swapEnabled" @click="onCreateSwap" :disabled="swapLoading" class="bg-purple-500 hover:bg-purple-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                {{ swapLoading ? $t('optimize.swap.creating') : $t('optimize.swap.create') }}
+              </button>
+              <button v-if="swapEnabled" @click="onRemoveSwap" :disabled="swapLoading" class="bg-rose-100 hover:bg-rose-200 text-rose-700 px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50">
+                {{ swapLoading ? $t('common.loading') : $t('optimize.swap.remove') }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Network Tuning (sysctl) -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div class="flex items-center">
+              <div class="bg-indigo-500/10 text-indigo-500 p-2 rounded-lg mr-4">
+                <AdjustmentsHorizontalIcon class="h-6 w-6" />
+              </div>
+              <div>
+                <h3 class="text-lg font-medium text-slate-800">{{ $t('optimize.sysctl.title') }}</h3>
+                <p class="text-sm text-slate-500">{{ $t('optimize.sysctl.subtitle') }}</p>
+              </div>
+            </div>
+            <span :class="['px-2.5 py-0.5 rounded-full text-xs font-medium', sysctlEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500']">
+              {{ sysctlEnabled ? $t('common.enabled') : $t('common.disabled') }}
+            </span>
+          </div>
+          <div class="p-6 space-y-4">
+            <p class="text-sm text-slate-600">{{ $t('optimize.sysctl.desc') }}</p>
+            <div v-if="sysctlMsg" :class="['text-sm p-2 rounded-lg', sysctlMsgType === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700']">{{ sysctlMsg }}</div>
+            <button @click="onToggleSysctl" :disabled="sysctlLoading" :class="[
+              'px-4 py-2 rounded-lg text-sm font-medium transition disabled:opacity-50',
+              sysctlEnabled ? 'bg-slate-100 hover:bg-slate-200 text-slate-700' : 'bg-indigo-500 hover:bg-indigo-600 text-white'
+            ]">
+              {{ sysctlLoading ? $t('common.loading') : (sysctlEnabled ? $t('optimize.sysctl.disable') : $t('optimize.sysctl.enable')) }}
+            </button>
+          </div>
+        </div>
+
+        <!-- System Cleanup -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-6 border-b border-slate-100 flex items-center">
+            <div class="bg-amber-500/10 text-amber-500 p-2 rounded-lg mr-4">
+              <TrashIcon class="h-6 w-6" />
+            </div>
+            <div>
+              <h3 class="text-lg font-medium text-slate-800">{{ $t('optimize.cleanup.title') }}</h3>
+              <p class="text-sm text-slate-500">{{ $t('optimize.cleanup.subtitle') }}</p>
+            </div>
+          </div>
+          <div class="p-6 space-y-4">
+            <p class="text-sm text-slate-600">{{ $t('optimize.cleanup.desc') }}</p>
+
+            <!-- Scan results -->
+            <div v-if="cleanupInfo" class="bg-slate-50 rounded-lg p-3 text-xs text-slate-500 space-y-1">
+              <div class="flex items-center justify-between">
+                <span>{{ $t('optimize.cleanup.journal') }}</span>
+                <code class="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700">{{ cleanupInfo.journal_size }}</code>
+              </div>
+              <div class="flex items-center justify-between">
+                <span>{{ $t('optimize.cleanup.package') }}</span>
+                <code class="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700">{{ cleanupInfo.package_size }}</code>
+              </div>
+              <div class="flex items-center justify-between">
+                <span>{{ $t('optimize.cleanup.docker') }}</span>
+                <code class="bg-white px-2 py-0.5 rounded border border-slate-200 text-slate-700">{{ cleanupInfo.docker_size }}</code>
+              </div>
+            </div>
+
+            <!-- Cleanup results -->
+            <div v-if="cleanupResult" class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-xs text-emerald-700 space-y-1">
+              <div class="flex items-center justify-between">
+                <span>{{ $t('optimize.cleanup.freedJournal') }}</span>
+                <span class="font-medium">{{ cleanupResult.journal_freed }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span>{{ $t('optimize.cleanup.freedPackage') }}</span>
+                <span class="font-medium">{{ cleanupResult.package_freed }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span>{{ $t('optimize.cleanup.freedDocker') }}</span>
+                <span class="font-medium">{{ cleanupResult.docker_freed }}</span>
+              </div>
+            </div>
+
+            <div v-if="cleanupMsg" :class="['text-sm p-2 rounded-lg', cleanupMsgType === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700']">{{ cleanupMsg }}</div>
+
+            <div class="flex items-center space-x-3">
+              <button @click="onScanCleanup" :disabled="cleanupScanning || cleanupRunning" class="bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">
+                {{ cleanupScanning ? $t('optimize.cleanup.scanning') : $t('optimize.cleanup.scan') }}
+              </button>
+              <button @click="onRunCleanup" :disabled="cleanupRunning || cleanupScanning" class="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                {{ cleanupRunning ? $t('optimize.cleanup.running') : $t('optimize.cleanup.run') }}
+              </button>
+            </div>
           </div>
         </div>
 

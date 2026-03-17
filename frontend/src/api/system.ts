@@ -77,3 +77,44 @@ export function uploadTLSCerts(formData: FormData) {
 export function removeTLS() {
   return apiClient.delete('/v1/admin/tls')
 }
+
+// System Optimization - BBR
+export function getBBRStatus() {
+  return apiClient.get('/v1/system/bbr/status')
+}
+export function enableBBR() {
+  return apiClient.post('/v1/system/bbr/enable')
+}
+export function disableBBR() {
+  return apiClient.post('/v1/system/bbr/disable')
+}
+
+// System Optimization - Swap
+export function getSwapStatus() {
+  return apiClient.get('/v1/system/swap/status')
+}
+export function createSwap(sizeMB: number) {
+  return apiClient.post('/v1/system/swap/create', { size_mb: sizeMB })
+}
+export function removeSwap() {
+  return apiClient.post('/v1/system/swap/remove')
+}
+
+// System Optimization - Sysctl Network Tuning
+export function getSysctlStatus() {
+  return apiClient.get('/v1/system/sysctl/status')
+}
+export function enableSysctl() {
+  return apiClient.post('/v1/system/sysctl/enable')
+}
+export function disableSysctl() {
+  return apiClient.post('/v1/system/sysctl/disable')
+}
+
+// System Cleanup
+export function getCleanupInfo() {
+  return apiClient.get('/v1/system/cleanup/info')
+}
+export function runCleanup() {
+  return apiClient.post('/v1/system/cleanup/run')
+}
