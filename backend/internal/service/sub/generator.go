@@ -156,9 +156,20 @@ func GenerateSubscription(c *gin.Context) {
 		return
 	}
 
-	// Fetch all enabled inbounds
+	// Fetch inbounds that this client is associated with (via inbound_id).
+	// A client may have multiple records with the same UUID across different inbounds.
+	var clientRecords []model.Client
+	config.DB.Where("uuid = ? AND enable = ?", client.UUID, true).Find(&clientRecords)
+
+	var inboundIDs []uint
+	for _, cr := range clientRecords {
+		inboundIDs = append(inboundIDs, cr.InboundID)
+	}
+
 	var inbounds []model.Inbound
-	config.DB.Where("enable = ?", true).Find(&inbounds)
+	if len(inboundIDs) > 0 {
+		config.DB.Where("id IN ? AND enable = ?", inboundIDs, true).Find(&inbounds)
+	}
 
 	serverAddr := getServerAddr(c)
 
@@ -248,13 +259,14 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 		proxyNames = append(proxyNames, name)
 
 		switch in.Protocol {
-		case "vless":
+			case "vless":
 			flow := parseSettingsFlow(in.Settings)
 			sb.WriteString(fmt.Sprintf("  - name: \"%s\"\n", name))
 			sb.WriteString("    type: vless\n")
 			sb.WriteString(fmt.Sprintf("    server: %s\n", serverAddr))
 			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
 			sb.WriteString(fmt.Sprintf("    uuid: %s\n", client.UUID))
+			sb.WriteString("    udp: true\n")
 			if flow != "" {
 				sb.WriteString(fmt.Sprintf("    flow: %s\n", flow))
 			}
@@ -267,6 +279,13 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 				if si.Fingerprint != "" {
 					sb.WriteString(fmt.Sprintf("    client-fingerprint: %s\n", si.Fingerprint))
 				}
+				if si.ALPN != "" {
+					sb.WriteString(fmt.Sprintf("    alpn:\n"))
+					for _, a := range strings.Split(si.ALPN, ",") {
+						sb.WriteString(fmt.Sprintf("      - %s\n", strings.TrimSpace(a)))
+					}
+				}
+				sb.WriteString("    skip-cert-verify: true\n")
 			} else if si.Security == "reality" {
 				sb.WriteString("    tls: true\n")
 				if si.SNI != "" {
@@ -293,12 +312,14 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 			sb.WriteString(fmt.Sprintf("    uuid: %s\n", client.UUID))
 			sb.WriteString("    alterId: 0\n")
 			sb.WriteString("    cipher: auto\n")
+			sb.WriteString("    udp: true\n")
 			sb.WriteString(fmt.Sprintf("    network: %s\n", si.Network))
 			if si.Security == "tls" {
 				sb.WriteString("    tls: true\n")
 				if si.SNI != "" {
 					sb.WriteString(fmt.Sprintf("    servername: %s\n", si.SNI))
 				}
+				sb.WriteString("    skip-cert-verify: true\n")
 			}
 			writeClashTransport(&sb, si)
 
@@ -308,12 +329,14 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 			sb.WriteString(fmt.Sprintf("    server: %s\n", serverAddr))
 			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
 			sb.WriteString(fmt.Sprintf("    password: %s\n", client.UUID))
+			sb.WriteString("    udp: true\n")
 			sb.WriteString(fmt.Sprintf("    network: %s\n", si.Network))
 			if si.Security == "tls" || si.Security == "" {
 				sb.WriteString("    tls: true\n")
 				if si.SNI != "" {
 					sb.WriteString(fmt.Sprintf("    sni: %s\n", si.SNI))
 				}
+				sb.WriteString("    skip-cert-verify: true\n")
 			}
 			writeClashTransport(&sb, si)
 
@@ -437,6 +460,7 @@ func buildVLESSLink(in model.Inbound, client model.Client, server string, si str
 	remark := in.Tag
 
 	params := url.Values{}
+	params.Set("encryption", "none")
 	params.Set("type", si.Network)
 	params.Set("security", si.Security)
 
