@@ -86,6 +86,7 @@ export default {
     hostname: 'Hostname',
     cpu: 'CPU',
     disk: 'Disk',
+    customizeCards: 'Customize Cards',
   },
 
   // Servers
@@ -179,6 +180,7 @@ export default {
       grpcService: 'gRPC Service Name',
       ssMethod: 'Encryption Method',
       ssPassword: 'Password',
+      addUser: 'Add User',
     },
     routing: {
       title: 'Routing Rules',
@@ -364,7 +366,8 @@ export default {
       useHttps: 'Use HTTPS with a valid certificate',
       restrictApi: 'Restrict API access by IP if possible',
       portLabel: 'Current Panel Port',
-      portWarning: 'You are using a commonly-scanned port. Consider changing to a random high port (10000+) for better security.',
+      portWarning: 'You are using a commonly-scanned port (80, 8080, etc.). Consider changing to a random high port (10000+) for better security.',
+      portCF: 'Using a Cloudflare-compatible HTTPS port. Good choice if your domain is proxied through Cloudflare.',
       portGood: 'Good — using a non-standard port.',
     },
     cloudflare: {

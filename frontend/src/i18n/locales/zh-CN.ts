@@ -81,6 +81,7 @@ export default {
     hostname: '主机名',
     cpu: 'CPU',
     disk: '磁盘',
+    customizeCards: '自定义卡片',
   },
 
   servers: {
@@ -172,6 +173,7 @@ export default {
       grpcService: 'gRPC 服务名',
       ssMethod: '加密方法',
       ssPassword: '密码',
+      addUser: '添加用户',
     },
     routing: {
       title: '路由规则',
@@ -355,7 +357,8 @@ export default {
       useHttps: '使用 HTTPS 和有效证书',
       restrictApi: '尽可能按 IP 限制 API 访问',
       portLabel: '当前面板端口',
-      portWarning: '您正在使用常被扫描的端口，建议更换为随机高端口（10000+）以提高安全性。',
+      portWarning: '您正在使用常被扫描的端口（80、8080 等），建议更换为随机高端口（10000+）以提高安全性。',
+      portCF: '正在使用 Cloudflare 兼容的 HTTPS 端口。如果域名已通过 Cloudflare 代理，这是推荐的选择。',
       portGood: '安全 — 正在使用非标准端口。',
     },
     cloudflare: {

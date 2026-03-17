@@ -1,10 +1,52 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import { ServerStackIcon, CpuChipIcon, ServerIcon, SignalIcon } from '@heroicons/vue/24/outline'
+import { ref, reactive, onMounted, onUnmounted, watch } from 'vue'
+import { ServerStackIcon, CpuChipIcon, ServerIcon, SignalIcon, Cog6ToothIcon, EyeIcon, EyeSlashIcon } from '@heroicons/vue/24/outline'
 import { getSystemMonitor } from '@/api/system'
 import { useI18n } from 'vue-i18n'
 
-useI18n()
+const { t } = useI18n()
+
+// ---- Card Customization ----
+const allCards = [
+  { id: 'cpu', icon: 'cpu', color: 'sky' },
+  { id: 'memory', icon: 'memory', color: 'primary' },
+  { id: 'disk', icon: 'disk', color: 'indigo' },
+  { id: 'network', icon: 'network', color: 'emerald' },
+  { id: 'systemInfo', icon: 'info', color: '' },
+  { id: 'quickStats', icon: 'stats', color: '' },
+]
+
+function loadCardVisibility(): Record<string, boolean> {
+  try {
+    const saved = localStorage.getItem('zenith_dashboard_cards')
+    if (saved) return JSON.parse(saved)
+  } catch { /* ignore */ }
+  // Default: all visible
+  return Object.fromEntries(allCards.map(c => [c.id, true]))
+}
+
+const cardVisibility = reactive(loadCardVisibility())
+const showCardSettings = ref(false)
+
+function toggleCard(id: string) {
+  cardVisibility[id] = !cardVisibility[id]
+}
+
+watch(cardVisibility, (val) => {
+  localStorage.setItem('zenith_dashboard_cards', JSON.stringify(val))
+}, { deep: true })
+
+function cardLabel(id: string): string {
+  const map: Record<string, string> = {
+    cpu: t('dashboard.cpuUsage'),
+    memory: t('dashboard.memory'),
+    disk: t('dashboard.diskUsage'),
+    network: t('dashboard.network'),
+    systemInfo: t('dashboard.systemInfo'),
+    quickStats: t('dashboard.quickStats'),
+  }
+  return map[id] || id
+}
 
 const loading = ref(true)
 const cpuPercent = ref(0)
@@ -94,9 +136,30 @@ onUnmounted(() => {
         <h1 class="text-3xl font-bold text-slate-800 tracking-tight">{{ $t('dashboard.title') }}</h1>
         <p class="text-slate-500 mt-1">{{ $t('dashboard.subtitle') }}</p>
       </div>
-      <div class="bg-white rounded-full px-4 py-2 shadow-sm border border-slate-100 flex items-center space-x-2">
-         <span class="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-         <span class="text-sm font-medium text-slate-600">{{ hostname || $t('common.loading') }}</span>
+      <div class="flex items-center space-x-3">
+        <div class="relative">
+          <button @click="showCardSettings = !showCardSettings" class="bg-white rounded-full p-2 shadow-sm border border-slate-100 text-slate-400 hover:text-slate-600 transition" :title="$t('dashboard.customizeCards')">
+            <Cog6ToothIcon class="h-5 w-5" />
+          </button>
+          <!-- Card Selector Dropdown -->
+          <div v-if="showCardSettings" class="absolute right-0 mt-2 w-56 bg-white rounded-xl shadow-lg border border-slate-100 py-2 z-30">
+            <p class="px-4 py-1.5 text-xs font-medium text-slate-400 uppercase">{{ $t('dashboard.customizeCards') }}</p>
+            <button
+              v-for="card in allCards"
+              :key="card.id"
+              @click="toggleCard(card.id)"
+              class="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-slate-50 transition"
+            >
+              <span class="text-slate-700">{{ cardLabel(card.id) }}</span>
+              <EyeIcon v-if="cardVisibility[card.id]" class="h-4 w-4 text-emerald-500" />
+              <EyeSlashIcon v-else class="h-4 w-4 text-slate-300" />
+            </button>
+          </div>
+        </div>
+        <div class="bg-white rounded-full px-4 py-2 shadow-sm border border-slate-100 flex items-center space-x-2">
+           <span class="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+           <span class="text-sm font-medium text-slate-600">{{ hostname || $t('common.loading') }}</span>
+        </div>
       </div>
     </div>
 
@@ -115,7 +178,7 @@ onUnmounted(() => {
 
     <!-- Stats Grid -->
     <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-      <div class="glass-panel p-6 rounded-2xl bg-white hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
+      <div v-if="cardVisibility.cpu" class="glass-panel p-6 rounded-2xl bg-white hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
         <div class="flex items-center">
           <div class="bg-sky-500/10 text-sky-500 p-3 rounded-xl mr-4">
             <CpuChipIcon class="h-6 w-6" />
@@ -127,7 +190,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="glass-panel p-6 rounded-2xl bg-white hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
+      <div v-if="cardVisibility.memory" class="glass-panel p-6 rounded-2xl bg-white hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
         <div class="flex items-center">
           <div class="bg-primary-500/10 text-primary-500 p-3 rounded-xl mr-4">
             <ServerStackIcon class="h-6 w-6" />
@@ -140,7 +203,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="glass-panel p-6 rounded-2xl bg-white hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
+      <div v-if="cardVisibility.disk" class="glass-panel p-6 rounded-2xl bg-white hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
         <div class="flex items-center">
           <div class="bg-indigo-500/10 text-indigo-500 p-3 rounded-xl mr-4">
             <ServerIcon class="h-6 w-6" />
@@ -152,7 +215,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="glass-panel p-6 rounded-2xl bg-white hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
+      <div v-if="cardVisibility.network" class="glass-panel p-6 rounded-2xl bg-white hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
         <div class="flex items-center">
           <div class="bg-emerald-500/10 text-emerald-500 p-3 rounded-xl mr-4">
             <SignalIcon class="h-6 w-6" />
@@ -168,7 +231,7 @@ onUnmounted(() => {
 
     <!-- Large Content Area -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div class="lg:col-span-2 glass-panel p-6 rounded-2xl bg-white min-h-[300px]">
+      <div v-if="cardVisibility.systemInfo" class="lg:col-span-2 glass-panel p-6 rounded-2xl bg-white min-h-[300px]">
         <h3 class="text-lg font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-3">{{ $t('dashboard.systemInfo') }}</h3>
         <div class="space-y-3">
           <div class="flex justify-between text-sm">
@@ -186,7 +249,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="glass-panel p-6 rounded-2xl bg-white min-h-[300px]">
+      <div v-if="cardVisibility.quickStats" :class="[cardVisibility.systemInfo ? '' : 'lg:col-span-3', 'glass-panel p-6 rounded-2xl bg-white min-h-[300px]']">
         <h3 class="text-lg font-semibold text-slate-800 mb-4 border-b border-slate-100 pb-3">{{ $t('dashboard.quickStats') }}</h3>
         <div class="space-y-4">
           <div>
