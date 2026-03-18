@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
@@ -33,7 +34,7 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 		"log": map[string]interface{}{
 			"loglevel": "warning",
 		},
-		"inbounds":  []interface{}{},
+		"inbounds": []interface{}{},
 		"outbounds": []interface{}{
 			map[string]interface{}{
 				"protocol": "freedom",
@@ -59,16 +60,7 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 	}
 
 	for _, r := range rules {
-		ruleMap := map[string]interface{}{
-			"type":        "field",
-			"outboundTag": r.OutboundTag,
-		}
-		if r.Domain != "" {
-			ruleMap["domain"] = []string{r.Domain}
-		}
-		if r.IP != "" {
-			ruleMap["ip"] = []string{r.IP}
-		}
+		ruleMap := buildXrayRoutingRule(r)
 		xrayConfig["routing"].(map[string]interface{})["rules"] = append(
 			xrayConfig["routing"].(map[string]interface{})["rules"].([]interface{}), ruleMap,
 		)
@@ -170,6 +162,37 @@ func buildXrayInbound(in model.Inbound) (map[string]interface{}, error) {
 	return entry, nil
 }
 
+func splitAndTrimCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func buildXrayRoutingRule(r model.RoutingRule) map[string]interface{} {
+	ruleMap := map[string]interface{}{
+		"type":        "field",
+		"outboundTag": r.OutboundTag,
+	}
+
+	if domains := splitAndTrimCSV(r.Domain); len(domains) > 0 {
+		ruleMap["domain"] = domains
+	}
+	if ips := splitAndTrimCSV(r.IP); len(ips) > 0 {
+		ruleMap["ip"] = ips
+	}
+	if ports := splitAndTrimCSV(r.Port); len(ports) > 0 {
+		ruleMap["port"] = strings.Join(ports, ",")
+	}
+
+	return ruleMap
+}
+
 func (x *XrayManager) Start() error {
 	if x.Status() {
 		return fmt.Errorf("xray is already running")
@@ -183,11 +206,18 @@ func (x *XrayManager) Start() error {
 		return err
 	}
 
-	x.cmd = exec.Command(x.BinaryPath, "run", "-c", x.ConfigPath)
-	return x.cmd.Start()
+	cmd := exec.Command(x.BinaryPath, "run", "-c", x.ConfigPath)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	x.setCmd(cmd)
+	x.trackCmd(cmd)
+	return nil
 }
 
 func (x *XrayManager) Restart() error {
-	x.Stop()
+	if err := x.Stop(); err != nil {
+		return err
+	}
 	return x.Start()
 }

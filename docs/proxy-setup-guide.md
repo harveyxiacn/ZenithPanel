@@ -219,8 +219,12 @@ For full control, click **Add Node** and configure manually:
 
 After creating inbounds, click the **Apply Configuration** button at the top of the Proxy Services page. This generates the Xray config and starts/restarts the Xray process.
 
-You can preview the generated config at **Proxy Services** > click the "Apply Configuration" button, or call the API:
+The page header will also show whether Xray is currently running, plus the number of enabled nodes, users, and routing rules.
+
+You can preview the generated config, inspect runtime status, or trigger apply through the API:
 ```
+GET /api/v1/proxy/status
+POST /api/v1/proxy/apply?engine=xray
 GET /api/v1/proxy/config/xray
 ```
 
@@ -234,7 +238,7 @@ Navigate to **Users & Subs** tab and click **Add Client**.
 |---------------|-------|
 | Email         | `user1@example.com` |
 | Select Inbound| Choose the inbound created in Step 1 |
-| Traffic Limit | `0` (unlimited) or bytes (e.g., `107374182400` for 100GB) |
+| Traffic Limit | `0` (unlimited) or total bytes (e.g., `107374182400` for 100GB) |
 
 The UUID is auto-generated. After creation:
 - Click **Sub Link** to copy the subscription URL.

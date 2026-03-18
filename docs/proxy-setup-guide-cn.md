@@ -219,8 +219,12 @@ docker run -d \
 
 创建入站节点后，点击代理服务页面顶部的 **Apply Configuration** 按钮。这将生成 Xray 配置文件并启动/重启 Xray 进程。
 
-你可以通过 API 预览生成的配置：
+页面头部还会显示 Xray 当前是否运行，以及启用中的节点、用户和路由规则数量。
+
+你可以通过 API 查看运行状态、触发应用或预览生成配置：
 ```
+GET /api/v1/proxy/status
+POST /api/v1/proxy/apply?engine=xray
 GET /api/v1/proxy/config/xray
 ```
 
@@ -234,7 +238,7 @@ GET /api/v1/proxy/config/xray
 |---------------|-------|
 | Email         | `user1@example.com` |
 | Select Inbound| 选择第一步创建的入站节点 |
-| Traffic Limit | `0`（无限制）或字节数（如 `107374182400` = 100GB） |
+| Traffic Limit | `0`（无限制）或总字节数（如 `107374182400` = 100GB） |
 
 UUID 会自动生成。创建后：
 - 点击 **Sub Link** 复制订阅链接。

@@ -7,8 +7,8 @@
     <a href="https://github.com/harveyxiacn/ZenithPanel/blob/main/LICENSE">
       <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License">
     </a>
-    <a href="https://github.com/harveyxiacn/ZenithPanel/actions/workflows/docker-build.yml">
-      <img src="https://github.com/harveyxiacn/ZenithPanel/actions/workflows/docker-build.yml/badge.svg" alt="Build Status">
+    <a href="https://github.com/harveyxiacn/ZenithPanel/actions/workflows/main.yml">
+      <img src="https://github.com/harveyxiacn/ZenithPanel/actions/workflows/main.yml/badge.svg" alt="Build Status">
     </a>
     <a href="https://github.com/harveyxiacn/ZenithPanel/pkgs/container/zenithpanel">
       <img src="https://img.shields.io/badge/Docker-ghcr.io-blue?logo=docker" alt="Docker Image">
@@ -44,6 +44,7 @@ Current server panels (like 1Panel, BT) focus on website hosting and general mai
 - **Inbound Management**: Full CRUD for Xray / Sing-box inbound configs with protocol selector and JSON settings editor.
 - **Client / User Management**: Add and remove clients per inbound, auto-generated UUID, subscription link copy-to-clipboard.
 - **Routing Rules**: Manage domain, geo, and outbound routing rules in a structured form.
+- **Proxy Runtime Status**: See whether Xray is running and how many enabled nodes, users, and routing rules are active.
 
 ### 🛡️ Security
 - **Secure Setup Wizard**: First-run generates a random one-time password and random URL entry point, invalidated after setup.
@@ -93,6 +94,8 @@ docker run -d \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/harveyxiacn/zenithpanel:main
 ```
+
+> For full proxy-node exposure, use `--network host` and follow the dedicated setup flow in [docs/proxy-setup-guide.md](docs/proxy-setup-guide.md).
 
 Then open `http://<your-server-ip>:8080` in your browser.
 

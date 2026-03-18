@@ -136,6 +136,13 @@ export default {
     title: '代理服务',
     subtitle: '配置 Xray/Sing-box 引擎、路由规则和用户订阅。',
     applyConfig: '应用配置',
+    status: {
+      xrayRunning: 'Xray 运行中',
+      xrayStopped: 'Xray 未运行',
+      nodes: '节点：{n}',
+      users: '用户：{n}',
+      rules: '规则：{n}',
+    },
     tabs: {
       inbounds: '入站节点',
       routing: '路由规则',

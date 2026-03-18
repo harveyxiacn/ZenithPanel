@@ -15,6 +15,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/core/setup"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/docker"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
@@ -23,7 +24,7 @@ import (
 func main() {
 	// Initialize the application
 	log.Println("ZenithPanel server starting...")
-	
+
 	// 1. Initialize Database (store in data/ so Docker volumes persist it across updates)
 	dbPath := "data/zenith.db"
 	os.MkdirAll("data", 0700)
@@ -60,6 +61,17 @@ func main() {
 	xm := proxy.NewXrayManager()
 	sm := proxy.NewSingboxManager()
 
+	var enabledInboundCount int64
+	if err := config.DB.Model(&model.Inbound{}).Where("enable = ?", true).Count(&enabledInboundCount).Error; err != nil {
+		log.Printf("Warning: Failed to count enabled inbounds: %v", err)
+	} else if enabledInboundCount > 0 {
+		if err := xm.Start(); err != nil {
+			log.Printf("Warning: Failed to auto-start Xray: %v", err)
+		} else {
+			log.Printf("Xray auto-started with %d enabled inbound(s)", enabledInboundCount)
+		}
+	}
+
 	// 5. Initialize Cron Scheduler
 	sched := scheduler.NewScheduler()
 	if err := sched.LoadFromDB(); err != nil {
@@ -72,7 +84,7 @@ func main() {
 
 	// 7. Setup API routes
 	api.SetupRoutes(r, dm, xm, sm, sched)
-	
+
 	// Resolve listen port (random on first run, persisted in DB)
 	port := config.EnsurePort()
 
@@ -138,4 +150,3 @@ func main() {
 
 	log.Println("Server exiting")
 }
-

@@ -143,6 +143,13 @@ export default {
     title: 'Proxy Services',
     subtitle: 'Configure Xray/Sing-box engine, routing rules, and user subscriptions.',
     applyConfig: 'Apply Configuration',
+    status: {
+      xrayRunning: 'Xray Running',
+      xrayStopped: 'Xray Stopped',
+      nodes: 'Nodes: {n}',
+      users: 'Users: {n}',
+      rules: 'Rules: {n}',
+    },
     tabs: {
       inbounds: 'Inbound Nodes',
       routing: 'Routing Rules',
