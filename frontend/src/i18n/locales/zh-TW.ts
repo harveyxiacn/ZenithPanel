@@ -17,6 +17,12 @@ export default {
     active: '活躍',
     configure: '設定',
     change: '變更',
+    errorOccurred: '操作失敗',
+    saved: '儲存成功',
+    deleted: '刪除成功',
+    created: '建立成功',
+    applied: '設定已套用',
+    areYouSure: '確定嗎？',
   },
 
   nav: {
@@ -133,9 +139,13 @@ export default {
   },
 
   proxy: {
+    confirmDeleteInbound: '此入站節點及其所有設定將被永久刪除。',
+    confirmDeleteClient: '此客戶端將失去代理存取權限。',
+    confirmDeleteRule: '此路由規則將被移除。',
     title: '代理服務',
     subtitle: '設定 Xray/Sing-box 引擎、路由規則和用戶訂閱。',
     applyConfig: '套用設定',
+    testConnection: '測試連線',
     status: {
       xrayRunning: 'Xray 運行中',
       xrayStopped: 'Xray 未運行',
@@ -275,10 +285,15 @@ export default {
       clashClients: 'Clash、Mihomo 或 Stash',
       downloadPng: '下載 PNG',
       copyLink: '複製連結',
+      v2rayHint: '適用於 v2rayNG (Android) / Shadowrocket (iOS) / V2RayN (Windows) / Nekoray (Linux)',
+      clashHint: '適用於 Clash Mi / Stash (iOS) / Clash Verge / Mihomo Party (桌面) / ClashMeta (Android)',
     },
   },
 
   security: {
+    confirmDisable2FA: '將關閉兩步驟驗證。',
+    confirmRemoveTLS: 'HTTPS將被停用，憑證將被移除。',
+    confirmRemoveSwap: 'Swap記憶體將被移除。',
     title: '安全與設定',
     subtitle: '設定面板安全、管理更新和自訂設定。',
     update: {

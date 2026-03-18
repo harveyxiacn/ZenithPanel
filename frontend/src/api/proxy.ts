@@ -60,3 +60,7 @@ export function applyProxyConfig(engine = 'xray') {
 export function getProxyStatus() {
   return apiClient.get('/v1/proxy/status')
 }
+
+export function testProxyConnection() {
+  return apiClient.post('/v1/proxy/test-connection')
+}

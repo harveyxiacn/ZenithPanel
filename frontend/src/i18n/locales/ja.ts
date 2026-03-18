@@ -17,6 +17,12 @@ export default {
     active: 'アクティブ',
     configure: '設定',
     change: '変更',
+    errorOccurred: '操作に失敗しました',
+    saved: '保存しました',
+    deleted: '削除しました',
+    created: '作成しました',
+    applied: '設定を適用しました',
+    areYouSure: 'よろしいですか？',
   },
 
   nav: {
@@ -133,9 +139,13 @@ export default {
   },
 
   proxy: {
+    confirmDeleteInbound: 'このインバウンドとすべての設定が完全に削除されます。',
+    confirmDeleteClient: 'このクライアントはプロキシへのアクセスを失います。',
+    confirmDeleteRule: 'このルーティングルールが削除されます。',
     title: 'プロキシサービス',
     subtitle: 'Xray/Sing-box エンジン、ルーティングルール、ユーザー購読を設定。',
     applyConfig: '設定を適用',
+    testConnection: '接続テスト',
     status: {
       xrayRunning: 'Xray 稼働中',
       xrayStopped: 'Xray 停止中',
@@ -275,10 +285,15 @@ export default {
       clashClients: 'Clash、Mihomo、または Stash',
       downloadPng: 'PNG ダウンロード',
       copyLink: 'リンクをコピー',
+      v2rayHint: 'v2rayNG (Android) / Shadowrocket (iOS) / V2RayN (Windows) / Nekoray (Linux)',
+      clashHint: 'Clash Mi / Stash (iOS) / Clash Verge / Mihomo Party (デスクトップ) / ClashMeta (Android)',
     },
   },
 
   security: {
+    confirmDisable2FA: '二要素認証が無効になります。',
+    confirmRemoveTLS: 'HTTPSが無効になり、証明書が削除されます。',
+    confirmRemoveSwap: 'Swapメモリが削除されます。',
     title: 'セキュリティと設定',
     subtitle: 'パネルセキュリティの設定、更新管理、カスタム設定。',
     update: {

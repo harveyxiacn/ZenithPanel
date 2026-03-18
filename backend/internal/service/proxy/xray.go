@@ -34,11 +34,21 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 		"log": map[string]interface{}{
 			"loglevel": "warning",
 		},
+		"dns": map[string]interface{}{
+			"servers": []interface{}{
+				"8.8.8.8",
+				"1.1.1.1",
+				"localhost",
+			},
+		},
 		"inbounds": []interface{}{},
 		"outbounds": []interface{}{
 			map[string]interface{}{
 				"protocol": "freedom",
 				"tag":      "direct",
+				"settings": map[string]interface{}{
+					"domainStrategy": "UseIPv4v6",
+				},
 			},
 			map[string]interface{}{
 				"protocol": "blackhole",
@@ -46,7 +56,7 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 			},
 		},
 		"routing": map[string]interface{}{
-			"domainStrategy": "AsIs",
+			"domainStrategy": "IPIfNonMatch",
 			"rules":          []interface{}{},
 		},
 	}
@@ -72,15 +82,19 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 // buildXrayInbound constructs a complete Xray inbound entry from the DB model,
 // parsing the Settings/Stream JSON and injecting clients from the Client table.
 func buildXrayInbound(in model.Inbound) (map[string]interface{}, error) {
-	listen := in.Listen
-	if listen == "" {
-		listen = "0.0.0.0"
-	}
 	entry := map[string]interface{}{
 		"tag":      in.Tag,
 		"port":     in.Port,
-		"listen":   listen,
 		"protocol": in.Protocol,
+		"sniffing": map[string]interface{}{
+			"enabled":      true,
+			"destOverride": []string{"http", "tls", "quic", "fakedns"},
+		},
+	}
+	// Only set listen if explicitly configured; omitting lets Xray listen
+	// on both IPv4 and IPv6 (dual-stack).
+	if in.Listen != "" {
+		entry["listen"] = in.Listen
 	}
 
 	// Parse settings JSON

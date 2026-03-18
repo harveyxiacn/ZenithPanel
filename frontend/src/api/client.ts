@@ -1,6 +1,5 @@
 import axios from 'axios';
 import { useAuthStore } from '@/store/auth';
-import router from '@/router';
 
 const api = axios.create({
   baseURL: '/api',
@@ -23,16 +22,25 @@ api.interceptors.request.use(
 
 // Response interceptor for API calls
 api.interceptors.response.use(
-  (response) => {
-    return response.data;
-  },
-  async (error) => {
-    const originalRequest = error.config;
-    if (error.response && error.response.status === 401 && !originalRequest._retry) {
-      originalRequest._retry = true;
+  (response: any) => response.data,
+  async (error: any) => {
+    const original = error.config;
+    if (error.response?.status === 401 && !original._retry) {
+      original._retry = true;
+      try {
+        const res: any = await api.post('/v1/auth/refresh');
+        if (res.token) {
+          const authStore = useAuthStore();
+          authStore.setToken(res.token);
+          original.headers['Authorization'] = `Bearer ${res.token}`;
+          return api(original);
+        }
+      } catch {
+        // refresh also failed, logout
+      }
       const authStore = useAuthStore();
       authStore.logout();
-      router.push('/login');
+      window.location.href = '/login';
     }
     return Promise.reject(error);
   }

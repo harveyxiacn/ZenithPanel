@@ -6,8 +6,12 @@ import { useAuthStore } from '@/store/auth'
 import { listContainers, startContainer, stopContainer, restartContainer, removeContainer } from '@/api/docker'
 import { listDirectory, readFile, writeFile } from '@/api/fs'
 import { listFirewallRules, addFirewallRule, deleteFirewallRule } from '@/api/firewall'
+import { useToast } from '../composables/useToast'
+import { useConfirm } from '@/composables/useConfirm'
 
 const { t } = useI18n()
+const toast = useToast()
+const { confirm: confirmDialog } = useConfirm()
 
 const activeTab = ref('terminal')
 const tabs = computed(() => [
@@ -73,6 +77,7 @@ async function connectTerminal() {
 
     window.addEventListener('resize', () => fitAddon.fit())
   } catch {
+    toast.error(t('common.errorOccurred'))
     termConnecting.value = false
   }
 }
@@ -93,7 +98,7 @@ async function fetchFiles(path: string) {
       files.value = res.data || []
       currentPath.value = path
     }
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
   filesLoading.value = false
 }
 
@@ -109,7 +114,7 @@ async function openItem(item: any) {
         editingFile.value = filePath
         fileContent.value = res.data || ''
       }
-    } catch { /* ignore */ }
+    } catch { toast.error(t('common.errorOccurred')) }
   }
 }
 
@@ -129,7 +134,8 @@ async function saveFile() {
   fileSaving.value = true
   try {
     await writeFile(editingFile.value, fileContent.value)
-  } catch { /* ignore */ }
+    toast.success(t('common.saved'))
+  } catch { toast.error(t('common.errorOccurred')) }
   fileSaving.value = false
 }
 
@@ -142,7 +148,7 @@ async function fetchContainers() {
   try {
     const res = await listContainers() as any
     if (res.code === 200) containers.value = res.data || []
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
   dockerLoading.value = false
 }
 
@@ -151,9 +157,17 @@ async function dockerAction(action: string, id: string) {
     if (action === 'start') await startContainer(id)
     else if (action === 'stop') await stopContainer(id)
     else if (action === 'restart') await restartContainer(id)
-    else if (action === 'remove' && confirm(t('servers.docker.confirmRemove'))) await removeContainer(id)
+    else if (action === 'remove') {
+      const ok = await confirmDialog({
+        title: t('common.confirm'),
+        message: t('servers.docker.confirmRemove'),
+        confirmText: t('common.delete'),
+        variant: 'danger',
+      })
+      if (ok) await removeContainer(id)
+    }
     await fetchContainers()
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 function containerStatus(state: string) {
@@ -173,7 +187,7 @@ async function fetchFwRules() {
   try {
     const res = await listFirewallRules() as any
     if (res.code === 200) fwRules.value = res.data || []
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
   fwLoading.value = false
 }
 
@@ -183,15 +197,23 @@ async function addFwRule() {
     showFwForm.value = false
     fwForm.value = { protocol: 'tcp', port: '', action: 'ACCEPT', source: '', comment: '' }
     await fetchFwRules()
-  } catch { /* ignore */ }
+    toast.success(t('common.created'))
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 async function deleteFwRule(num: string) {
-  if (!confirm(t('servers.firewall.confirmDelete'))) return
+  const ok = await confirmDialog({
+    title: t('common.confirm'),
+    message: t('servers.firewall.confirmDelete'),
+    confirmText: t('common.delete'),
+    variant: 'danger',
+  })
+  if (!ok) return
   try {
     await deleteFirewallRule(num)
     await fetchFwRules()
-  } catch { /* ignore */ }
+    toast.success(t('common.deleted'))
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 // ---- Lifecycle ----

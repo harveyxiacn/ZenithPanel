@@ -2,12 +2,17 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon } from '@heroicons/vue/24/outline'
-import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus } from '@/api/proxy'
+import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon, SignalIcon } from '@heroicons/vue/24/outline'
+import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, testProxyConnection } from '@/api/proxy'
 import apiClient from '@/api/client'
 import QRCode from 'qrcode'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToast } from '../composables/useToast'
+import SkeletonTable from '@/components/SkeletonTable.vue'
 
 const { t } = useI18n()
+const { confirm: confirmDialog } = useConfirm()
+const toast = useToast()
 const route = useRoute()
 const router = useRouter()
 const tabFromRoute = route.name === 'Users' ? 'users' : 'inbounds'
@@ -99,6 +104,22 @@ function setApplyFeedback(message: string, tone: 'success' | 'error') {
   applyMessageTone.value = tone
 }
 
+const testLoading = ref(false)
+const testResult = ref<any>(null)
+
+async function runConnectionTest() {
+  testLoading.value = true
+  testResult.value = null
+  try {
+    const res: any = await testProxyConnection()
+    testResult.value = res.data
+  } catch {
+    testResult.value = { success: false, error: 'Request failed' }
+  } finally {
+    testLoading.value = false
+  }
+}
+
 async function applyConfig() {
   applyLoading.value = true
   applyMessage.value = ''
@@ -109,6 +130,7 @@ async function applyConfig() {
   } catch (e: any) {
     const message = e?.response?.data?.msg || e?.message || 'Failed to apply Xray configuration'
     setApplyFeedback(message, 'error')
+    toast.error(message)
   }
   await loadProxyStatus()
   applyLoading.value = false
@@ -126,7 +148,7 @@ async function loadProxyStatus() {
         enabled_rules: Number(res.data.enabled_rules || 0),
       }
     }
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 function parseJsonToVisual(settingsStr: string, streamStr: string) {
@@ -230,7 +252,7 @@ async function regenRealityKeys() {
       vf.value.realityPublicKey = res.data.public_key
       vf.value.realityShortId = res.data.short_id
     }
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
   regenLoading.value = false
 }
 
@@ -239,7 +261,7 @@ async function fetchInbounds() {
   try {
     const res = await listInbounds() as any
     if (res.code === 200) inbounds.value = res.data || []
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
   inboundsLoading.value = false
 }
 
@@ -292,16 +314,24 @@ async function saveInbound() {
     showInboundForm.value = false
     await fetchInbounds()
     await loadProxyStatus()
-  } catch { /* ignore */ }
+    toast.success(t('common.saved'))
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 async function removeInbound(id: number) {
-  if (!confirm(t('proxy.inbounds.confirmDelete'))) return
+  const ok = await confirmDialog({
+    title: t('common.confirm'),
+    message: t('proxy.confirmDeleteInbound'),
+    confirmText: t('common.delete'),
+    variant: 'danger',
+  })
+  if (!ok) return
   try {
     await deleteInbound(id)
     await fetchInbounds()
     await loadProxyStatus()
-  } catch { /* ignore */ }
+    toast.success(t('common.deleted'))
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 // ---- Clients ----
@@ -316,7 +346,7 @@ async function fetchClients() {
   try {
     const res = await listClients() as any
     if (res.code === 200) clients.value = res.data || []
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
   clientsLoading.value = false
 }
 
@@ -327,16 +357,24 @@ async function saveClient() {
     clientForm.value = { email: '', inbound_id: 0, total: 0, enable: true }
     await fetchClients()
     await loadProxyStatus()
-  } catch { /* ignore */ }
+    toast.success(t('common.created'))
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 async function removeClient(id: number) {
-  if (!confirm(t('proxy.clients.confirmDelete'))) return
+  const ok = await confirmDialog({
+    title: t('common.confirm'),
+    message: t('proxy.confirmDeleteClient'),
+    confirmText: t('common.delete'),
+    variant: 'danger',
+  })
+  if (!ok) return
   try {
     await deleteClient(id)
     await fetchClients()
     await loadProxyStatus()
-  } catch { /* ignore */ }
+    toast.success(t('common.deleted'))
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 function addClientForInbound(inboundId: number) {
@@ -396,6 +434,7 @@ async function generateQr() {
     }
   } catch {
     qrDataUrl.value = ''
+    toast.error(t('common.errorOccurred'))
   }
 }
 
@@ -418,7 +457,7 @@ async function fetchRoutingRules() {
   try {
     const res = await listRoutingRules() as any
     if (res.code === 200) routingRules.value = res.data || []
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
   routingLoading.value = false
 }
 
@@ -429,16 +468,24 @@ async function saveRoutingRule() {
     routingForm.value = { rule_tag: '', domain: '', ip: '', port: '', outbound_tag: '', enable: true }
     await fetchRoutingRules()
     await loadProxyStatus()
-  } catch { /* ignore */ }
+    toast.success(t('common.created'))
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 async function removeRoutingRule(id: number) {
-  if (!confirm(t('proxy.routing.confirmDelete'))) return
+  const ok = await confirmDialog({
+    title: t('common.confirm'),
+    message: t('proxy.confirmDeleteRule'),
+    confirmText: t('common.delete'),
+    variant: 'danger',
+  })
+  if (!ok) return
   try {
     await deleteRoutingRule(id)
     await fetchRoutingRules()
     await loadProxyStatus()
-  } catch { /* ignore */ }
+    toast.success(t('common.deleted'))
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 // ---- Routing Presets ----
@@ -458,7 +505,8 @@ async function addRoutingPreset(preset: typeof routingPresets[0]) {
     await createRoutingRule({ rule_tag: preset.rule_tag, domain: preset.domain, ip: preset.ip, port: preset.port || '', outbound_tag: preset.outbound_tag, enable: true })
     await fetchRoutingRules()
     await loadProxyStatus()
-  } catch { /* ignore */ }
+    toast.success(t('common.created'))
+  } catch { toast.error(t('common.errorOccurred')) }
   addingPresets.value = false
 }
 
@@ -468,11 +516,16 @@ async function addRecommendedRules() {
   for (const preset of recommended) {
     try {
       await createRoutingRule({ rule_tag: preset.rule_tag, domain: preset.domain, ip: preset.ip, outbound_tag: preset.outbound_tag, enable: true })
-    } catch { /* ignore */ }
+    } catch { toast.error(t('common.errorOccurred')) }
   }
   await fetchRoutingRules()
   await loadProxyStatus()
+  toast.success(t('common.created'))
   addingPresets.value = false
+}
+
+const isPresetAdded = (ruleTag: string) => {
+  return routingRules.value.some((r: any) => r.rule_tag === ruleTag)
 }
 
 // ---- Helpers ----
@@ -608,6 +661,7 @@ async function proceedToReview() {
           cfg.shortId = res.data.short_id
         }
       } catch {
+        toast.warning(t('common.errorOccurred'))
         cfg.privateKey = ''
         cfg.publicKey = ''
         cfg.shortId = randomHex(4)
@@ -716,19 +770,20 @@ async function executeQuickSetup() {
       await createInbound(payload)
       quickSetupResults.value.push({ tag: cfg.tag, success: true })
     } catch (e: any) {
+      toast.error(e?.message || t('proxy.quickSetup.failed'))
       quickSetupResults.value.push({ tag: cfg.tag, success: false, error: e?.message || t('proxy.quickSetup.failed') })
     }
   }
 
   if (addDefaultRouting.value) {
-    try { await createRoutingRule({ rule_tag: 'Block Ads', domain: 'geosite:category-ads-all', outbound_tag: 'block', enable: true }) } catch {}
-    try { await createRoutingRule({ rule_tag: 'Block Private IP', ip: 'geoip:private', outbound_tag: 'block', enable: true }) } catch {}
+    try { await createRoutingRule({ rule_tag: 'Block Ads', domain: 'geosite:category-ads-all', outbound_tag: 'block', enable: true }) } catch { toast.error(t('common.errorOccurred')) }
+    try { await createRoutingRule({ rule_tag: 'Block Private IP', ip: 'geoip:private', outbound_tag: 'block', enable: true }) } catch { toast.error(t('common.errorOccurred')) }
   }
 
   if (addDefaultClient.value && selectedPresetIds.value.length > 0) {
     await fetchInbounds()
     if (inbounds.value.length > 0) {
-      try { await createClient({ email: defaultClientEmail.value, inbound_id: inbounds.value[0].id, enable: true }) } catch {}
+      try { await createClient({ email: defaultClientEmail.value, inbound_id: inbounds.value[0].id, enable: true }) } catch { toast.error(t('common.errorOccurred')) }
     }
   }
 
@@ -774,7 +829,24 @@ onMounted(() => {
           </span>
         </div>
       </div>
-      <div>
+      <div class="flex items-start gap-3">
+        <div class="flex flex-col items-end gap-2">
+          <button
+            @click="runConnectionTest"
+            :disabled="testLoading"
+            class="bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <SignalIcon class="w-4 h-4 mr-2" :class="testLoading ? 'animate-pulse' : ''" />
+            {{ $t('proxy.testConnection') || 'Test Connection' }}
+          </button>
+          <span v-if="testResult" :class="['text-xs px-3 py-1.5 rounded-lg inline-flex items-center gap-1',
+            testResult.success ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400']">
+            <template v-if="testResult.success">
+              IP: {{ testResult.ip }} ({{ testResult.country }})
+            </template>
+            <template v-else>{{ testResult.error }}</template>
+          </span>
+        </div>
         <button
           @click="applyConfig"
           :disabled="applyLoading"
@@ -1026,7 +1098,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-if="inboundsLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('common.loading') }}</div>
+        <div v-if="inboundsLoading" class="px-6 py-12"><SkeletonTable :rows="3" :cols="5" /></div>
 
         <table v-else class="min-w-full divide-y divide-slate-200">
           <thead class="bg-slate-50">
@@ -1098,13 +1170,14 @@ onMounted(() => {
               v-for="preset in routingPresets"
               :key="preset.id"
               @click="addRoutingPreset(preset)"
-              :disabled="addingPresets"
+              :disabled="addingPresets || isPresetAdded(preset.rule_tag)"
               class="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-full border transition disabled:opacity-50"
               :class="preset.outbound_tag === 'block'
                 ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
                 : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'"
             >
-              <PlusIcon class="h-3 w-3 mr-1" />
+              <CheckCircleIcon v-if="isPresetAdded(preset.rule_tag)" class="h-3 w-3 mr-1" />
+              <PlusIcon v-else class="h-3 w-3 mr-1" />
               {{ preset.rule_tag }}
               <span class="ml-1.5 text-[10px] opacity-60">→ {{ preset.outbound_tag }}</span>
             </button>
@@ -1122,7 +1195,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-if="routingLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('common.loading') }}</div>
+        <div v-if="routingLoading" class="px-6 py-12"><SkeletonTable :rows="3" :cols="5" /></div>
 
         <table v-else class="min-w-full divide-y divide-slate-200">
           <thead class="bg-slate-50">
@@ -1175,7 +1248,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-if="clientsLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('common.loading') }}</div>
+        <div v-if="clientsLoading" class="px-6 py-12"><SkeletonTable :rows="3" :cols="5" /></div>
 
         <table v-else class="min-w-full divide-y divide-slate-200">
           <thead class="bg-slate-50">
@@ -1531,6 +1604,15 @@ onMounted(() => {
               ]"
             >{{ $t('proxy.qr.clash') }}</button>
           </div>
+
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-2 text-center">
+            <template v-if="qrFormat === 'v2ray'">
+              {{ $t('proxy.qr.v2rayHint') }}
+            </template>
+            <template v-else>
+              {{ $t('proxy.qr.clashHint') }}
+            </template>
+          </p>
 
           <!-- QR Code Image -->
           <div class="flex justify-center mb-4">

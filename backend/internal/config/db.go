@@ -29,6 +29,7 @@ func InitDB(dbPath string) {
 		&model.Setting{},
 		&model.AdminUser{},
 		&model.CronJob{},
+		&model.AuditLog{},
 	)
 	if err != nil {
 		log.Fatalf("Failed to auto migrate database: %v", err)

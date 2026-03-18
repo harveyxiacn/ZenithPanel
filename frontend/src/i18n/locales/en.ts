@@ -18,6 +18,12 @@ export default {
     active: 'Active',
     configure: 'Configure',
     change: 'Change',
+    errorOccurred: 'An error occurred',
+    saved: 'Saved successfully',
+    deleted: 'Deleted successfully',
+    created: 'Created successfully',
+    applied: 'Configuration applied',
+    areYouSure: 'Are you sure?',
   },
 
   // Navigation / Layout
@@ -140,9 +146,13 @@ export default {
 
   // Proxy
   proxy: {
+    confirmDeleteInbound: 'This inbound and all its settings will be permanently deleted.',
+    confirmDeleteClient: 'This client will lose access to the proxy.',
+    confirmDeleteRule: 'This routing rule will be removed.',
     title: 'Proxy Services',
     subtitle: 'Configure Xray/Sing-box engine, routing rules, and user subscriptions.',
     applyConfig: 'Apply Configuration',
+    testConnection: 'Test Connection',
     status: {
       xrayRunning: 'Xray Running',
       xrayStopped: 'Xray Stopped',
@@ -283,11 +293,16 @@ export default {
       clashClients: 'Clash, Mihomo, or Stash',
       downloadPng: 'Download PNG',
       copyLink: 'Copy Link',
+      v2rayHint: 'v2rayNG (Android) / Shadowrocket (iOS) / V2RayN (Windows) / Nekoray (Linux)',
+      clashHint: 'Clash Mi / Stash (iOS) / Clash Verge / Mihomo Party (Desktop) / ClashMeta (Android)',
     },
   },
 
   // Security
   security: {
+    confirmDisable2FA: 'Two-factor authentication will be disabled.',
+    confirmRemoveTLS: 'HTTPS will be disabled and certificates removed.',
+    confirmRemoveSwap: 'Swap memory will be removed.',
     title: 'Security & Settings',
     subtitle: 'Configure panel security, manage updates, and customize settings.',
     update: {
