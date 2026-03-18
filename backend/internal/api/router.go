@@ -745,8 +745,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create inbound"})
 				return
 			}
-			recordAudit(c, "inbound.create", inbound.Tag)
 			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": inbound})
+			recordAudit(c, "inbound.create", inbound.Tag)
 		})
 
 		authGroup.PUT("/inbounds/:id", func(c *gin.Context) {
@@ -767,8 +767,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update inbound"})
 				return
 			}
-			recordAudit(c, "inbound.update", inbound.Tag)
 			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": inbound})
+			recordAudit(c, "inbound.update", inbound.Tag)
 		})
 
 		authGroup.DELETE("/inbounds/:id", func(c *gin.Context) {
@@ -780,8 +780,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete inbound"})
 				return
 			}
-			recordAudit(c, "inbound.delete", fmt.Sprintf("id=%d", id))
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
+			recordAudit(c, "inbound.delete", fmt.Sprintf("id=%d", id))
 		})
 
 		// ======================================
@@ -825,8 +825,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create client"})
 				return
 			}
-			recordAudit(c, "client.create", client.Email)
 			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": client})
+			recordAudit(c, "client.create", client.Email)
 		})
 
 		authGroup.PUT("/clients/:id", func(c *gin.Context) {
@@ -871,8 +871,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete client"})
 				return
 			}
-			recordAudit(c, "client.delete", fmt.Sprintf("id=%d", id))
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
+			recordAudit(c, "client.delete", fmt.Sprintf("id=%d", id))
 		})
 
 		// ======================================
@@ -1093,11 +1093,11 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 						})
 						return
 					}
-					recordAudit(c, "proxy.apply", engine)
 					c.JSON(http.StatusOK, gin.H{
 						"code": 200,
 						"msg":  "Xray configuration applied successfully",
 					})
+					recordAudit(c, "proxy.apply", engine)
 				case "singbox", "sing-box":
 					if err := sm.Restart(); err != nil {
 						log.Printf("Sing-box apply error: %v", err)
@@ -1107,11 +1107,11 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 						})
 						return
 					}
-					recordAudit(c, "proxy.apply", engine)
 					c.JSON(http.StatusOK, gin.H{
 						"code": 200,
 						"msg":  "Sing-box configuration applied successfully",
 					})
+					recordAudit(c, "proxy.apply", engine)
 				default:
 					c.JSON(http.StatusBadRequest, gin.H{
 						"code": 400,
@@ -1251,8 +1251,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to update password"})
 				return
 			}
-			recordAudit(c, "admin.password_change", "")
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Password changed successfully"})
+			recordAudit(c, "admin.password_change", "")
 		})
 
 		// ======================================
@@ -1448,8 +1448,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			admin.TOTPEnabled = true
 			config.DB.Save(&admin)
-			recordAudit(c, "admin.2fa_enable", "")
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "2FA enabled successfully"})
+			recordAudit(c, "admin.2fa_enable", "")
 		})
 
 		authGroup.POST("/admin/2fa/disable", func(c *gin.Context) {
@@ -1474,8 +1474,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			admin.TOTPSecret = ""
 			admin.RecoveryCodes = ""
 			config.DB.Save(&admin)
-			recordAudit(c, "admin.2fa_disable", "")
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "2FA disabled"})
+			recordAudit(c, "admin.2fa_disable", "")
 		})
 
 		// ======================================
