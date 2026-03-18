@@ -62,10 +62,10 @@ const handleLogin = async () => {
 </script>
 
 <template>
-  <div class="min-h-screen flex items-center justify-center bg-slate-50 p-4">
-    <div class="glass-panel w-full max-w-md p-8 rounded-2xl shadow-xl bg-white">
+  <div class="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 p-4">
+    <div class="glass-panel w-full max-w-md p-8 rounded-2xl shadow-xl bg-white dark:bg-slate-800">
       <div class="text-center mb-8">
-        <h1 class="text-2xl font-bold text-slate-800 tracking-tight">{{ $t('login.title') }}</h1>
+        <h1 class="text-2xl font-bold text-slate-800 dark:text-white tracking-tight">{{ $t('login.title') }}</h1>
       </div>
 
       <!-- Error Alert -->
@@ -76,7 +76,7 @@ const handleLogin = async () => {
 
       <form @submit.prevent="handleLogin" class="space-y-4">
         <div>
-          <label class="block text-sm font-medium text-slate-600 mb-1">{{ $t('login.username') }}</label>
+          <label class="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">{{ $t('login.username') }}</label>
           <input
             type="text"
             v-model="username"
@@ -86,7 +86,7 @@ const handleLogin = async () => {
           />
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-600 mb-1">{{ $t('login.password') }}</label>
+          <label class="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">{{ $t('login.password') }}</label>
           <input
             type="password"
             v-model="password"
@@ -98,7 +98,7 @@ const handleLogin = async () => {
 
         <!-- TOTP Input (shown after password verified) -->
         <div v-if="showTOTP" class="pt-2">
-          <label class="block text-sm font-medium text-slate-600 mb-1">{{ $t('login.totpCode') }}</label>
+          <label class="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1">{{ $t('login.totpCode') }}</label>
           <input
             type="text"
             v-model="totpCode"

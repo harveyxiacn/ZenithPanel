@@ -13,8 +13,13 @@ import {
   ArrowLeftOnRectangleIcon,
   Bars3Icon,
   XMarkIcon,
-  LanguageIcon
+  LanguageIcon,
+  SunIcon,
+  MoonIcon
 } from '@heroicons/vue/24/outline'
+import { useDarkMode } from '@/composables/useDarkMode'
+
+const { isDark, toggle: toggleDark } = useDarkMode()
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -50,7 +55,7 @@ const handleNavClick = () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-slate-50 flex">
+  <div class="min-h-screen bg-slate-50 dark:bg-slate-900 flex">
     <!-- Mobile overlay -->
     <div
       v-if="sidebarOpen"
@@ -95,6 +100,16 @@ const handleNavClick = () => {
       </div>
 
       <div class="p-4 border-t border-slate-800 space-y-1">
+        <!-- Dark Mode Toggle -->
+        <button
+          @click="toggleDark()"
+          class="flex w-full items-center px-4 py-2.5 text-sm font-medium text-slate-400 rounded-xl hover:bg-slate-800 hover:text-white transition-all duration-300"
+        >
+          <SunIcon v-if="isDark" class="mr-3 h-5 w-5" />
+          <MoonIcon v-else class="mr-3 h-5 w-5" />
+          {{ isDark ? 'Light Mode' : 'Dark Mode' }}
+        </button>
+
         <!-- Language Switcher -->
         <div class="relative">
           <button
@@ -135,14 +150,14 @@ const handleNavClick = () => {
     <!-- Main Content -->
     <div class="flex-1 flex flex-col overflow-hidden">
       <!-- Mobile top bar -->
-      <div class="md:hidden h-16 bg-white border-b border-slate-200 flex items-center px-4">
-        <button @click="sidebarOpen = true" class="text-slate-600 hover:text-slate-900">
+      <div class="md:hidden h-16 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 flex items-center px-4">
+        <button @click="sidebarOpen = true" class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white">
           <Bars3Icon class="h-6 w-6" />
         </button>
-        <span class="ml-4 text-lg font-bold text-slate-800">ZENITH<span class="text-primary-500">PANEL</span></span>
+        <span class="ml-4 text-lg font-bold text-slate-800 dark:text-white">ZENITH<span class="text-primary-500">PANEL</span></span>
       </div>
 
-      <main class="flex-1 overflow-x-hidden overflow-y-auto bg-slate-50 p-4 md:p-8">
+      <main class="flex-1 overflow-x-hidden overflow-y-auto bg-slate-50 dark:bg-slate-900 p-4 md:p-8">
         <div class="max-w-7xl mx-auto">
           <router-view v-slot="{ Component }">
             <transition name="fade" mode="out-in">

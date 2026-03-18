@@ -3,8 +3,12 @@ import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon, GlobeAltIcon, Cog6ToothIcon, BoltIcon, CpuChipIcon, AdjustmentsHorizontalIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup } from '@/api/system'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToast } from '../composables/useToast'
 
 const { t } = useI18n()
+const { confirm: confirmDialog } = useConfirm()
+const toast = useToast()
 
 // ---- Change Password ----
 const showPasswordForm = ref(false)
@@ -42,6 +46,7 @@ async function onChangePassword() {
       newPassword.value = ''
       confirmNewPassword.value = ''
       showPasswordForm.value = false
+      toast.success(t('common.saved'))
     } else {
       passwordMsg.value = res.msg || 'Failed'
       passwordMsgType.value = 'error'
@@ -49,6 +54,7 @@ async function onChangePassword() {
   } catch (e: any) {
     passwordMsg.value = e?.response?.data?.msg || 'Failed to change password'
     passwordMsgType.value = 'error'
+    toast.error(passwordMsg.value)
   }
   passwordChanging.value = false
 }
@@ -70,7 +76,7 @@ async function load2FAStatus() {
   try {
     const res = await get2FAStatus() as any
     if (res.code === 200) twoFAEnabled.value = res.data.enabled
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 async function onSetup2FA() {
@@ -88,6 +94,7 @@ async function onSetup2FA() {
     }
   } catch (e: any) {
     twoFAMsg.value = e?.response?.data?.msg || 'Failed'
+    toast.error(twoFAMsg.value)
   }
   twoFALoading.value = false
 }
@@ -106,6 +113,7 @@ async function onVerify2FA() {
     }
   } catch (e: any) {
     twoFAMsg.value = e?.response?.data?.msg || 'Invalid code'
+    toast.error(twoFAMsg.value)
   }
   twoFALoading.value = false
 }
@@ -126,6 +134,7 @@ async function onDisable2FA() {
     }
   } catch (e: any) {
     twoFAMsg.value = e?.response?.data?.msg || 'Failed'
+    toast.error(twoFAMsg.value)
   }
   twoFALoading.value = false
 }
@@ -149,7 +158,7 @@ async function loadTLSStatus() {
   try {
     const res = await getTLSStatus() as any
     if (res.code === 200) tlsEnabled.value = res.data.enabled
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 async function onUploadTLS() {
@@ -169,6 +178,7 @@ async function onUploadTLS() {
       tlsMsg.value = res.msg
       tlsMsgType.value = 'success'
       tlsEnabled.value = true
+      toast.success(t('common.saved'))
     } else {
       tlsMsg.value = res.msg || 'Upload failed'
       tlsMsgType.value = 'error'
@@ -176,12 +186,19 @@ async function onUploadTLS() {
   } catch (e: any) {
     tlsMsg.value = e?.response?.data?.msg || 'Upload failed'
     tlsMsgType.value = 'error'
+    toast.error(tlsMsg.value)
   }
   tlsLoading.value = false
 }
 
 async function onRemoveTLS() {
-  if (!confirm(t('security.tls.confirmRemove'))) return
+  const ok = await confirmDialog({
+    title: t('common.confirm'),
+    message: t('security.confirmRemoveTLS'),
+    confirmText: t('common.confirm'),
+    variant: 'danger',
+  })
+  if (!ok) return
   tlsLoading.value = true
   try {
     const res = await removeTLS() as any
@@ -189,10 +206,12 @@ async function onRemoveTLS() {
       tlsEnabled.value = false
       tlsMsg.value = res.msg
       tlsMsgType.value = 'success'
+      toast.success(t('common.deleted'))
     }
   } catch (e: any) {
     tlsMsg.value = e?.response?.data?.msg || 'Failed'
     tlsMsgType.value = 'error'
+    toast.error(tlsMsg.value)
   }
   tlsLoading.value = false
 }
@@ -212,7 +231,7 @@ async function loadAccessConfig() {
       accessPort.value = res.data.port || ''
       accessOriginalPort.value = res.data.port || ''
     }
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 const accessRestarting = ref(false)
@@ -229,6 +248,7 @@ async function onSaveAccess() {
     if (res.code === 200) {
       accessMsg.value = res.msg
       accessMsgType.value = 'success'
+      toast.success(t('common.saved'))
     } else {
       accessMsg.value = res.msg || 'Failed'
       accessMsgType.value = 'error'
@@ -236,6 +256,7 @@ async function onSaveAccess() {
   } catch (e: any) {
     accessMsg.value = e?.response?.data?.msg || 'Failed to save'
     accessMsgType.value = 'error'
+    toast.error(accessMsg.value)
   }
   accessLoading.value = false
 }
@@ -245,7 +266,13 @@ const accessNeedsRestart = computed(() => accessPort.value !== accessOriginalPor
 async function onRestartPanel() {
   const newPort = accessPort.value
   const newPath = accessPath.value
-  if (!confirm(t('security.access.confirmRestart'))) return
+  const ok = await confirmDialog({
+    title: t('common.confirm'),
+    message: t('security.access.confirmRestart'),
+    confirmText: t('common.confirm'),
+    variant: 'warning',
+  })
+  if (!ok) return
   accessRestarting.value = true
   accessMsg.value = ''
   try {
@@ -280,6 +307,7 @@ async function onRestartPanel() {
   } catch (e: any) {
     accessMsg.value = e?.response?.data?.msg || 'Restart failed'
     accessMsgType.value = 'error'
+    toast.error(accessMsg.value)
     accessRestarting.value = false
   }
 }
@@ -298,7 +326,7 @@ async function loadCFStatus() {
       cfEnabled.value = res.data.enabled
       cfPort.value = res.data.port
     }
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 async function onToggleCF() {
@@ -312,6 +340,7 @@ async function onToggleCF() {
       cfEnabled.value = !cfEnabled.value
       cfMsg.value = res.msg
       cfMsgType.value = 'success'
+      toast.success(t('common.applied'))
     } else {
       cfMsg.value = res.msg || 'Failed'
       cfMsgType.value = 'error'
@@ -319,6 +348,7 @@ async function onToggleCF() {
   } catch (e: any) {
     cfMsg.value = e?.response?.data?.msg || 'Failed'
     cfMsgType.value = 'error'
+    toast.error(cfMsg.value)
   }
   cfLoading.value = false
 }
@@ -347,12 +377,19 @@ async function onCheckUpdate() {
     }
   } catch (e: any) {
     updateError.value = e?.response?.data?.msg || 'Failed to check for updates'
+    toast.error(updateError.value)
   }
   updateChecking.value = false
 }
 
 async function onApplyUpdate() {
-  if (!confirm(t('security.update.confirmRestart'))) return
+  const ok = await confirmDialog({
+    title: t('common.confirm'),
+    message: t('security.update.confirmRestart'),
+    confirmText: t('common.confirm'),
+    variant: 'warning',
+  })
+  if (!ok) return
   updateApplying.value = true
   updateError.value = ''
   try {
@@ -379,6 +416,7 @@ async function onApplyUpdate() {
     }
   } catch (e: any) {
     updateError.value = e?.response?.data?.msg || 'Update request failed'
+    toast.error(updateError.value)
     updateApplying.value = false
   }
 }
@@ -399,7 +437,7 @@ async function loadBBRStatus() {
       bbrCurrent.value = res.data.current
       bbrAvailable.value = res.data.available
     }
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 async function onToggleBBR() {
@@ -412,6 +450,7 @@ async function onToggleBBR() {
     if (res.code === 200) {
       bbrMsg.value = res.msg
       bbrMsgType.value = 'success'
+      toast.success(t('common.applied'))
       await loadBBRStatus()
     } else {
       bbrMsg.value = res.msg || 'Failed'
@@ -420,6 +459,7 @@ async function onToggleBBR() {
   } catch (e: any) {
     bbrMsg.value = e?.response?.data?.msg || 'Failed'
     bbrMsgType.value = 'error'
+    toast.error(bbrMsg.value)
   }
   bbrLoading.value = false
 }
@@ -443,7 +483,7 @@ async function loadSwapStatus() {
       swapUsedMB.value = res.data.used_mb
       swapFilePath.value = res.data.file_path
     }
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 async function onCreateSwap() {
@@ -454,6 +494,7 @@ async function onCreateSwap() {
     if (res.code === 200) {
       swapMsg.value = res.msg
       swapMsgType.value = 'success'
+      toast.success(t('common.created'))
       await loadSwapStatus()
     } else {
       swapMsg.value = res.msg || 'Failed'
@@ -462,12 +503,19 @@ async function onCreateSwap() {
   } catch (e: any) {
     swapMsg.value = e?.response?.data?.msg || 'Failed'
     swapMsgType.value = 'error'
+    toast.error(swapMsg.value)
   }
   swapLoading.value = false
 }
 
 async function onRemoveSwap() {
-  if (!confirm(t('optimize.swap.confirmRemove'))) return
+  const ok = await confirmDialog({
+    title: t('common.confirm'),
+    message: t('security.confirmRemoveSwap'),
+    confirmText: t('common.confirm'),
+    variant: 'warning',
+  })
+  if (!ok) return
   swapLoading.value = true
   swapMsg.value = ''
   try {
@@ -475,6 +523,7 @@ async function onRemoveSwap() {
     if (res.code === 200) {
       swapMsg.value = res.msg
       swapMsgType.value = 'success'
+      toast.success(t('common.deleted'))
       await loadSwapStatus()
     } else {
       swapMsg.value = res.msg || 'Failed'
@@ -483,6 +532,7 @@ async function onRemoveSwap() {
   } catch (e: any) {
     swapMsg.value = e?.response?.data?.msg || 'Failed'
     swapMsgType.value = 'error'
+    toast.error(swapMsg.value)
   }
   swapLoading.value = false
 }
@@ -499,7 +549,7 @@ async function loadSysctlStatus() {
     if (res.code === 200) {
       sysctlEnabled.value = res.data.enabled
     }
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 async function onToggleSysctl() {
@@ -512,6 +562,7 @@ async function onToggleSysctl() {
     if (res.code === 200) {
       sysctlMsg.value = res.msg
       sysctlMsgType.value = 'success'
+      toast.success(t('common.applied'))
       await loadSysctlStatus()
     } else {
       sysctlMsg.value = res.msg || 'Failed'
@@ -520,6 +571,7 @@ async function onToggleSysctl() {
   } catch (e: any) {
     sysctlMsg.value = e?.response?.data?.msg || 'Failed'
     sysctlMsgType.value = 'error'
+    toast.error(sysctlMsg.value)
   }
   sysctlLoading.value = false
 }
@@ -538,12 +590,18 @@ async function onScanCleanup() {
   try {
     const res = await getCleanupInfo() as any
     if (res.code === 200) cleanupInfo.value = res.data
-  } catch { /* ignore */ }
+  } catch { toast.error(t('common.errorOccurred')) }
   cleanupScanning.value = false
 }
 
 async function onRunCleanup() {
-  if (!confirm(t('optimize.cleanup.confirmRun'))) return
+  const ok = await confirmDialog({
+    title: t('common.confirm'),
+    message: t('optimize.cleanup.confirmRun'),
+    confirmText: t('common.confirm'),
+    variant: 'warning',
+  })
+  if (!ok) return
   cleanupRunning.value = true
   cleanupMsg.value = ''
   try {
@@ -552,6 +610,7 @@ async function onRunCleanup() {
       cleanupResult.value = res.data
       cleanupMsg.value = res.msg
       cleanupMsgType.value = 'success'
+      toast.success(t('common.applied'))
       cleanupInfo.value = null
     } else {
       cleanupMsg.value = res.msg || 'Failed'
@@ -560,6 +619,7 @@ async function onRunCleanup() {
   } catch (e: any) {
     cleanupMsg.value = e?.response?.data?.msg || 'Failed'
     cleanupMsgType.value = 'error'
+    toast.error(cleanupMsg.value)
   }
   cleanupRunning.value = false
 }

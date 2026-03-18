@@ -16,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -70,6 +71,19 @@ func getIPLimiter(ip string) *rate.Limiter {
 	ipRateLimiters.m[ip] = limiter
 	ipRateLimiters.Unlock()
 	return limiter
+}
+
+// subRateLimiters provides per-IP rate limiting for subscription endpoints.
+// Burst 3, refill 1 every 6 seconds (~10/min per IP).
+var subRateLimiters = &sync.Map{}
+
+func getSubLimiter(ip string) *rate.Limiter {
+	if v, ok := subRateLimiters.Load(ip); ok {
+		return v.(*rate.Limiter)
+	}
+	l := rate.NewLimiter(rate.Every(6*time.Second), 3)
+	subRateLimiters.Store(ip, l)
+	return l
 }
 
 // loginFailures tracks consecutive login failures per IP for lockout.
@@ -515,7 +529,14 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		})
 
 		// Subscription endpoint (Unprotected, uses UUID parameter)
-		apiGroup.GET("/sub/:uuid", sub.GenerateSubscription)
+		apiGroup.GET("/sub/:uuid", func(c *gin.Context) {
+			ip := c.ClientIP()
+			if !getSubLimiter(ip).Allow() {
+				c.Status(429)
+				return
+			}
+			sub.GenerateSubscription(c)
+		})
 	}
 
 	// ======================================
@@ -724,6 +745,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create inbound"})
 				return
 			}
+			recordAudit(c, "inbound.create", inbound.Tag)
 			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": inbound})
 		})
 
@@ -745,6 +767,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update inbound"})
 				return
 			}
+			recordAudit(c, "inbound.update", inbound.Tag)
 			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": inbound})
 		})
 
@@ -757,6 +780,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete inbound"})
 				return
 			}
+			recordAudit(c, "inbound.delete", fmt.Sprintf("id=%d", id))
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
 		})
 
@@ -801,6 +825,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create client"})
 				return
 			}
+			recordAudit(c, "client.create", client.Email)
 			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": client})
 		})
 
@@ -846,6 +871,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete client"})
 				return
 			}
+			recordAudit(c, "client.delete", fmt.Sprintf("id=%d", id))
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
 		})
 
@@ -1067,6 +1093,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 						})
 						return
 					}
+					recordAudit(c, "proxy.apply", engine)
 					c.JSON(http.StatusOK, gin.H{
 						"code": 200,
 						"msg":  "Xray configuration applied successfully",
@@ -1080,6 +1107,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 						})
 						return
 					}
+					recordAudit(c, "proxy.apply", engine)
 					c.JSON(http.StatusOK, gin.H{
 						"code": 200,
 						"msg":  "Sing-box configuration applied successfully",
@@ -1153,6 +1181,37 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					},
 				})
 			})
+
+			// Test outbound connectivity and show exit IP
+			proxyGroup.POST("/test-connection", func(c *gin.Context) {
+				if !xm.Status() {
+					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": false, "error": "Xray is not running"}})
+					return
+				}
+
+				ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+				defer cancel()
+
+				cmd := exec.CommandContext(ctx, "curl", "-s", "--max-time", "8",
+					"--connect-timeout", "5", "https://ipinfo.io/json")
+				output, err := cmd.Output()
+				if err != nil {
+					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": false, "error": "Connection failed"}})
+					return
+				}
+
+				var result map[string]interface{}
+				if err := json.Unmarshal(output, &result); err != nil {
+					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": true, "ip": string(output)}})
+					return
+				}
+				c.JSON(200, gin.H{"code": 200, "data": gin.H{
+					"success": true,
+					"ip":      result["ip"],
+					"country": result["country"],
+					"org":     result["org"],
+				}})
+			})
 		}
 
 		// ======================================
@@ -1192,6 +1251,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to update password"})
 				return
 			}
+			recordAudit(c, "admin.password_change", "")
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Password changed successfully"})
 		})
 
@@ -1388,6 +1448,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			admin.TOTPEnabled = true
 			config.DB.Save(&admin)
+			recordAudit(c, "admin.2fa_enable", "")
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "2FA enabled successfully"})
 		})
 
@@ -1413,6 +1474,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			admin.TOTPSecret = ""
 			admin.RecoveryCodes = ""
 			config.DB.Save(&admin)
+			recordAudit(c, "admin.2fa_disable", "")
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "2FA disabled"})
 		})
 
@@ -1535,6 +1597,45 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			config.SetSetting("tls_cert_path", "")
 			config.SetSetting("tls_key_path", "")
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "TLS disabled. Restart panel to apply."})
+		})
+
+		// ======================================
+		// Audit Log
+		// ======================================
+		authGroup.GET("/admin/audit-log", func(c *gin.Context) {
+			limit := 50
+			offset := 0
+			if v := c.Query("limit"); v != "" {
+				fmt.Sscanf(v, "%d", &limit)
+			}
+			if v := c.Query("offset"); v != "" {
+				fmt.Sscanf(v, "%d", &offset)
+			}
+			if limit > 200 {
+				limit = 200
+			}
+			var logs []model.AuditLog
+			var total int64
+			config.DB.Model(&model.AuditLog{}).Count(&total)
+			config.DB.Order("created_at desc").Limit(limit).Offset(offset).Find(&logs)
+			c.JSON(200, gin.H{"code": 200, "data": logs, "total": total})
+		})
+
+		// ======================================
+		// JWT Refresh
+		// ======================================
+		authGroup.POST("/auth/refresh", func(c *gin.Context) {
+			username, _ := c.Get("username")
+			userID, _ := c.Get("user_id")
+			usernameStr, _ := username.(string)
+			userIDStr, _ := userID.(string)
+
+			token, err := jwtutil.GenerateToken(userIDStr, usernameStr, 24*time.Hour)
+			if err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": "Token generation failed"})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "token": token})
 		})
 	}
 

@@ -144,15 +144,15 @@ func GenerateSubscription(c *gin.Context) {
 
 	var client model.Client
 	if err := config.DB.Where("uuid = ?", uuid).First(&client).Error; err != nil {
-		c.String(404, "User not found")
+		c.Status(404)
 		return
 	}
 	if !client.Enable {
-		c.String(403, "Account disabled")
+		c.Status(404)
 		return
 	}
 	if client.ExpiryTime > 0 && time.Now().Unix() > client.ExpiryTime {
-		c.String(403, "Account expired")
+		c.Status(404)
 		return
 	}
 

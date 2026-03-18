@@ -4,29 +4,25 @@
 
 @layer base {
   body {
-    @apply bg-slate-50 text-slate-900 antialiased;
+    @apply bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 antialiased;
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
   }
 }
 
 @layer components {
   .glass-panel {
-    @apply bg-white/70 backdrop-blur-lg border border-white/20 shadow-xl;
+    @apply bg-white/70 dark:bg-slate-800/70 backdrop-blur-lg border border-white/20 dark:border-slate-700/50 shadow-xl dark:shadow-2xl;
   }
-  
-  .dark .glass-panel {
-    @apply bg-slate-900/70 backdrop-blur-lg border border-slate-700/50 shadow-2xl;
-  }
-  
+
   .btn-primary {
     @apply relative overflow-hidden bg-primary-600 text-white font-medium py-2.5 px-4 rounded-xl transition-all duration-300 hover:bg-primary-500 hover:shadow-lg hover:shadow-primary-500/30 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
   }
-  
+
   .btn-secondary {
-    @apply bg-white text-slate-700 font-medium py-2.5 px-4 rounded-xl border border-slate-200 transition-all hover:bg-slate-50 hover:border-slate-300 active:scale-95 text-center;
+    @apply bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-medium py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-600 transition-all hover:bg-slate-50 dark:hover:bg-slate-700 hover:border-slate-300 active:scale-95 text-center;
   }
-  
+
   .input-field {
-    @apply w-full bg-slate-50 border border-slate-200 text-slate-900 rounded-xl px-4 py-3 outline-none transition-all focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 focus:bg-white;
+    @apply w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-600 text-slate-900 dark:text-slate-100 rounded-xl px-4 py-3 outline-none transition-all focus:border-primary-500 focus:ring-4 focus:ring-primary-500/10 focus:bg-white dark:focus:bg-slate-700;
   }
 }

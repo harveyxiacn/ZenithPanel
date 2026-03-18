@@ -36,3 +36,13 @@ type CronJob struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// AuditLog records admin operations for security auditing
+type AuditLog struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	Username  string    `json:"username"`
+	Action    string    `json:"action"`
+	Detail    string    `json:"detail"`
+	IP        string    `json:"ip"`
+	CreatedAt time.Time `json:"created_at"`
+}
