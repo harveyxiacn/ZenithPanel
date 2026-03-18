@@ -225,6 +225,54 @@ func parseUintID(c *gin.Context) (uint, bool) {
 	return uint(n), true
 }
 
+type clientPayload struct {
+	InboundID    *uint   `json:"inbound_id"`
+	Email        *string `json:"email"`
+	UUID         *string `json:"uuid"`
+	Enable       *bool   `json:"enable"`
+	Total        *int64  `json:"total"`
+	TrafficLimit *int64  `json:"traffic_limit"`
+	ExpiryTime   *int64  `json:"expiry_time"`
+	Remark       *string `json:"remark"`
+}
+
+func applyClientPayload(target *model.Client, payload clientPayload) {
+	if payload.InboundID != nil {
+		target.InboundID = *payload.InboundID
+	}
+	if payload.Email != nil {
+		target.Email = strings.TrimSpace(*payload.Email)
+	}
+	if payload.UUID != nil {
+		target.UUID = strings.TrimSpace(*payload.UUID)
+	}
+	if payload.Enable != nil {
+		target.Enable = *payload.Enable
+	}
+	switch {
+	case payload.Total != nil:
+		target.Total = *payload.Total
+	case payload.TrafficLimit != nil:
+		target.Total = *payload.TrafficLimit
+	}
+	if payload.ExpiryTime != nil {
+		target.ExpiryTime = *payload.ExpiryTime
+	}
+	if payload.Remark != nil {
+		target.Remark = strings.TrimSpace(*payload.Remark)
+	}
+}
+
+func validateClient(target model.Client) string {
+	if target.InboundID == 0 {
+		return "Inbound is required"
+	}
+	if strings.TrimSpace(target.Email) == "" {
+		return "Email is required"
+	}
+	return ""
+}
+
 // SetupRoutes configures all the Gin routes.
 func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *proxy.SingboxManager, sched *scheduler.Scheduler) {
 
@@ -730,9 +778,15 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		})
 
 		authGroup.POST("/clients", func(c *gin.Context) {
-			var client model.Client
-			if err := c.ShouldBindJSON(&client); err != nil {
+			var payload clientPayload
+			if err := c.ShouldBindJSON(&payload); err != nil {
 				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			client := model.Client{Enable: true}
+			applyClientPayload(&client, payload)
+			if msg := validateClient(client); msg != "" {
+				c.JSON(400, gin.H{"code": 400, "msg": msg})
 				return
 			}
 			// Auto-generate UUID if not provided
@@ -760,9 +814,21 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(404, gin.H{"code": 404, "msg": "Client not found"})
 				return
 			}
-			if err := c.ShouldBindJSON(&client); err != nil {
+			var payload clientPayload
+			if err := c.ShouldBindJSON(&payload); err != nil {
 				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
 				return
+			}
+			applyClientPayload(&client, payload)
+			if msg := validateClient(client); msg != "" {
+				c.JSON(400, gin.H{"code": 400, "msg": msg})
+				return
+			}
+			if client.UUID == "" {
+				b := make([]byte, 16)
+				rand.Read(b)
+				client.UUID = fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+					b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 			}
 			if err := config.DB.Save(&client).Error; err != nil {
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update client"})
@@ -966,6 +1032,66 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		// ======================================
 		proxyGroup := authGroup.Group("/proxy")
 		{
+			proxyGroup.GET("/status", func(c *gin.Context) {
+				var enabledInbounds int64
+				var enabledClients int64
+				var enabledRules int64
+
+				config.DB.Model(&model.Inbound{}).Where("enable = ?", true).Count(&enabledInbounds)
+				config.DB.Model(&model.Client{}).Where("enable = ?", true).Count(&enabledClients)
+				config.DB.Model(&model.RoutingRule{}).Where("enable = ?", true).Count(&enabledRules)
+
+				c.JSON(http.StatusOK, gin.H{
+					"code": 200,
+					"msg":  "Success",
+					"data": gin.H{
+						"xray_running":     xm.Status(),
+						"singbox_running":  sm.Status(),
+						"enabled_inbounds": enabledInbounds,
+						"enabled_clients":  enabledClients,
+						"enabled_rules":    enabledRules,
+					},
+				})
+			})
+
+			proxyGroup.POST("/apply", func(c *gin.Context) {
+				engine := strings.ToLower(strings.TrimSpace(c.DefaultQuery("engine", "xray")))
+
+				switch engine {
+				case "", "xray":
+					if err := xm.Restart(); err != nil {
+						log.Printf("Xray apply error: %v", err)
+						c.JSON(http.StatusInternalServerError, gin.H{
+							"code": 500,
+							"msg":  fmt.Sprintf("Failed to apply Xray config: %v", err),
+						})
+						return
+					}
+					c.JSON(http.StatusOK, gin.H{
+						"code": 200,
+						"msg":  "Xray configuration applied successfully",
+					})
+				case "singbox", "sing-box":
+					if err := sm.Restart(); err != nil {
+						log.Printf("Sing-box apply error: %v", err)
+						c.JSON(http.StatusInternalServerError, gin.H{
+							"code": 500,
+							"msg":  fmt.Sprintf("Failed to apply Sing-box config: %v", err),
+						})
+						return
+					}
+					c.JSON(http.StatusOK, gin.H{
+						"code": 200,
+						"msg":  "Sing-box configuration applied successfully",
+					})
+				default:
+					c.JSON(http.StatusBadRequest, gin.H{
+						"code": 400,
+						"msg":  "Unsupported proxy engine",
+					})
+				}
+			})
+
 			proxyGroup.GET("/config/xray", func(c *gin.Context) {
 				cfg, err := xm.GenerateConfig()
 				if err != nil {

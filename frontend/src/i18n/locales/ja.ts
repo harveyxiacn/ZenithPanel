@@ -136,6 +136,13 @@ export default {
     title: 'プロキシサービス',
     subtitle: 'Xray/Sing-box エンジン、ルーティングルール、ユーザー購読を設定。',
     applyConfig: '設定を適用',
+    status: {
+      xrayRunning: 'Xray 稼働中',
+      xrayStopped: 'Xray 停止中',
+      nodes: 'ノード: {n}',
+      users: 'ユーザー: {n}',
+      rules: 'ルール: {n}',
+    },
     tabs: {
       inbounds: 'インバウンドノード',
       routing: 'ルーティングルール',

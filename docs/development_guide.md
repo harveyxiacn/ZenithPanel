@@ -81,6 +81,8 @@ ZenithPanel/
 | POST | `/api/v1/clients` | Create a client (UUID auto-generated) |
 | GET | `/api/v1/routing-rules` | List routing rules |
 | POST | `/api/v1/routing-rules` | Create a routing rule |
+| GET | `/api/v1/proxy/status` | Return proxy runtime status and enabled object counts |
+| POST | `/api/v1/proxy/apply` | Generate and apply proxy config by restarting the selected engine |
 | POST | `/api/v1/proxy/generate-reality-keys` | Generate X25519 keypair + short ID for VLESS Reality |
 | GET | `/api/v1/proxy/config/xray` | Preview generated Xray config JSON |
 | GET | `/api/v1/proxy/config/singbox` | Preview generated Sing-box config JSON |

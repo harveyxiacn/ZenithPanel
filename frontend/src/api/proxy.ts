@@ -52,3 +52,11 @@ export function deleteRoutingRule(id: number) {
 export function generateRealityKeys() {
   return apiClient.post('/v1/proxy/generate-reality-keys')
 }
+
+export function applyProxyConfig(engine = 'xray') {
+  return apiClient.post(`/v1/proxy/apply?engine=${encodeURIComponent(engine)}`)
+}
+
+export function getProxyStatus() {
+  return apiClient.get('/v1/proxy/status')
+}

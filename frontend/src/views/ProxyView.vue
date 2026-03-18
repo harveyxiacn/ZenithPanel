@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon } from '@heroicons/vue/24/outline'
-import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys } from '@/api/proxy'
+import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus } from '@/api/proxy'
 import apiClient from '@/api/client'
 import QRCode from 'qrcode'
 
@@ -12,6 +12,16 @@ const route = useRoute()
 const router = useRouter()
 const tabFromRoute = route.name === 'Users' ? 'users' : 'inbounds'
 const activeTab = ref(tabFromRoute)
+const applyLoading = ref(false)
+const applyMessage = ref('')
+const applyMessageTone = ref<'success' | 'error' | ''>('')
+const proxyStatus = ref({
+  xray_running: false,
+  singbox_running: false,
+  enabled_inbounds: 0,
+  enabled_clients: 0,
+  enabled_rules: 0,
+})
 
 // Sync sidebar highlight: switching tabs updates the route so the
 // left nav correctly highlights "Proxy Nodes" vs "Users & Subs".
@@ -82,6 +92,41 @@ function resetVisualForm() {
     realityPrivateKey: '', realityPublicKey: '', realityShortId: '',
     wsPath: '', wsHost: '', grpcServiceName: '',
   }
+}
+
+function setApplyFeedback(message: string, tone: 'success' | 'error') {
+  applyMessage.value = message
+  applyMessageTone.value = tone
+}
+
+async function applyConfig() {
+  applyLoading.value = true
+  applyMessage.value = ''
+  applyMessageTone.value = ''
+  try {
+    const res = await applyProxyConfig('xray') as any
+    setApplyFeedback(res?.msg || 'Xray configuration applied successfully', 'success')
+  } catch (e: any) {
+    const message = e?.response?.data?.msg || e?.message || 'Failed to apply Xray configuration'
+    setApplyFeedback(message, 'error')
+  }
+  await loadProxyStatus()
+  applyLoading.value = false
+}
+
+async function loadProxyStatus() {
+  try {
+    const res = await getProxyStatus() as any
+    if (res.code === 200 && res.data) {
+      proxyStatus.value = {
+        xray_running: !!res.data.xray_running,
+        singbox_running: !!res.data.singbox_running,
+        enabled_inbounds: Number(res.data.enabled_inbounds || 0),
+        enabled_clients: Number(res.data.enabled_clients || 0),
+        enabled_rules: Number(res.data.enabled_rules || 0),
+      }
+    }
+  } catch { /* ignore */ }
 }
 
 function parseJsonToVisual(settingsStr: string, streamStr: string) {
@@ -246,6 +291,7 @@ async function saveInbound() {
     }
     showInboundForm.value = false
     await fetchInbounds()
+    await loadProxyStatus()
   } catch { /* ignore */ }
 }
 
@@ -254,6 +300,7 @@ async function removeInbound(id: number) {
   try {
     await deleteInbound(id)
     await fetchInbounds()
+    await loadProxyStatus()
   } catch { /* ignore */ }
 }
 
@@ -261,7 +308,7 @@ async function removeInbound(id: number) {
 const clients = ref<any[]>([])
 const clientsLoading = ref(false)
 const showClientForm = ref(false)
-const clientForm = ref({ email: '', inbound_id: 0, traffic_limit: 0, enable: true })
+const clientForm = ref({ email: '', inbound_id: 0, total: 0, enable: true })
 const copiedUuid = ref('')
 
 async function fetchClients() {
@@ -277,8 +324,9 @@ async function saveClient() {
   try {
     await createClient(clientForm.value)
     showClientForm.value = false
-    clientForm.value = { email: '', inbound_id: 0, traffic_limit: 0, enable: true }
+    clientForm.value = { email: '', inbound_id: 0, total: 0, enable: true }
     await fetchClients()
+    await loadProxyStatus()
   } catch { /* ignore */ }
 }
 
@@ -287,12 +335,13 @@ async function removeClient(id: number) {
   try {
     await deleteClient(id)
     await fetchClients()
+    await loadProxyStatus()
   } catch { /* ignore */ }
 }
 
 function addClientForInbound(inboundId: number) {
   switchTab('users')
-  clientForm.value = { email: '', inbound_id: inboundId, traffic_limit: 0, enable: true }
+  clientForm.value = { email: '', inbound_id: inboundId, total: 0, enable: true }
   showClientForm.value = true
 }
 
@@ -379,6 +428,7 @@ async function saveRoutingRule() {
     showRoutingForm.value = false
     routingForm.value = { rule_tag: '', domain: '', ip: '', port: '', outbound_tag: '', enable: true }
     await fetchRoutingRules()
+    await loadProxyStatus()
   } catch { /* ignore */ }
 }
 
@@ -387,6 +437,7 @@ async function removeRoutingRule(id: number) {
   try {
     await deleteRoutingRule(id)
     await fetchRoutingRules()
+    await loadProxyStatus()
   } catch { /* ignore */ }
 }
 
@@ -406,6 +457,7 @@ async function addRoutingPreset(preset: typeof routingPresets[0]) {
   try {
     await createRoutingRule({ rule_tag: preset.rule_tag, domain: preset.domain, ip: preset.ip, port: preset.port || '', outbound_tag: preset.outbound_tag, enable: true })
     await fetchRoutingRules()
+    await loadProxyStatus()
   } catch { /* ignore */ }
   addingPresets.value = false
 }
@@ -419,6 +471,7 @@ async function addRecommendedRules() {
     } catch { /* ignore */ }
   }
   await fetchRoutingRules()
+  await loadProxyStatus()
   addingPresets.value = false
 }
 
@@ -568,8 +621,8 @@ async function proceedToReview() {
       cfg.domain = ''
     }
     if (preset.needsCert) {
-      cfg.certFile = '/opt/zenithpanel/certs/fullchain.pem'
-      cfg.keyFile = '/opt/zenithpanel/certs/privkey.pem'
+      cfg.certFile = '/opt/zenithpanel/data/certs/fullchain.pem'
+      cfg.keyFile = '/opt/zenithpanel/data/certs/privkey.pem'
     }
     if (id === 'vless-ws-tls' || id === 'vmess-ws-tls') {
       cfg.wsPath = '/' + randomHex(6)
@@ -684,6 +737,7 @@ async function executeQuickSetup() {
   fetchInbounds()
   fetchClients()
   fetchRoutingRules()
+  loadProxyStatus()
 }
 
 // ---- Lifecycle ----
@@ -691,6 +745,7 @@ onMounted(() => {
   fetchInbounds()
   fetchClients()
   fetchRoutingRules()
+  loadProxyStatus()
 })
 </script>
 
@@ -701,12 +756,42 @@ onMounted(() => {
       <div>
         <h1 class="text-3xl font-bold text-slate-800 tracking-tight">{{ $t('proxy.title') }}</h1>
         <p class="text-slate-500 mt-1">{{ $t('proxy.subtitle') }}</p>
+        <div class="mt-3 flex flex-wrap gap-2 text-xs">
+          <span :class="[
+            'inline-flex items-center rounded-full px-2.5 py-1 font-medium',
+            proxyStatus.xray_running ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+          ]">
+            {{ proxyStatus.xray_running ? $t('proxy.status.xrayRunning') : $t('proxy.status.xrayStopped') }}
+          </span>
+          <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-600">
+            {{ $t('proxy.status.nodes', { n: proxyStatus.enabled_inbounds }) }}
+          </span>
+          <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-600">
+            {{ $t('proxy.status.users', { n: proxyStatus.enabled_clients }) }}
+          </span>
+          <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-600">
+            {{ $t('proxy.status.rules', { n: proxyStatus.enabled_rules }) }}
+          </span>
+        </div>
       </div>
       <div>
-        <button class="bg-primary-600 hover:bg-primary-700 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors shadow-sm flex items-center">
+        <button
+          @click="applyConfig"
+          :disabled="applyLoading"
+          class="bg-primary-600 hover:bg-primary-700 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition-colors shadow-sm flex items-center disabled:opacity-60 disabled:cursor-not-allowed"
+        >
           <ArrowPathIcon class="h-5 w-5 mr-2" />
-          {{ $t('proxy.applyConfig') }}
+          {{ applyLoading ? $t('common.loading') : $t('proxy.applyConfig') }}
         </button>
+        <p
+          v-if="applyMessage"
+          :class="[
+            'mt-2 text-xs text-right',
+            applyMessageTone === 'success' ? 'text-emerald-600' : 'text-rose-600'
+          ]"
+        >
+          {{ applyMessage }}
+        </p>
       </div>
     </div>
 
@@ -1085,7 +1170,7 @@ onMounted(() => {
               <option :value="0" disabled>{{ $t('proxy.clients.selectInbound') }}</option>
               <option v-for="ib in inbounds" :key="ib.id" :value="ib.id">{{ ib.tag }}</option>
             </select>
-            <input v-model.number="clientForm.traffic_limit" type="number" :placeholder="$t('proxy.clients.trafficLimit')" class="input-field text-sm" />
+            <input v-model.number="clientForm.total" type="number" :placeholder="$t('proxy.clients.trafficLimit')" class="input-field text-sm" />
             <button @click="saveClient" class="bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700">{{ $t('common.add') }}</button>
           </div>
         </div>

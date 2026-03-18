@@ -81,6 +81,8 @@ ZenithPanel/
 | POST | `/api/v1/clients` | 创建客户端（UUID 自动生成） |
 | GET | `/api/v1/routing-rules` | 获取路由规则 |
 | POST | `/api/v1/routing-rules` | 创建路由规则 |
+| GET | `/api/v1/proxy/status` | 获取代理运行状态与启用对象数量 |
+| POST | `/api/v1/proxy/apply` | 生成并应用代理配置，重启所选内核 |
 | POST | `/api/v1/proxy/generate-reality-keys` | 生成 VLESS Reality 所需的 X25519 密钥对 + Short ID |
 | GET | `/api/v1/proxy/config/xray` | 预览生成的 Xray 配置 JSON |
 | GET | `/api/v1/proxy/config/singbox` | 预览生成的 Sing-box 配置 JSON |

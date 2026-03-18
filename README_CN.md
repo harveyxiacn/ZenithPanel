@@ -7,8 +7,8 @@
     <a href="https://github.com/harveyxiacn/ZenithPanel/blob/main/LICENSE">
       <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License">
     </a>
-    <a href="https://github.com/harveyxiacn/ZenithPanel/actions/workflows/docker-build.yml">
-      <img src="https://github.com/harveyxiacn/ZenithPanel/actions/workflows/docker-build.yml/badge.svg" alt="构建状态">
+    <a href="https://github.com/harveyxiacn/ZenithPanel/actions/workflows/main.yml">
+      <img src="https://github.com/harveyxiacn/ZenithPanel/actions/workflows/main.yml/badge.svg" alt="构建状态">
     </a>
     <a href="https://github.com/harveyxiacn/ZenithPanel/pkgs/container/zenithpanel">
       <img src="https://img.shields.io/badge/Docker-ghcr.io-blue?logo=docker" alt="Docker 镜像">
@@ -44,6 +44,7 @@
 - **入站 (Inbound) 管理**：Xray / Sing-box 入站配置的完整增删改查，含协议选择器与 JSON 设置编辑器。
 - **客户端 / 用户管理**：按入站添加和删除客户端，自动生成 UUID，订阅链接一键复制。
 - **路由规则管理**：以结构化表单管理域名、地理位置 (geo) 和出站路由规则。
+- **代理运行状态**：可直接查看 Xray 是否运行，以及当前启用的节点、用户和路由规则数量。
 
 ### 🛡️ 安全机制
 - **安全初始化向导**：首次运行自动生成一次性随机密码与随机 URL 入口，配置完成后自动失效。
@@ -93,6 +94,8 @@ docker run -d \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/harveyxiacn/zenithpanel:main
 ```
+
+> 如果要启用完整的代理节点监听能力，请使用 `--network host`，并参考 [docs/proxy-setup-guide-cn.md](docs/proxy-setup-guide-cn.md) 中的专用部署方式。
 
 部署完成后，在浏览器打开 `http://<你的服务器IP>:8080`。
 

@@ -15,7 +15,7 @@ type SingboxManager struct {
 func NewSingboxManager() *SingboxManager {
 	return &SingboxManager{
 		BaseCore: BaseCore{
-			BinaryPath: "sing-box",       // Or absolute path to sing-box binary
+			BinaryPath: "sing-box", // Or absolute path to sing-box binary
 			ConfigPath: "data/singbox_config.json",
 		},
 	}
@@ -33,7 +33,7 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 		"log": map[string]interface{}{
 			"level": "warn",
 		},
-		"inbounds":  []map[string]interface{}{},
+		"inbounds": []map[string]interface{}{},
 		"outbounds": []map[string]interface{}{
 			{
 				"type": "direct",
@@ -52,9 +52,9 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 	// Translate DB models to Sing-box format
 	for _, in := range inbounds {
 		inboundMap := map[string]interface{}{
-			"type":       in.Protocol,
-			"tag":        in.Tag,
-			"listen":     "::",
+			"type":        in.Protocol,
+			"tag":         in.Tag,
+			"listen":      "::",
 			"listen_port": in.Port,
 		}
 		inboundList := singboxConfig["inbounds"].([]map[string]interface{})
@@ -91,11 +91,18 @@ func (s *SingboxManager) Start() error {
 		return err
 	}
 
-	s.cmd = exec.Command(s.BinaryPath, "run", "-c", s.ConfigPath)
-	return s.cmd.Start()
+	cmd := exec.Command(s.BinaryPath, "run", "-c", s.ConfigPath)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	s.setCmd(cmd)
+	s.trackCmd(cmd)
+	return nil
 }
 
 func (s *SingboxManager) Restart() error {
-	s.Stop()
+	if err := s.Stop(); err != nil {
+		return err
+	}
 	return s.Start()
 }
