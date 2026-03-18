@@ -650,7 +650,15 @@ async function proceedToReview() {
   if (selectedPresetIds.value.length === 0) return
   for (const id of selectedPresetIds.value) {
     const preset = presets.find(p => p.id === id)!
-    const cfg: any = { tag: id, port: preset.defaultPort }
+    // Generate unique tag: check existing inbounds to avoid UNIQUE constraint conflict
+    let tag = id
+    const existingTags = new Set(inbounds.value.map((ib: any) => ib.tag))
+    if (existingTags.has(tag)) {
+      let suffix = 2
+      while (existingTags.has(`${id}-${suffix}`)) suffix++
+      tag = `${id}-${suffix}`
+    }
+    const cfg: any = { tag, port: preset.defaultPort }
 
     if (preset.needsRealityKeys) {
       try {

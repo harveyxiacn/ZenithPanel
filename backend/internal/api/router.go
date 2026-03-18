@@ -746,6 +746,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			if err := config.DB.Create(&inbound).Error; err != nil {
 				log.Printf("DB error creating inbound: %v", err)
+				if strings.Contains(err.Error(), "UNIQUE constraint") {
+					c.JSON(409, gin.H{"code": 409, "msg": fmt.Sprintf("Tag '%s' already exists", inbound.Tag)})
+					return
+				}
 				c.JSON(500, gin.H{"code": 500, "msg": fmt.Sprintf("DB error: %v", err)})
 				return
 			}
