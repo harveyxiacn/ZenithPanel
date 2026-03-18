@@ -29,10 +29,14 @@ func InitDB(dbPath string) {
 		&model.Setting{},
 		&model.AdminUser{},
 		&model.CronJob{},
-		&model.AuditLog{},
 	)
 	if err != nil {
 		log.Fatalf("Failed to auto migrate database: %v", err)
+	}
+
+	// Audit log migration is non-fatal — don't block startup if it fails
+	if err := database.AutoMigrate(&model.AuditLog{}); err != nil {
+		log.Printf("Warning: failed to migrate AuditLog table: %v", err)
 	}
 
 	DB = database
