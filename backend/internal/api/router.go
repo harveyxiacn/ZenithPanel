@@ -727,8 +727,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.GET("/inbounds", func(c *gin.Context) {
 			var inbounds []model.Inbound
 			if err := config.DB.Find(&inbounds).Error; err != nil {
-				log.Printf("DB error listing inbounds: %v", err)
-				c.JSON(500, gin.H{"code": 500, "msg": "Failed to list inbounds"})
+				log.Printf("DB error listing inbounds: %v (DB ptr: %v)", err, config.DB)
+				c.JSON(500, gin.H{"code": 500, "msg": fmt.Sprintf("DB error: %v", err)})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": inbounds})
@@ -737,12 +737,16 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.POST("/inbounds", func(c *gin.Context) {
 			var inbound model.Inbound
 			if err := c.ShouldBindJSON(&inbound); err != nil {
-				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				log.Printf("Inbound bind error: %v", err)
+				c.JSON(400, gin.H{"code": 400, "msg": fmt.Sprintf("Invalid parameters: %v", err)})
 				return
+			}
+			if inbound.Settings == "" {
+				inbound.Settings = "{}"
 			}
 			if err := config.DB.Create(&inbound).Error; err != nil {
 				log.Printf("DB error creating inbound: %v", err)
-				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create inbound"})
+				c.JSON(500, gin.H{"code": 500, "msg": fmt.Sprintf("DB error: %v", err)})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": inbound})
