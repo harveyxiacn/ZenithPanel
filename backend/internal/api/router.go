@@ -16,7 +16,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
+
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -1200,17 +1200,22 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 				defer cancel()
 
-				cmd := exec.CommandContext(ctx, "curl", "-s", "--max-time", "8",
-					"--connect-timeout", "5", "https://ipinfo.io/json")
-				output, err := cmd.Output()
+				req, err := http.NewRequestWithContext(ctx, "GET", "https://ipinfo.io/json", nil)
 				if err != nil {
-					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": false, "error": "Connection failed"}})
+					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": false, "error": "Request build failed"}})
 					return
 				}
+				req.Header.Set("User-Agent", "ZenithPanel/1.0")
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": false, "error": fmt.Sprintf("Connection failed: %v", err)}})
+					return
+				}
+				defer resp.Body.Close()
 
 				var result map[string]interface{}
-				if err := json.Unmarshal(output, &result); err != nil {
-					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": true, "ip": string(output)}})
+				if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": false, "error": "Failed to parse response"}})
 					return
 				}
 				c.JSON(200, gin.H{"code": 200, "data": gin.H{
