@@ -14,6 +14,7 @@ import (
 	"image/png"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 
@@ -316,6 +317,9 @@ func validateInbound(target model.Inbound) string {
 	}
 	if target.Port <= 0 || target.Port > 65535 {
 		return "Port must be between 1 and 65535"
+	}
+	if listen := strings.TrimSpace(target.Listen); listen != "" && net.ParseIP(listen) == nil {
+		return "Listen must be blank or a valid IP address"
 	}
 	if strings.TrimSpace(target.ServerAddress) == "" && !inboundHasDerivedPublicHost(target.Stream) {
 		return "Public Host / IP is required when the inbound does not define a safe public host in its stream settings"

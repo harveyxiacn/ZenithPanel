@@ -9,6 +9,7 @@ import QRCode from 'qrcode'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '../composables/useToast'
 import SkeletonTable from '@/components/SkeletonTable.vue'
+import { buildSubscriptionLink } from '@/utils/subscription-links.mjs'
 
 const { t } = useI18n()
 const { confirm: confirmDialog } = useConfirm()
@@ -415,11 +416,29 @@ function inboundTagById(id: number): string {
   return ib ? ib.tag : `#${id}`
 }
 
-function copySubLink(uuid: string) {
-  const link = `${location.origin}/api/v1/sub/${uuid}`
-  navigator.clipboard.writeText(link)
-  copiedUuid.value = uuid
-  setTimeout(() => { copiedUuid.value = '' }, 2000)
+async function copySubLink(uuid: string, format?: 'clash' | 'base64') {
+  const link = buildSubscriptionLink(location.origin, uuid, format)
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(link)
+    } else {
+      const textarea = document.createElement('textarea')
+      textarea.value = link
+      textarea.setAttribute('readonly', '')
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+    }
+
+    copiedUuid.value = uuid
+    setTimeout(() => { copiedUuid.value = '' }, 2000)
+  } catch (e: any) {
+    toast.error(e?.message || t('common.errorOccurred'))
+  }
 }
 
 // ---- QR Code ----
@@ -448,7 +467,7 @@ async function generateQr() {
       qrDataUrl.value = await QRCode.toDataURL(firstLink, { width: 280, margin: 2, color: { dark: '#1e293b', light: '#ffffff' } })
     } else {
       // Clash: encode subscription URL (Clash clients fetch it natively)
-      const link = `${location.origin}/api/v1/sub/${qrUuid.value}?format=clash`
+      const link = buildSubscriptionLink(location.origin, qrUuid.value, 'clash')
       qrDataUrl.value = await QRCode.toDataURL(link, { width: 280, margin: 2, color: { dark: '#1e293b', light: '#ffffff' } })
     }
   } catch {
@@ -1746,7 +1765,7 @@ onMounted(() => {
               class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition"
             >{{ $t('proxy.qr.downloadPng') }}</button>
             <button
-              @click="copySubLink(qrUuid)"
+              @click="copySubLink(qrUuid, qrFormat === 'clash' ? 'clash' : 'base64')"
               class="flex-1 bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition"
             >{{ copiedUuid === qrUuid ? $t('proxy.clients.copied') : $t('proxy.qr.copyLink') }}</button>
           </div>
