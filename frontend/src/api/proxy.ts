@@ -8,12 +8,20 @@ export function createInbound(data: any) {
   return apiClient.post('/v1/inbounds', data)
 }
 
+export function importThreeXUIInbounds(data: any) {
+  return apiClient.post('/v1/inbounds/import-3xui', data)
+}
+
 export function updateInbound(id: number, data: any) {
   return apiClient.put(`/v1/inbounds/${id}`, data)
 }
 
 export function deleteInbound(id: number) {
   return apiClient.delete(`/v1/inbounds/${id}`)
+}
+
+export function exportThreeXUIInbound(id: number) {
+  return apiClient.get(`/v1/inbounds/${id}/export-3xui`)
 }
 
 export function listClients(inboundId?: number) {

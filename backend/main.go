@@ -45,6 +45,11 @@ func main() {
 	migrateFile("xray_config.json", "data/xray_config.json")
 	migrateFile("/opt/zenithpanel/xray_config.json", "data/xray_config.json")
 	config.InitDB(dbPath)
+	if removed, err := proxy.CleanupDuplicateRoutingRules(); err != nil {
+		log.Printf("Warning: Failed to clean duplicate routing rules: %v", err)
+	} else if removed > 0 {
+		log.Printf("Cleaned up %d duplicate routing rule(s)", removed)
+	}
 
 	// 2. Initialize JWT Secret from persistent storage
 	secret := config.EnsureJWTSecret()

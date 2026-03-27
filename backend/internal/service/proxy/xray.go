@@ -12,6 +12,7 @@ import (
 
 type XrayManager struct {
 	BaseCore
+	skippedProtos []string
 }
 
 func NewXrayManager() *XrayManager {
@@ -23,12 +24,30 @@ func NewXrayManager() *XrayManager {
 	}
 }
 
+// xraySupportedProtocols lists protocols supported by Xray-core.
+// Hysteria2, WireGuard etc. are sing-box only and must be skipped.
+var xraySupportedProtocols = map[string]bool{
+	"vless":       true,
+	"vmess":       true,
+	"trojan":      true,
+	"shadowsocks": true,
+}
+
+// SkippedProtocols returns protocol names that were skipped during the last config generation
+// because they are not supported by the engine.
+func (x *XrayManager) SkippedProtocols() []string {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.skippedProtos
+}
+
 func (x *XrayManager) GenerateConfig() (string, error) {
 	var inbounds []model.Inbound
 	var rules []model.RoutingRule
 
 	config.DB.Where("enable = ?", true).Find(&inbounds)
 	config.DB.Where("enable = ?", true).Find(&rules)
+	rules = UniqueRoutingRules(rules)
 
 	xrayConfig := map[string]interface{}{
 		"log": map[string]interface{}{
@@ -61,13 +80,21 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 		},
 	}
 
+	var skipped []string
 	for _, in := range inbounds {
+		if !xraySupportedProtocols[in.Protocol] {
+			skipped = append(skipped, fmt.Sprintf("%s (%s)", in.Tag, in.Protocol))
+			continue
+		}
 		inboundEntry, err := buildXrayInbound(in)
 		if err != nil {
 			return "", fmt.Errorf("build inbound %q: %w", in.Tag, err)
 		}
 		xrayConfig["inbounds"] = append(xrayConfig["inbounds"].([]interface{}), inboundEntry)
 	}
+	x.mu.Lock()
+	x.skippedProtos = skipped
+	x.mu.Unlock()
 
 	for _, r := range rules {
 		ruleMap := buildXrayRoutingRule(r)
@@ -114,52 +141,60 @@ func buildXrayInbound(in model.Inbound) (map[string]interface{}, error) {
 		if _, ok := settings["decryption"]; !ok {
 			settings["decryption"] = "none"
 		}
-		clientList := []map[string]interface{}{}
-		for _, c := range clients {
-			cm := map[string]interface{}{"id": c.UUID, "email": c.Email}
-			// Preserve flow if set in settings template
-			if flow, ok := settings["flow"]; ok {
-				cm["flow"] = flow
+		if len(clients) > 0 {
+			clientList := []map[string]interface{}{}
+			for _, c := range clients {
+				cm := map[string]interface{}{"id": c.UUID, "email": c.Email}
+				// Preserve flow if set in settings template
+				if flow, ok := settings["flow"]; ok {
+					cm["flow"] = flow
+				}
+				clientList = append(clientList, cm)
 			}
-			clientList = append(clientList, cm)
+			settings["clients"] = clientList
 		}
-		settings["clients"] = clientList
 		delete(settings, "flow") // flow belongs on client, not top-level
 
 	case "vmess":
-		clientList := []map[string]interface{}{}
-		for _, c := range clients {
-			clientList = append(clientList, map[string]interface{}{
-				"id":      c.UUID,
-				"email":   c.Email,
-				"alterId": 0,
-			})
+		if len(clients) > 0 {
+			clientList := []map[string]interface{}{}
+			for _, c := range clients {
+				clientList = append(clientList, map[string]interface{}{
+					"id":      c.UUID,
+					"email":   c.Email,
+					"alterId": 0,
+				})
+			}
+			settings["clients"] = clientList
 		}
-		settings["clients"] = clientList
 
 	case "trojan":
-		clientList := []map[string]interface{}{}
-		for _, c := range clients {
-			clientList = append(clientList, map[string]interface{}{
-				"password": c.UUID,
-				"email":    c.Email,
-			})
+		if len(clients) > 0 {
+			clientList := []map[string]interface{}{}
+			for _, c := range clients {
+				clientList = append(clientList, map[string]interface{}{
+					"password": c.UUID,
+					"email":    c.Email,
+				})
+			}
+			settings["clients"] = clientList
 		}
-		settings["clients"] = clientList
 
 	case "shadowsocks":
 		// Shadowsocks uses a single password, clients share it or use AEAD 2022 multi-user
 		// Keep existing settings (method, password) as-is
 
 	case "hysteria2":
-		clientList := []map[string]interface{}{}
-		for _, c := range clients {
-			clientList = append(clientList, map[string]interface{}{
-				"password": c.UUID,
-				"email":    c.Email,
-			})
+		if len(clients) > 0 {
+			clientList := []map[string]interface{}{}
+			for _, c := range clients {
+				clientList = append(clientList, map[string]interface{}{
+					"password": c.UUID,
+					"email":    c.Email,
+				})
+			}
+			settings["clients"] = clientList
 		}
-		settings["clients"] = clientList
 	}
 
 	entry["settings"] = settings
@@ -170,7 +205,7 @@ func buildXrayInbound(in model.Inbound) (map[string]interface{}, error) {
 		if err := json.Unmarshal([]byte(in.Stream), &streamSettings); err != nil {
 			return nil, fmt.Errorf("parse stream: %w", err)
 		}
-		entry["streamSettings"] = streamSettings
+		entry["streamSettings"] = NormalizeXrayStreamSettings(streamSettings)
 	}
 
 	return entry, nil
@@ -221,12 +256,7 @@ func (x *XrayManager) Start() error {
 	}
 
 	cmd := exec.Command(x.BinaryPath, "run", "-c", x.ConfigPath)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	x.setCmd(cmd)
-	x.trackCmd(cmd)
-	return nil
+	return x.startAndVerify(cmd)
 }
 
 func (x *XrayManager) Restart() error {
