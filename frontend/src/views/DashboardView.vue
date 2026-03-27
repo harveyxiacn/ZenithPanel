@@ -1,15 +1,55 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, watch } from 'vue'
-import { ServerStackIcon, CpuChipIcon, ServerIcon, SignalIcon, Cog6ToothIcon, EyeIcon, EyeSlashIcon } from '@heroicons/vue/24/outline'
+import { ref, reactive, onMounted, onUnmounted, watch, computed } from 'vue'
+import type { Component } from 'vue'
+import {
+  ServerStackIcon,
+  CpuChipIcon,
+  ServerIcon,
+  SignalIcon,
+  Cog6ToothIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  ArrowRightIcon,
+  HomeIcon,
+  ShieldCheckIcon,
+  GlobeAltIcon,
+  UsersIcon,
+} from '@heroicons/vue/24/outline'
+
 import { getSystemMonitor } from '@/api/system'
+import { dashboardViewForProfile, type DashboardCardId, type NavigationIconKey } from '@/config/usage-profiles'
+import { useUsageProfile } from '@/composables/useUsageProfile'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '../composables/useToast'
 
+interface DashboardCardOption {
+  id: DashboardCardId
+  icon: string
+  color: string
+}
+
+interface MetricCard {
+  id: 'cpu' | 'memory' | 'disk' | 'network'
+  title: string
+  value: string
+  detail?: string
+  icon: Component
+  iconClasses: string
+}
+
 const { t } = useI18n()
 const toast = useToast()
+const { usageProfile, loadUsageProfile } = useUsageProfile()
 
-// ---- Card Customization ----
-const allCards = [
+const actionIcons: Record<NavigationIconKey, Component> = {
+  dashboard: HomeIcon,
+  servers: ServerIcon,
+  nodes: GlobeAltIcon,
+  users: UsersIcon,
+  security: ShieldCheckIcon,
+}
+
+const allCards: DashboardCardOption[] = [
   { id: 'cpu', icon: 'cpu', color: 'sky' },
   { id: 'memory', icon: 'memory', color: 'primary' },
   { id: 'disk', icon: 'disk', color: 'indigo' },
@@ -22,13 +62,28 @@ function loadCardVisibility(): Record<string, boolean> {
   try {
     const saved = localStorage.getItem('zenith_dashboard_cards')
     if (saved) return JSON.parse(saved)
-  } catch { /* localStorage parse error, use defaults */ }
-  // Default: all visible
-  return Object.fromEntries(allCards.map(c => [c.id, true]))
+  } catch {
+    // localStorage parse error, use defaults
+  }
+
+  return Object.fromEntries(allCards.map((card) => [card.id, true]))
 }
 
 const cardVisibility = reactive(loadCardVisibility())
 const showCardSettings = ref(false)
+const dashboardView = computed(() => dashboardViewForProfile(usageProfile.value))
+
+const orderedCardSettings = computed(() => {
+  const preferredOrder = [
+    ...dashboardView.value.featuredCardIds,
+    ...dashboardView.value.secondaryCardIds,
+    ...allCards.map((card) => card.id),
+  ]
+
+  return Array.from(new Set(preferredOrder))
+    .map((id) => allCards.find((card) => card.id === id))
+    .filter((card): card is DashboardCardOption => Boolean(card))
+})
 
 function toggleCard(id: string) {
   cardVisibility[id] = !cardVisibility[id]
@@ -62,6 +117,63 @@ const loadAvg = ref('')
 const netIn = ref(0)
 const netOut = ref(0)
 
+const metricCards = computed<Record<MetricCard['id'], MetricCard>>(() => ({
+  cpu: {
+    id: 'cpu',
+    title: t('dashboard.cpuUsage'),
+    value: `${cpuPercent.value}%`,
+    icon: CpuChipIcon,
+    iconClasses: 'bg-sky-500/10 text-sky-500',
+  },
+  memory: {
+    id: 'memory',
+    title: t('dashboard.memory'),
+    value: `${memPercent.value}%`,
+    detail: `${memUsed.value} / ${memTotal.value}`,
+    icon: ServerStackIcon,
+    iconClasses: 'bg-primary-500/10 text-primary-500',
+  },
+  disk: {
+    id: 'disk',
+    title: t('dashboard.diskUsage'),
+    value: `${diskPercent.value}%`,
+    icon: ServerIcon,
+    iconClasses: 'bg-indigo-500/10 text-indigo-500',
+  },
+  network: {
+    id: 'network',
+    title: t('dashboard.network'),
+    value: `${formatBytes(netIn.value)}/s`,
+    detail: `${t('dashboard.up')}: ${formatBytes(netOut.value)}/s`,
+    icon: SignalIcon,
+    iconClasses: 'bg-emerald-500/10 text-emerald-500',
+  },
+}))
+
+const featuredCards = computed(() => {
+  return dashboardView.value.featuredCardIds
+    .map((cardId) => metricCards.value[cardId as MetricCard['id']])
+    .filter((card): card is MetricCard => Boolean(card) && Boolean(cardVisibility[card.id]))
+})
+
+const detailSectionIds = computed(() => {
+  return dashboardView.value.secondaryCardIds.filter((cardId) => {
+    return (cardId === 'systemInfo' || cardId === 'quickStats') && Boolean(cardVisibility[cardId])
+  })
+})
+
+const dashboardActions = computed(() => {
+  const actions = [dashboardView.value.primaryAction, ...dashboardView.value.secondaryActions]
+  return actions.map((action, index) => ({
+    ...action,
+    iconComponent: actionIcons[action.icon],
+    featured: index === 0,
+  }))
+})
+
+const primaryDashboardAction = computed(() => dashboardActions.value[0] ?? null)
+const secondaryDashboardActions = computed(() => dashboardActions.value.slice(1))
+
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let lastNetIn = 0
 let lastNetOut = 0
@@ -81,15 +193,14 @@ async function fetchStats() {
       hostname.value = d.hostname ?? ''
       loadAvg.value = (d.load_avg ?? []).map((v: number) => v.toFixed(2)).join(' / ')
 
-      // Compute network rate from cumulative counters
       const now = Date.now()
       const rawIn = d.net_in ?? 0
       const rawOut = d.net_out ?? 0
       if (lastFetchTime > 0) {
         const elapsed = (now - lastFetchTime) / 1000
         if (elapsed > 0) {
-          netIn.value = Math.round((rawIn - lastNetIn) / elapsed)
-          netOut.value = Math.round((rawOut - lastNetOut) / elapsed)
+          netIn.value = Math.max(0, Math.round((rawIn - lastNetIn) / elapsed))
+          netOut.value = Math.max(0, Math.round((rawOut - lastNetOut) / elapsed))
         }
       }
       lastNetIn = rawIn
@@ -121,6 +232,7 @@ function formatUptime(seconds: number): string {
 }
 
 onMounted(() => {
+  void loadUsageProfile()
   fetchStats()
   pollTimer = setInterval(fetchStats, 5000)
 })
@@ -132,22 +244,23 @@ onUnmounted(() => {
 
 <template>
   <div class="py-2">
-    <!-- Header -->
-    <div class="mb-8 flex items-center justify-between">
+    <div class="mb-8 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
       <div>
-        <h1 class="text-3xl font-bold text-slate-800 dark:text-white tracking-tight">{{ $t('dashboard.title') }}</h1>
-        <p class="text-slate-500 dark:text-slate-400 mt-1">{{ $t('dashboard.subtitle') }}</p>
+        <div class="inline-flex items-center rounded-full border border-primary-200/60 bg-primary-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em] text-primary-700">
+          {{ $t(dashboardView.badgeKey) }}
+        </div>
+        <h1 class="mt-4 text-3xl font-bold text-slate-800 dark:text-white tracking-tight">{{ $t(dashboardView.titleKey) }}</h1>
+        <p class="mt-2 max-w-3xl text-slate-500 dark:text-slate-400">{{ $t(dashboardView.descriptionKey) }}</p>
       </div>
       <div class="flex items-center space-x-3">
         <div class="relative">
           <button @click="showCardSettings = !showCardSettings" class="bg-white dark:bg-slate-800 rounded-full p-2 shadow-sm border border-slate-100 dark:border-slate-700 text-slate-400 hover:text-slate-600 transition" :title="$t('dashboard.customizeCards')">
             <Cog6ToothIcon class="h-5 w-5" />
           </button>
-          <!-- Card Selector Dropdown -->
           <div v-if="showCardSettings" class="absolute right-0 mt-2 w-56 bg-white dark:bg-slate-800 rounded-xl shadow-lg border border-slate-100 dark:border-slate-700 py-2 z-30">
             <p class="px-4 py-1.5 text-xs font-medium text-slate-400 uppercase">{{ $t('dashboard.customizeCards') }}</p>
             <button
-              v-for="card in allCards"
+              v-for="card in orderedCardSettings"
               :key="card.id"
               @click="toggleCard(card.id)"
               class="w-full flex items-center justify-between px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-slate-700 transition"
@@ -159,13 +272,59 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="bg-white dark:bg-slate-800 rounded-full px-4 py-2 shadow-sm border border-slate-100 dark:border-slate-700 flex items-center space-x-2">
-           <span class="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-           <span class="text-sm font-medium text-slate-600 dark:text-slate-300">{{ hostname || $t('common.loading') }}</span>
+          <span class="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span class="text-sm font-medium text-slate-600 dark:text-slate-300">{{ hostname || $t('common.loading') }}</span>
         </div>
       </div>
     </div>
 
-    <!-- Loading Skeleton -->
+    <div class="mb-8 grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,0.95fr)]">
+      <section class="overflow-hidden rounded-3xl border border-primary-200/40 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.22),_transparent_45%),linear-gradient(135deg,_rgba(255,255,255,0.96),_rgba(241,245,249,0.92))] p-6 shadow-sm dark:border-primary-500/20 dark:bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.24),_transparent_38%),linear-gradient(135deg,_rgba(15,23,42,0.92),_rgba(15,23,42,0.82))]">
+        <div class="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div class="max-w-2xl">
+            <p class="text-sm font-medium text-slate-600 dark:text-slate-300">{{ $t('dashboard.profileOverview') }}</p>
+            <p class="mt-2 text-sm leading-7 text-slate-600 dark:text-slate-300">{{ $t('dashboard.profileHint') }}</p>
+          </div>
+          <router-link
+            v-if="primaryDashboardAction"
+            :to="primaryDashboardAction.href"
+            class="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-slate-900/15 transition hover:-translate-y-0.5 hover:bg-slate-800 dark:bg-primary-500 dark:text-slate-950 dark:hover:bg-primary-400"
+          >
+            <component :is="primaryDashboardAction.iconComponent" class="mr-2 h-5 w-5" />
+            {{ $t(primaryDashboardAction.labelKey) }}
+            <ArrowRightIcon class="ml-2 h-4 w-4" />
+          </router-link>
+        </div>
+      </section>
+
+      <section class="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-800/90">
+        <p class="text-xs font-semibold uppercase tracking-[0.28em] text-slate-400">{{ $t('dashboard.quickActions') }}</p>
+        <div class="mt-4 space-y-3">
+          <router-link
+            v-for="action in secondaryDashboardActions"
+            :key="action.href"
+            :to="action.href"
+            :class="[
+              'group flex items-start rounded-2xl border px-4 py-3 transition-all',
+              'border-slate-200 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/70',
+            ]"
+          >
+            <div :class="[
+              'mr-3 rounded-xl p-2 transition-transform group-hover:scale-105',
+              'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-300',
+            ]">
+              <component :is="action.iconComponent" class="h-5 w-5" />
+            </div>
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-semibold text-slate-800 dark:text-white">{{ $t(action.labelKey) }}</p>
+              <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ $t(action.descriptionKey) }}</p>
+            </div>
+            <ArrowRightIcon class="ml-3 h-4 w-4 shrink-0 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-slate-500 dark:text-slate-500" />
+          </router-link>
+        </div>
+      </section>
+    </div>
+
     <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
       <div v-for="i in 4" :key="i" class="glass-panel p-6 rounded-2xl bg-white dark:bg-slate-800 animate-pulse">
         <div class="flex items-center">
@@ -178,111 +337,90 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Stats Grid -->
     <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-      <div v-if="cardVisibility.cpu" class="glass-panel p-6 rounded-2xl bg-white dark:bg-slate-800 hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
+      <div
+        v-for="card in featuredCards"
+        :key="card.id"
+        class="glass-panel p-6 rounded-2xl bg-white dark:bg-slate-800 hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1"
+      >
         <div class="flex items-center">
-          <div class="bg-sky-500/10 text-sky-500 p-3 rounded-xl mr-4">
-            <CpuChipIcon class="h-6 w-6" />
+          <div :class="['p-3 rounded-xl mr-4', card.iconClasses]">
+            <component :is="card.icon" class="h-6 w-6" />
           </div>
           <div>
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">{{ $t('dashboard.cpuUsage') }}</p>
-            <p class="text-2xl font-bold text-slate-800 dark:text-white mt-1">{{ cpuPercent }}%</p>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="cardVisibility.memory" class="glass-panel p-6 rounded-2xl bg-white dark:bg-slate-800 hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
-        <div class="flex items-center">
-          <div class="bg-primary-500/10 text-primary-500 p-3 rounded-xl mr-4">
-            <ServerStackIcon class="h-6 w-6" />
-          </div>
-          <div>
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">{{ $t('dashboard.memory') }}</p>
-            <p class="text-2xl font-bold text-slate-800 dark:text-white mt-1">{{ memPercent }}%</p>
-            <p class="text-xs text-slate-400 dark:text-slate-500">{{ memUsed }} / {{ memTotal }}</p>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="cardVisibility.disk" class="glass-panel p-6 rounded-2xl bg-white dark:bg-slate-800 hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
-        <div class="flex items-center">
-          <div class="bg-indigo-500/10 text-indigo-500 p-3 rounded-xl mr-4">
-            <ServerIcon class="h-6 w-6" />
-          </div>
-          <div>
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">{{ $t('dashboard.diskUsage') }}</p>
-            <p class="text-2xl font-bold text-slate-800 dark:text-white mt-1">{{ diskPercent }}%</p>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="cardVisibility.network" class="glass-panel p-6 rounded-2xl bg-white dark:bg-slate-800 hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
-        <div class="flex items-center">
-          <div class="bg-emerald-500/10 text-emerald-500 p-3 rounded-xl mr-4">
-            <SignalIcon class="h-6 w-6" />
-          </div>
-          <div>
-            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">{{ $t('dashboard.network') }}</p>
-            <p class="text-lg font-bold text-slate-800 dark:text-white mt-1">{{ formatBytes(netIn) }}/s</p>
-            <p class="text-xs text-slate-400 dark:text-slate-500">{{ $t('dashboard.up') }}: {{ formatBytes(netOut) }}/s</p>
+            <p class="text-sm font-medium text-slate-500 dark:text-slate-400">{{ card.title }}</p>
+            <p class="text-2xl font-bold text-slate-800 dark:text-white mt-1">{{ card.value }}</p>
+            <p v-if="card.detail" class="text-xs text-slate-400 dark:text-slate-500">{{ card.detail }}</p>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Large Content Area -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div v-if="cardVisibility.systemInfo" class="lg:col-span-2 glass-panel p-6 rounded-2xl bg-white dark:bg-slate-800 min-h-[300px]">
-        <h3 class="text-lg font-semibold text-slate-800 dark:text-white mb-4 border-b border-slate-100 dark:border-slate-700 pb-3">{{ $t('dashboard.systemInfo') }}</h3>
-        <div class="space-y-3">
-          <div class="flex justify-between text-sm">
-            <span class="text-slate-500">{{ $t('dashboard.uptime') }}</span>
-            <span class="text-slate-800 dark:text-slate-200 font-medium">{{ uptime || '-' }}</span>
-          </div>
-          <div class="flex justify-between text-sm">
-            <span class="text-slate-500">{{ $t('dashboard.loadAverage') }}</span>
-            <span class="text-slate-800 dark:text-slate-200 font-medium">{{ loadAvg || '-' }}</span>
-          </div>
-          <div class="flex justify-between text-sm">
-            <span class="text-slate-500">{{ $t('dashboard.hostname') }}</span>
-            <span class="text-slate-800 dark:text-slate-200 font-medium">{{ hostname || '-' }}</span>
+    <div v-if="detailSectionIds.length" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <template v-for="sectionId in detailSectionIds" :key="sectionId">
+        <div
+          v-if="sectionId === 'systemInfo'"
+          :class="[
+            detailSectionIds.includes('quickStats') ? 'lg:col-span-2' : 'lg:col-span-3',
+            'glass-panel p-6 rounded-2xl bg-white dark:bg-slate-800 min-h-[300px]'
+          ]"
+        >
+          <h3 class="text-lg font-semibold text-slate-800 dark:text-white mb-4 border-b border-slate-100 dark:border-slate-700 pb-3">{{ $t('dashboard.systemInfo') }}</h3>
+          <div class="space-y-3">
+            <div class="flex justify-between text-sm">
+              <span class="text-slate-500">{{ $t('dashboard.uptime') }}</span>
+              <span class="text-slate-800 dark:text-slate-200 font-medium">{{ uptime || '-' }}</span>
+            </div>
+            <div class="flex justify-between text-sm">
+              <span class="text-slate-500">{{ $t('dashboard.loadAverage') }}</span>
+              <span class="text-slate-800 dark:text-slate-200 font-medium">{{ loadAvg || '-' }}</span>
+            </div>
+            <div class="flex justify-between text-sm">
+              <span class="text-slate-500">{{ $t('dashboard.hostname') }}</span>
+              <span class="text-slate-800 dark:text-slate-200 font-medium">{{ hostname || '-' }}</span>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div v-if="cardVisibility.quickStats" :class="[cardVisibility.systemInfo ? '' : 'lg:col-span-3', 'glass-panel p-6 rounded-2xl bg-white dark:bg-slate-800 min-h-[300px]']">
-        <h3 class="text-lg font-semibold text-slate-800 dark:text-white mb-4 border-b border-slate-100 dark:border-slate-700 pb-3">{{ $t('dashboard.quickStats') }}</h3>
-        <div class="space-y-4">
-          <div>
-            <div class="flex justify-between text-sm mb-1">
-              <span class="text-slate-500">{{ $t('dashboard.cpu') }}</span>
-              <span class="text-slate-700 dark:text-slate-300">{{ cpuPercent }}%</span>
+        <div
+          v-else-if="sectionId === 'quickStats'"
+          :class="[
+            detailSectionIds.includes('systemInfo') ? '' : 'lg:col-span-3',
+            'glass-panel p-6 rounded-2xl bg-white dark:bg-slate-800 min-h-[300px]'
+          ]"
+        >
+          <h3 class="text-lg font-semibold text-slate-800 dark:text-white mb-4 border-b border-slate-100 dark:border-slate-700 pb-3">{{ $t('dashboard.quickStats') }}</h3>
+          <div class="space-y-4">
+            <div>
+              <div class="flex justify-between text-sm mb-1">
+                <span class="text-slate-500">{{ $t('dashboard.cpu') }}</span>
+                <span class="text-slate-700 dark:text-slate-300">{{ cpuPercent }}%</span>
+              </div>
+              <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
+                <div class="bg-sky-500 h-2 rounded-full transition-all duration-500" :style="{ width: cpuPercent + '%' }"></div>
+              </div>
             </div>
-            <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
-              <div class="bg-sky-500 h-2 rounded-full transition-all duration-500" :style="{ width: cpuPercent + '%' }"></div>
+            <div>
+              <div class="flex justify-between text-sm mb-1">
+                <span class="text-slate-500">{{ $t('dashboard.memory') }}</span>
+                <span class="text-slate-700 dark:text-slate-300">{{ memPercent }}%</span>
+              </div>
+              <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
+                <div class="bg-primary-500 h-2 rounded-full transition-all duration-500" :style="{ width: memPercent + '%' }"></div>
+              </div>
             </div>
-          </div>
-          <div>
-            <div class="flex justify-between text-sm mb-1">
-              <span class="text-slate-500">{{ $t('dashboard.memory') }}</span>
-              <span class="text-slate-700 dark:text-slate-300">{{ memPercent }}%</span>
-            </div>
-            <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
-              <div class="bg-primary-500 h-2 rounded-full transition-all duration-500" :style="{ width: memPercent + '%' }"></div>
-            </div>
-          </div>
-          <div>
-            <div class="flex justify-between text-sm mb-1">
-              <span class="text-slate-500">{{ $t('dashboard.disk') }}</span>
-              <span class="text-slate-700 dark:text-slate-300">{{ diskPercent }}%</span>
-            </div>
-            <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
-              <div class="bg-indigo-500 h-2 rounded-full transition-all duration-500" :style="{ width: diskPercent + '%' }"></div>
+            <div>
+              <div class="flex justify-between text-sm mb-1">
+                <span class="text-slate-500">{{ $t('dashboard.disk') }}</span>
+                <span class="text-slate-700 dark:text-slate-300">{{ diskPercent }}%</span>
+              </div>
+              <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
+                <div class="bg-indigo-500 h-2 rounded-full transition-all duration-500" :style="{ width: diskPercent + '%' }"></div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      </template>
     </div>
   </div>
 </template>

@@ -40,7 +40,7 @@ const handleLogin = async () => {
     }
     if (res.code === 200 && res.data?.token) {
       authStore.setToken(res.data.token)
-      router.push('/dashboard')
+      router.push('/')
     } else {
       errorMsg.value = res.msg || 'Login failed'
     }

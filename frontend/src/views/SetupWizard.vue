@@ -5,6 +5,8 @@ import { useAuthStore } from '@/store/auth'
 import { setupLogin, setupComplete } from '@/api/auth'
 import { CheckCircleIcon, ShieldCheckIcon, CubeTransparentIcon, ArrowRightIcon } from '@heroicons/vue/24/outline'
 import { useI18n } from 'vue-i18n'
+import { buildSetupPayload } from './SetupWizard.helpers'
+import { usageProfileOptions, type UsageProfile, type UsageProfileOptionTone } from '@/config/usage-profiles'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -22,8 +24,24 @@ const form = reactive({
   confirmPassword: '',
   customPanelPath: '/zenith',
   customSshPort: 22,
-  enable2FA: false
+  enable2FA: false,
+  usageProfile: 'mixed' as UsageProfile
 })
+
+function profileToneClasses(tone: UsageProfileOptionTone, selected: boolean) {
+  if (!selected) {
+    return 'border-gray-700 bg-gray-900/40 hover:border-primary-500/60'
+  }
+
+  switch (tone) {
+    case 'emerald':
+      return 'border-emerald-400 bg-emerald-500/10 shadow-[0_0_0_1px_rgba(52,211,153,0.3)]'
+    case 'sky':
+      return 'border-sky-400 bg-sky-500/10 shadow-[0_0_0_1px_rgba(56,189,248,0.3)]'
+    default:
+      return 'border-amber-400 bg-amber-500/10 shadow-[0_0_0_1px_rgba(251,191,36,0.3)]'
+  }
+}
 
 const handleInitialLogin = async () => {
   errorMsg.value = ''
@@ -66,11 +84,7 @@ const handleCompleteSetup = async () => {
   loading.value = true
 
   try {
-    const res: any = await setupComplete({
-      username: form.adminUsername,
-      password: form.newPassword,
-      panel_path: form.customPanelPath
-    })
+    const res: any = await setupComplete(buildSetupPayload(form))
     if (res.code === 200) {
       step.value = 3
     } else {
@@ -84,6 +98,7 @@ const handleCompleteSetup = async () => {
 }
 
 const goToLogin = () => {
+  authStore.logout()
   router.push('/login')
 }
 </script>
@@ -179,6 +194,27 @@ const goToLogin = () => {
         </div>
 
         <div class="h-px bg-gray-700/50 my-6"></div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-300 mb-3">{{ $t('setup.usageProfile') }}</label>
+          <div class="grid grid-cols-1 gap-3">
+            <button
+              v-for="option in usageProfileOptions"
+              :key="option.value"
+              type="button"
+              @click="form.usageProfile = option.value"
+              :class="[
+                'text-left rounded-xl border px-4 py-3 transition-all duration-200',
+                profileToneClasses(option.tone, form.usageProfile === option.value)
+              ]"
+            >
+              <p class="font-semibold text-white">{{ $t(option.labelKey) }}</p>
+              <p class="text-sm text-gray-300 mt-1">{{ $t(option.descriptionKey) }}</p>
+              <p class="text-xs text-gray-500 mt-2">{{ $t(option.emphasisKey) }}</p>
+            </button>
+          </div>
+          <p class="text-xs text-gray-400 mt-2">{{ $t('setup.usageProfileHint') }}</p>
+        </div>
 
         <div>
           <label class="block text-sm font-medium text-gray-300 mb-2">{{ $t('setup.customPanelPath') }}</label>

@@ -5,6 +5,7 @@ import LoginView from '../views/LoginView.vue'
 import DashboardView from '@/views/DashboardView.vue'
 import MainLayout from '@/components/layout/MainLayout.vue'
 import { useAuthStore } from '@/store/auth'
+import { useUsageProfile } from '@/composables/useUsageProfile'
 
 const routes: RouteRecordRaw[] = [
   {
@@ -24,10 +25,6 @@ const routes: RouteRecordRaw[] = [
     component: MainLayout,
     meta: { requiresAuth: true },
     children: [
-      {
-        path: '',
-        redirect: '/dashboard'
-      },
       {
         path: 'dashboard',
         name: 'Dashboard',
@@ -63,19 +60,25 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to) => {
   const authStore = useAuthStore()
-  
-  // Minimal auth guard logic
+  const { homeRoute, loadUsageProfile, usageProfileLoaded } = useUsageProfile()
+
   const isAuthenticated = authStore.isAuthenticated
-  
+
   if (to.meta.requiresAuth && !isAuthenticated) {
-    next('/login')
-  } else if (to.meta.requiresGuest && isAuthenticated) {
-    next('/dashboard')
-  } else {
-    next()
+    return '/login'
   }
+
+  if (isAuthenticated && (to.meta.requiresAuth || to.meta.requiresGuest || to.path === '/') && !usageProfileLoaded.value) {
+    await loadUsageProfile()
+  }
+
+  if (isAuthenticated && (to.meta.requiresGuest || to.path === '/')) {
+    return homeRoute.value
+  }
+
+  return true
 })
 
 export default router

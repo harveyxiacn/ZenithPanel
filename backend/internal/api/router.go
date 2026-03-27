@@ -327,6 +327,19 @@ func validateInbound(target model.Inbound) string {
 	return ""
 }
 
+func normalizeUsageProfile(raw string) string {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "personal_proxy":
+		return "personal_proxy"
+	case "vps_ops":
+		return "vps_ops"
+	case "mixed":
+		return "mixed"
+	default:
+		return "mixed"
+	}
+}
+
 func inboundHasDerivedPublicHost(streamJSON string) bool {
 	if strings.TrimSpace(streamJSON) == "" || strings.TrimSpace(streamJSON) == "{}" {
 		return false
@@ -555,9 +568,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 		setupGroup.POST("/complete", middleware.JWTAuthMiddleware(), func(c *gin.Context) {
 			var req struct {
-				Username  string `json:"username"`
-				Password  string `json:"password"`
-				PanelPath string `json:"panel_path"`
+				Username     string `json:"username"`
+				Password     string `json:"password"`
+				PanelPath    string `json:"panel_path"`
+				UsageProfile string `json:"usage_profile"`
 			}
 			if err := c.ShouldBindJSON(&req); err != nil || req.Username == "" || req.Password == "" {
 				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Username and password are required"})
@@ -582,6 +596,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			// Wrap admin creation + setup completion in a transaction to prevent
 			// partial state (admin exists but setup not marked complete).
 			err = config.DB.Transaction(func(tx *gorm.DB) error {
+				usageProfile := normalizeUsageProfile(req.UsageProfile)
 				admin := model.AdminUser{
 					Username:     req.Username,
 					PasswordHash: string(hash),
@@ -591,6 +606,11 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				}
 				if err := tx.Where("`key` = ?", "setup_complete").
 					Assign(model.Setting{Key: "setup_complete", Value: "true"}).
+					FirstOrCreate(&model.Setting{}).Error; err != nil {
+					return err
+				}
+				if err := tx.Where("`key` = ?", "usage_profile").
+					Assign(model.Setting{Key: "usage_profile", Value: usageProfile}).
 					FirstOrCreate(&model.Setting{}).Error; err != nil {
 					return err
 				}
@@ -1858,16 +1878,19 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.GET("/admin/access", func(c *gin.Context) {
 			panelPath := config.GetSetting("panel_path")
 			port := config.GetSetting("port")
+			usageProfile := normalizeUsageProfile(config.GetSetting("usage_profile"))
 			c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
-				"panel_path": panelPath,
-				"port":       port,
+				"panel_path":    panelPath,
+				"port":          port,
+				"usage_profile": usageProfile,
 			}})
 		})
 
 		authGroup.PUT("/admin/access", func(c *gin.Context) {
 			var req struct {
-				PanelPath *string `json:"panel_path"`
-				Port      *string `json:"port"`
+				PanelPath    *string `json:"panel_path"`
+				Port         *string `json:"port"`
+				UsageProfile *string `json:"usage_profile"`
 			}
 			if err := c.ShouldBindJSON(&req); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid request"})
@@ -1886,6 +1909,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					return
 				}
 				config.SetSetting("port", *req.Port)
+				changed = true
+			}
+			if req.UsageProfile != nil {
+				config.SetSetting("usage_profile", normalizeUsageProfile(*req.UsageProfile))
 				changed = true
 			}
 			msg := "Settings saved."

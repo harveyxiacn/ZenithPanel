@@ -34,6 +34,24 @@ export default {
     logout: '登出',
   },
 
+  usageProfile: {
+    personalProxy: {
+      label: '個人代理',
+      description: '優先顯示節點、用戶端、訂閱與端點健康狀態。',
+      emphasis: '適合個人裝置、家人朋友或小型私用群組。',
+    },
+    vpsOps: {
+      label: 'VPS 維運',
+      description: '優先顯示監控、終端、檔案、Docker 與防火牆。',
+      emphasis: '適合把 ZenithPanel 當成伺服器維運面板來使用。',
+    },
+    mixed: {
+      label: '混合模式',
+      description: '在代理管理與 VPS 維運之間保持平衡。',
+      emphasis: '適合同時頻繁使用兩類能力的情境。',
+    },
+  },
+
   login: {
     title: '登入 Zenith',
     username: '使用者名稱',
@@ -61,6 +79,8 @@ export default {
     minChars: '最少 8 個字元',
     retypePassword: '再次輸入新密碼',
     customPanelPath: '自訂面板 URL 路徑',
+    usageProfile: '使用画像',
+    usageProfileHint: '這會改變 ZenithPanel 優先強調的工作流程，之後可在設定中調整。',
     customPanelPathHint: '變更以防止自動掃描。',
     applyInit: '套用並初始化 Zenith',
     completeTitle: '初始化完成！',
@@ -75,6 +95,9 @@ export default {
   dashboard: {
     title: '系統概覽',
     subtitle: '即時效能指標與代理狀態。',
+    profileOverview: '画像導向工作區',
+    profileHint: 'ZenithPanel 保持同一套功能，但會依照你的使用画像調整導覽順序、重點資訊與推薦操作。',
+    quickActions: '快速操作',
     cpuUsage: 'CPU 使用率',
     memory: '記憶體',
     diskUsage: '磁碟使用率',
@@ -88,6 +111,39 @@ export default {
     cpu: 'CPU',
     disk: '磁碟',
     customizeCards: '自訂卡片',
+    profile: {
+      primaryActionBadge: '推薦',
+      personalProxy: {
+        title: '代理優先總覽',
+        description: '先回到節點、訂閱與診斷，而不是先進入系統維運區域。',
+        primaryAction: '開啟代理節點',
+        primaryActionHint: '管理入站、路由、套用設定與診斷。',
+        secondaryActionClients: '管理用戶端與訂閱',
+        secondaryActionClientsHint: '新增使用者、複製連結、輪換訂閱。',
+        secondaryActionSecurity: '查看安全設定',
+        secondaryActionSecurityHint: '更新面板存取、TLS 與画像偏好。',
+      },
+      vpsOps: {
+        title: '維運優先總覽',
+        description: '把核心 VPS 維運放在前面，同時保留代理工具隨時可用。',
+        primaryAction: '開啟伺服器管理',
+        primaryActionHint: '進入終端、檔案、Docker 與防火牆工作流程。',
+        secondaryActionSecurity: '查看安全設定',
+        secondaryActionSecurityHint: '管理存取、更新、TLS 與系統優化。',
+        secondaryActionProxy: '開啟代理節點',
+        secondaryActionProxyHint: '伺服器工作完成後快速回到代理管理。',
+      },
+      mixed: {
+        title: '平衡總覽',
+        description: '讓代理與 VPS 維運並列顯示，不偏向單一方向。',
+        primaryAction: '開啟儀表板',
+        primaryActionHint: '停留在綜合總覽，取得平衡的系統上下文。',
+        secondaryActionServers: '開啟伺服器管理',
+        secondaryActionServersHint: '直達維運、Docker 與檔案系統工具。',
+        secondaryActionNodes: '開啟代理節點',
+        secondaryActionNodesHint: '直達入站、用戶端與訂閱管理。',
+      },
+    },
   },
 
   servers: {
@@ -315,6 +371,8 @@ export default {
     access: {
       title: '存取設定',
       subtitle: '自訂 ZenithPanel 的連線方式',
+      usageProfile: '使用画像',
+      usageProfileHint: '會調整導覽、儀表板重點與推薦內容，但不會停用任何功能。',
       securityPath: '安全路徑後綴',
       panelPort: '面板連接埠',
       portHint: '使用 Cloudflare 相容的 HTTPS 連接埠：443、2053、2083、2087、2096、8443',
