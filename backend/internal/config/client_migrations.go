@@ -22,6 +22,47 @@ type sqliteIndexInfoRow struct {
 	Name  string `gorm:"column:name"`
 }
 
+// preMigrateClientColumns adds missing columns to the clients table BEFORE
+// GORM AutoMigrate runs. This prevents the "NOT NULL constraint failed" crash
+// when upgrading from an older schema that lacked these columns.
+func preMigrateClientColumns(database *gorm.DB) {
+	// Only run if the clients table exists
+	if !database.Migrator().HasTable("clients") {
+		return
+	}
+
+	// Columns that must exist before AutoMigrate can rebuild the table.
+	// Each entry: column name → ALTER TABLE statement with a safe default.
+	columns := []struct {
+		name string
+		ddl  string
+	}{
+		{"inbound_id", "ALTER TABLE clients ADD COLUMN inbound_id integer NOT NULL DEFAULT 0"},
+		{"uuid", "ALTER TABLE clients ADD COLUMN uuid text NOT NULL DEFAULT ''"},
+		{"up_load", "ALTER TABLE clients ADD COLUMN up_load integer DEFAULT 0"},
+		{"down_load", "ALTER TABLE clients ADD COLUMN down_load integer DEFAULT 0"},
+		{"total", "ALTER TABLE clients ADD COLUMN total integer DEFAULT 0"},
+		{"expiry_time", "ALTER TABLE clients ADD COLUMN expiry_time integer DEFAULT 0"},
+		{"remark", "ALTER TABLE clients ADD COLUMN remark text DEFAULT ''"},
+		{"updated_at", "ALTER TABLE clients ADD COLUMN updated_at datetime"},
+	}
+
+	for _, col := range columns {
+		if !database.Migrator().HasColumn(&gorm.Model{}, col.name) {
+			// HasColumn with a model won't work for raw table names,
+			// so we use a raw PRAGMA check instead.
+			var count int64
+			database.Raw("SELECT COUNT(*) FROM pragma_table_info('clients') WHERE name = ?", col.name).Scan(&count)
+			if count == 0 {
+				log.Printf("Pre-migration: adding missing column 'clients.%s'", col.name)
+				if err := database.Exec(col.ddl).Error; err != nil {
+					log.Printf("Pre-migration: column '%s' may already exist: %v", col.name, err)
+				}
+			}
+		}
+	}
+}
+
 func migrateClientSchema(database *gorm.DB) error {
 	if err := ensureScopedClientEmailUniqueness(database); err != nil {
 		return err

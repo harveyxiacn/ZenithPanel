@@ -22,6 +22,12 @@ func InitDB(dbPath string) {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
+	// Pre-migration: add missing columns to existing tables BEFORE AutoMigrate.
+	// SQLite's ALTER TABLE can't add NOT NULL columns without defaults, and GORM's
+	// AutoMigrate recreates the table — which fails if existing rows have NULL in
+	// NOT NULL columns. This step ensures columns exist so AutoMigrate succeeds.
+	preMigrateClientColumns(database)
+
 	err = database.AutoMigrate(
 		&model.Inbound{},
 		&model.Client{},
