@@ -64,17 +64,15 @@ func (c *BaseCore) clearCmd(cmd *exec.Cmd) {
 	c.mu.Unlock()
 }
 
-// validateConfig runs the engine's built-in config check (e.g. "xray test -c config.json")
-// and returns an error with the output if validation fails.
+// validateConfig runs the engine's built-in config check if available.
+// sing-box supports "check -c", xray does not have a validation subcommand.
+// If validation is not available, we skip it and rely on crash detection.
 func (c *BaseCore) validateConfig() error {
-	// Both xray and sing-box support a check/test subcommand
-	var cmd *exec.Cmd
-	if c.BinaryPath == "sing-box" {
-		cmd = exec.Command(c.BinaryPath, "check", "-c", c.ConfigPath)
-	} else {
-		// xray uses "test" subcommand for config validation
-		cmd = exec.Command(c.BinaryPath, "test", "-c", c.ConfigPath)
+	if c.BinaryPath != "sing-box" {
+		// Xray has no config validation command — skip, rely on crash detection
+		return nil
 	}
+	cmd := exec.Command(c.BinaryPath, "check", "-c", c.ConfigPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		output := string(out)
