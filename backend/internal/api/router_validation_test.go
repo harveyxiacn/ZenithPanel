@@ -48,3 +48,33 @@ func TestValidateInboundAllowsTLSDerivedPublicHostWithoutServerAddress(t *testin
 		t.Fatalf("expected inbound with TLS serverName to pass validation, got %q", msg)
 	}
 }
+
+func TestValidateInboundRejectsNonIPListenAddress(t *testing.T) {
+	inbound := model.Inbound{
+		Tag:           "vless-reality",
+		Protocol:      "vless",
+		Listen:        "Listen",
+		ServerAddress: "vpn.example.com",
+		Port:          8443,
+		Settings:      `{"decryption":"none"}`,
+	}
+
+	if msg := validateInbound(inbound); msg == "" {
+		t.Fatal("expected validation error for non-IP listen address")
+	}
+}
+
+func TestValidateInboundAllowsIPAddressListenAddress(t *testing.T) {
+	inbound := model.Inbound{
+		Tag:           "vless-reality",
+		Protocol:      "vless",
+		Listen:        "0.0.0.0",
+		ServerAddress: "vpn.example.com",
+		Port:          8443,
+		Settings:      `{"decryption":"none"}`,
+	}
+
+	if msg := validateInbound(inbound); msg != "" {
+		t.Fatalf("expected valid IP listen address to pass validation, got %q", msg)
+	}
+}
