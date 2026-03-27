@@ -33,7 +33,7 @@ type BaseCore struct {
 	mu         sync.RWMutex
 	cmd        *exec.Cmd
 	lastErr    string
-	stderrBuf  bytes.Buffer
+	outputBuf  bytes.Buffer // captures both stdout and stderr
 }
 
 func (c *BaseCore) Status() bool {
@@ -58,18 +58,49 @@ func (c *BaseCore) setCmd(cmd *exec.Cmd) {
 func (c *BaseCore) clearCmd(cmd *exec.Cmd) {
 	c.mu.Lock()
 	if c.cmd == cmd {
-		c.lastErr = c.stderrBuf.String()
+		c.lastErr = c.outputBuf.String()
 		c.cmd = nil
 	}
 	c.mu.Unlock()
 }
 
-// startAndVerify starts the process, captures stderr, and waits briefly to
-// detect early crashes (e.g., config parse errors). Returns an error if the
-// process exits within the first second.
+// validateConfig runs the engine's built-in config check (e.g. "xray test -c config.json")
+// and returns an error with the output if validation fails.
+func (c *BaseCore) validateConfig() error {
+	// Both xray and sing-box support a check/test subcommand
+	var cmd *exec.Cmd
+	if c.BinaryPath == "sing-box" {
+		cmd = exec.Command(c.BinaryPath, "check", "-c", c.ConfigPath)
+	} else {
+		// xray uses "test" subcommand for config validation
+		cmd = exec.Command(c.BinaryPath, "test", "-c", c.ConfigPath)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		output := string(out)
+		if len(output) > 800 {
+			output = output[len(output)-800:]
+		}
+		if output == "" {
+			output = err.Error()
+		}
+		return fmt.Errorf("config validation failed:\n%s", output)
+	}
+	return nil
+}
+
+// startAndVerify validates the config, starts the process, captures stdout+stderr,
+// and waits briefly to detect early crashes.
 func (c *BaseCore) startAndVerify(cmd *exec.Cmd) error {
-	c.stderrBuf.Reset()
-	cmd.Stderr = &c.stderrBuf
+	// Validate config before starting — catches most errors immediately
+	if err := c.validateConfig(); err != nil {
+		return fmt.Errorf("%s %v", c.BinaryPath, err)
+	}
+
+	c.outputBuf.Reset()
+	// Capture both stdout and stderr — xray writes errors to stdout
+	cmd.Stdout = &c.outputBuf
+	cmd.Stderr = &c.outputBuf
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start %s: %w", c.BinaryPath, err)
@@ -87,14 +118,14 @@ func (c *BaseCore) startAndVerify(cmd *exec.Cmd) error {
 	select {
 	case err := <-exited:
 		// Process exited within the grace period — config or runtime error
-		stderr := c.stderrBuf.String()
-		if len(stderr) > 500 {
-			stderr = stderr[len(stderr)-500:]
+		output := c.outputBuf.String()
+		if len(output) > 800 {
+			output = output[len(output)-800:]
 		}
-		if stderr == "" {
-			stderr = "process exited with no output"
+		if output == "" {
+			output = "process exited with no output"
 		}
-		return fmt.Errorf("%s crashed on startup: %v\n%s", c.BinaryPath, err, stderr)
+		return fmt.Errorf("%s crashed on startup: %v\n%s", c.BinaryPath, err, output)
 	case <-time.After(1500 * time.Millisecond):
 		// Process still running after 1.5s — likely started successfully.
 		// The goroutine above will call clearCmd when it eventually exits.
