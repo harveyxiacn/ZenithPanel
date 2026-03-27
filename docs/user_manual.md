@@ -118,7 +118,7 @@ For full control, you can still manually configure nodes:
 1. Go to the `Proxy` panel, select `Nodes -> Add Node`.
 2. Choose a protocol, enter port, and provide Settings/Stream JSON manually.
 3. Go to the `Users` interface to assign a user to this node.
-4. In the `Subscriptions` panel, click the copy button and update your client!
+4. In the `Subscriptions` panel, use the format-aware subscription link picker and update your client with the correct link type.
 
 See the [Proxy Setup Guide](proxy-setup-guide.md) for detailed JSON examples per protocol.
 
@@ -131,7 +131,7 @@ Each client in the **Users & Subs** tab has a **QR Code** button that generates 
 - **V2Ray / V2RayN** format: Generates a Base64 subscription QR code for V2RayN, V2RayNG, and Shadowrocket.
 - **Clash / Mihomo** format: Generates a Clash YAML subscription QR code for Clash, Mihomo, and Stash.
 
-You can switch between formats with the toggle, download the QR code as PNG, or copy the subscription link directly from the modal.
+You can switch between formats with the toggle, download the QR code as PNG, or copy the explicit V2Ray/Base64 or Clash/YAML subscription link directly from the modal.
 
 ---
 

@@ -42,7 +42,7 @@ Current server panels (like 1Panel, BT) focus on website hosting and general mai
 
 ### 🚀 Proxy Orchestration
 - **Inbound Management**: Full CRUD for Xray / Sing-box inbound configs with protocol selector and JSON settings editor.
-- **Client / User Management**: Add and remove clients per inbound, auto-generated UUID, subscription link copy-to-clipboard.
+- **Client / User Management**: Add and remove clients per inbound, auto-generated UUID, and format-aware subscription link sharing.
 - **Routing Rules**: Manage domain, geo, and outbound routing rules in a structured form.
 - **Proxy Runtime Status**: See whether Xray is running and how many enabled nodes, users, and routing rules are active.
 

@@ -288,6 +288,12 @@ export default {
       confirmDelete: 'Delete this client?',
       unlimited: 'Unlimited',
     },
+    subscription: {
+      title: 'Subscription Link',
+      urlLabel: 'Subscription URL',
+      v2rayHint: 'Use the explicit Base64 subscription URL for V2RayN, v2rayNG, Nekoray, and similar V2Ray clients.',
+      clashHint: 'Use the explicit Clash/YAML subscription URL for Clash, Mihomo, Stash, and similar clients.',
+    },
     quickSetup: {
       title: 'Quick Setup',
       steps: { select: 'Select', review: 'Review', done: 'Done' },

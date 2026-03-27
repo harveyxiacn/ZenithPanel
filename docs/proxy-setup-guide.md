@@ -258,7 +258,7 @@ Navigate to **Users & Subs** tab and click **Add Client**.
 | Traffic Limit | `0` (unlimited) or total bytes (e.g., `107374182400` for 100GB) |
 
 The UUID is auto-generated. After creation:
-- Click **Sub Link** to copy the subscription URL.
+- Click **Sub Link** to open the format selector and copy an explicit subscription URL.
 - Click **QR Code** to generate a scannable QR code for mobile clients (supports V2Ray/Base64 and Clash/YAML formats).
 
 If the panel is accessed through a management hostname, reverse proxy, or tunnel that is different from the actual proxy node address, edit the inbound and set **Public Host / IP** before importing the subscription. This value controls the host embedded into Clash and V2Ray client configs.
@@ -292,13 +292,15 @@ https://your-server:port/api/v1/sub/UUID?format=base64
 
 ### V2RayN (Windows)
 1. Open V2RayN -> **Subscription** -> **Subscription Settings**
-2. Add a new subscription with the URL
+2. Add a new subscription with the explicit Base64 URL from ZenithPanel:
+   `https://your-server:port/api/v1/sub/UUID?format=base64`
 3. Click **Update Subscription** -> the nodes will appear in the list
 4. Right-click a node -> **Set as Active Server**
 
 ### V2RayNG (Android)
 1. Open V2RayNG -> tap **+** -> **Import config from URL**
-2. Paste the subscription URL
+2. Paste the explicit Base64 URL from ZenithPanel:
+   `https://your-server:port/api/v1/sub/UUID?format=base64`
 3. Tap the play button to connect
 
 ### Shadowrocket (iOS)
