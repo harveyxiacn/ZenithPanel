@@ -176,6 +176,7 @@ export default {
       port: 'Port',
       transport: 'Transport',
       listen: 'Listen',
+      serverAddress: 'Public Host / IP',
       settingsJson: 'Settings (JSON) - Protocol config',
       streamJson: 'Stream (JSON) - Transport & TLS',
       noInbounds: 'No inbounds configured yet',
@@ -268,6 +269,7 @@ export default {
       },
       fields: {
         defaultPort: 'Default port',
+        serverAddress: 'Public Host / IP',
         destSni: 'Destination (SNI Target)',
         serverNames: 'Server Names',
         privateKey: 'Private Key (auto-generated)',

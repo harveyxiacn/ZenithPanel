@@ -53,7 +53,7 @@ const inbounds = ref<any[]>([])
 const inboundsLoading = ref(false)
 const showInboundForm = ref(false)
 const editingInbound = ref<any>(null)
-const inboundForm = ref({ tag: '', protocol: 'vless', listen: '', port: 443, settings: '{}', stream: '{}' })
+const inboundForm = ref({ tag: '', protocol: 'vless', listen: '', server_address: '', port: 443, settings: '{}', stream: '{}' })
 const editMode = ref<'visual' | 'json'>('visual')
 
 // Visual form fields extracted from settings/stream JSON
@@ -289,6 +289,7 @@ function openInboundForm(inbound?: any) {
       tag: inbound.tag || '',
       protocol: inbound.protocol || 'vless',
       listen: inbound.listen ?? '',
+      server_address: inbound.server_address ?? '',
       port: inbound.port || 443,
       settings: JSON.stringify(JSON.parse(settingsStr || '{}'), null, 2),
       stream: JSON.stringify(JSON.parse(streamStr || '{}'), null, 2),
@@ -296,7 +297,7 @@ function openInboundForm(inbound?: any) {
     parseJsonToVisual(settingsStr, streamStr)
   } else {
     editingInbound.value = null
-    inboundForm.value = { tag: '', protocol: 'vless', listen: '', port: 443, settings: '{}', stream: '{}' }
+    inboundForm.value = { tag: '', protocol: 'vless', listen: '', server_address: '', port: 443, settings: '{}', stream: '{}' }
     resetVisualForm()
   }
   showInboundForm.value = true
@@ -329,7 +330,9 @@ async function saveInbound() {
     await fetchInbounds()
     await loadProxyStatus()
     toast.success(t('common.saved'))
-  } catch { toast.error(t('common.errorOccurred')) }
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || e?.message || t('common.errorOccurred'))
+  }
 }
 
 async function removeInbound(id: number) {
@@ -741,6 +744,7 @@ async function proceedToReview() {
       cfg.flow = 'xtls-rprx-vision'
       cfg.fingerprint = 'chrome'
     }
+    cfg.serverAddress = ''
     if (preset.needsDomain) {
       cfg.domain = ''
     }
@@ -833,6 +837,7 @@ function buildPayload(presetId: string) {
     protocol: preset.protocol,
     port: cfg.port,
     listen: '',
+    server_address: cfg.serverAddress || cfg.domain || '',
     settings: JSON.stringify(settings),
     stream: JSON.stringify(stream),
     enable: true,
@@ -1023,7 +1028,7 @@ onMounted(() => {
           </div>
 
           <!-- Basic fields (always visible) -->
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
             <input v-model="inboundForm.tag" :placeholder="$t('proxy.inbounds.tag')" class="input-field text-sm" />
             <select v-model="inboundForm.protocol" class="input-field text-sm">
               <option value="vless">VLESS</option>
@@ -1033,6 +1038,7 @@ onMounted(() => {
               <option value="shadowsocks">Shadowsocks</option>
             </select>
             <input v-model="inboundForm.listen" :placeholder="$t('proxy.inbounds.listen')" class="input-field text-sm" />
+            <input v-model="inboundForm.server_address" :placeholder="$t('proxy.inbounds.serverAddress')" class="input-field text-sm" />
             <input v-model.number="inboundForm.port" type="number" :placeholder="$t('proxy.inbounds.port')" class="input-field text-sm" />
           </div>
 
@@ -1492,7 +1498,7 @@ onMounted(() => {
 
                 <div v-if="expandedPreset === id" class="p-4 space-y-3 border-t border-slate-100">
                   <!-- Common fields -->
-                  <div class="grid grid-cols-2 gap-3">
+                  <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                     <div>
                       <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.tag') }}</label>
                       <input v-model="presetConfigs[id].tag" class="input-field text-sm w-full" />
@@ -1500,6 +1506,10 @@ onMounted(() => {
                     <div>
                       <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.port') }}</label>
                       <input v-model.number="presetConfigs[id].port" type="number" class="input-field text-sm w-full" />
+                    </div>
+                    <div>
+                      <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.serverAddress') }}</label>
+                      <input v-model="presetConfigs[id].serverAddress" class="input-field text-sm w-full" placeholder="vpn.example.com" />
                     </div>
                   </div>
 

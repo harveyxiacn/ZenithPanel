@@ -240,17 +240,19 @@ func parseUintID(c *gin.Context) (uint, bool) {
 }
 
 type inboundPayload struct {
-	Tag            *string                      `json:"tag"`
-	Protocol       *string                      `json:"protocol"`
-	Listen         *string                      `json:"listen"`
-	Port           *int                         `json:"port"`
-	Network        *string                      `json:"network"`
-	Settings       *string                      `json:"settings"`
-	Stream         *string                      `json:"stream"`
-	StreamSettings *string                      `json:"streamSettings"`
-	ClientStats    *[]threeXUIClientStatPayload `json:"clientStats"`
-	Enable         *bool                        `json:"enable"`
-	Remark         *string                      `json:"remark"`
+	Tag                 *string                      `json:"tag"`
+	Protocol            *string                      `json:"protocol"`
+	Listen              *string                      `json:"listen"`
+	ServerAddress       *string                      `json:"server_address"`
+	ServerAddressLegacy *string                      `json:"serverAddress"`
+	Port                *int                         `json:"port"`
+	Network             *string                      `json:"network"`
+	Settings            *string                      `json:"settings"`
+	Stream              *string                      `json:"stream"`
+	StreamSettings      *string                      `json:"streamSettings"`
+	ClientStats         *[]threeXUIClientStatPayload `json:"clientStats"`
+	Enable              *bool                        `json:"enable"`
+	Remark              *string                      `json:"remark"`
 }
 
 type clientPayload struct {
@@ -275,6 +277,12 @@ func applyInboundPayload(target *model.Inbound, payload inboundPayload) {
 	}
 	if payload.Listen != nil {
 		target.Listen = strings.TrimSpace(*payload.Listen)
+	}
+	switch {
+	case payload.ServerAddress != nil:
+		target.ServerAddress = strings.TrimSpace(*payload.ServerAddress)
+	case payload.ServerAddressLegacy != nil:
+		target.ServerAddress = strings.TrimSpace(*payload.ServerAddressLegacy)
 	}
 	if payload.Port != nil {
 		target.Port = *payload.Port
@@ -309,7 +317,53 @@ func validateInbound(target model.Inbound) string {
 	if target.Port <= 0 || target.Port > 65535 {
 		return "Port must be between 1 and 65535"
 	}
+	if strings.TrimSpace(target.ServerAddress) == "" && !inboundHasDerivedPublicHost(target.Stream) {
+		return "Public Host / IP is required when the inbound does not define a safe public host in its stream settings"
+	}
 	return ""
+}
+
+func inboundHasDerivedPublicHost(streamJSON string) bool {
+	if strings.TrimSpace(streamJSON) == "" || strings.TrimSpace(streamJSON) == "{}" {
+		return false
+	}
+
+	var stream map[string]interface{}
+	if err := json.Unmarshal([]byte(streamJSON), &stream); err != nil {
+		return false
+	}
+
+	if tlsSettings, ok := stream["tlsSettings"].(map[string]interface{}); ok {
+		if serverName, ok := tlsSettings["serverName"].(string); ok && strings.TrimSpace(serverName) != "" {
+			return true
+		}
+	}
+
+	if wsSettings, ok := stream["wsSettings"].(map[string]interface{}); ok {
+		if headers, ok := wsSettings["headers"].(map[string]interface{}); ok {
+			if host, ok := headers["Host"].(string); ok && strings.TrimSpace(host) != "" {
+				return true
+			}
+		}
+	}
+
+	if httpSettings, ok := stream["httpSettings"].(map[string]interface{}); ok {
+		if hosts, ok := httpSettings["host"].([]interface{}); ok {
+			for _, host := range hosts {
+				if hostStr, ok := host.(string); ok && strings.TrimSpace(hostStr) != "" {
+					return true
+				}
+			}
+		}
+	}
+
+	if httpUpgradeSettings, ok := stream["httpupgradeSettings"].(map[string]interface{}); ok {
+		if host, ok := httpUpgradeSettings["host"].(string); ok && strings.TrimSpace(host) != "" {
+			return true
+		}
+	}
+
+	return false
 }
 
 func applyClientPayload(target *model.Client, payload clientPayload) {

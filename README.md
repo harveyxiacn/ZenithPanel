@@ -96,6 +96,7 @@ docker run -d \
 ```
 
 > For full proxy-node exposure, use `--network host` and follow the dedicated setup flow in [docs/proxy-setup-guide.md](docs/proxy-setup-guide.md).
+> If you keep bridge networking, you must publish every inbound port manually or clients will import successfully but fail to connect.
 
 Then open `http://<your-server-ip>:8080` in your browser.
 
@@ -113,6 +114,10 @@ cd ZenithPanel
 
 # Build frontend
 cd frontend && npm install && npm run build && cd ..
+
+# Sync the built frontend into the backend embed directory
+# (Docker does this automatically in the image build)
+cp -r frontend/dist/* backend/internal/api/dist/
 
 # Build backend (embeds frontend)
 cd backend && go build -o zenithpanel . && cd ..

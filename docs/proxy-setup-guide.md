@@ -261,6 +261,8 @@ The UUID is auto-generated. After creation:
 - Click **Sub Link** to copy the subscription URL.
 - Click **QR Code** to generate a scannable QR code for mobile clients (supports V2Ray/Base64 and Clash/YAML formats).
 
+If the panel is accessed through a management hostname, reverse proxy, or tunnel that is different from the actual proxy node address, edit the inbound and set **Public Host / IP** before importing the subscription. This value controls the host embedded into Clash and V2Ray client configs.
+
 ---
 
 ## Step 4: Import into Client Apps
@@ -273,6 +275,8 @@ https://your-server:panel-port/api/v1/sub/USER_UUID
 The panel auto-detects the client type from the `User-Agent` header:
 - **Clash/Mihomo/Stash/Surge/Shadowrocket/Loon** -> Clash YAML format
 - **V2RayN/V2RayNG/Others** -> Base64-encoded links
+
+> The subscription request host is only a fallback. If your proxy node should use a different public hostname or IP, set **Public Host / IP** on the inbound so generated subscriptions point clients at the correct endpoint.
 
 You can also force the format:
 ```
