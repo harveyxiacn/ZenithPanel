@@ -169,6 +169,7 @@ export default {
       port: '連接埠',
       transport: '傳輸層',
       listen: '監聽位址',
+      serverAddress: '公網主機 / IP',
       settingsJson: '設定 (JSON) - 協定配置',
       streamJson: '傳輸 (JSON) - 傳輸層與 TLS',
       noInbounds: '尚未設定入站節點',
@@ -260,6 +261,7 @@ export default {
       },
       fields: {
         defaultPort: '預設連接埠',
+        serverAddress: '公網主機 / IP',
         destSni: '目標位址（SNI 偽裝）',
         serverNames: '伺服器名稱',
         privateKey: '私鑰（自動產生）',

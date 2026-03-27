@@ -1,11 +1,30 @@
 package sub
 
 import (
+	"encoding/base64"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 )
+
+func setInboundServerAddress(t *testing.T, in *model.Inbound, value string) {
+	t.Helper()
+
+	rv := reflect.ValueOf(in).Elem()
+	field := rv.FieldByName("ServerAddress")
+	if !field.IsValid() {
+		t.Fatalf("Inbound.ServerAddress field is missing")
+	}
+	if field.Kind() != reflect.String {
+		t.Fatalf("Inbound.ServerAddress must be a string, got %s", field.Kind())
+	}
+	if !field.CanSet() {
+		t.Fatalf("Inbound.ServerAddress is not settable")
+	}
+	field.SetString(value)
+}
 
 func TestParseStreamSupportsThreeXUIRealityShape(t *testing.T) {
 	stream := `{
@@ -154,5 +173,101 @@ func TestBuildClashVLESSRealityHasFingerprint(t *testing.T) {
 	}
 	if !strings.Contains(yaml, "flow: xtls-rprx-vision") {
 		t.Fatalf("expected flow in Clash config, got:\n%s", yaml)
+	}
+}
+
+func TestBuildClashConfigUsesInboundServerAddressOverride(t *testing.T) {
+	inbounds := []model.Inbound{{
+		Tag:      "test-reality",
+		Protocol: "vless",
+		Port:     443,
+		Settings: `{"flow": "xtls-rprx-vision"}`,
+		Stream: `{
+			"network": "tcp",
+			"security": "reality",
+			"realitySettings": {
+				"serverNames": ["www.microsoft.com"],
+				"shortIds": ["ab"],
+				"settings": {"publicKey": "pbk123", "fingerprint": "chrome"}
+			}
+		}`,
+	}}
+	setInboundServerAddress(t, &inbounds[0], "vpn.example.com")
+
+	client := model.Client{UUID: "test-uuid"}
+	yaml := buildClashConfig(inbounds, client, "panel.internal")
+
+	if !strings.Contains(yaml, "server: vpn.example.com") {
+		t.Fatalf("expected Clash config to use inbound server override, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "DOMAIN,vpn.example.com,DIRECT") {
+		t.Fatalf("expected Clash direct rule to use inbound server override, got:\n%s", yaml)
+	}
+	if strings.Contains(yaml, "panel.internal") {
+		t.Fatalf("expected panel request host to be excluded when inbound server override exists, got:\n%s", yaml)
+	}
+}
+
+func TestBuildBase64LinksUsesTLSServerNameWhenRequestHostDiffers(t *testing.T) {
+	inbounds := []model.Inbound{{
+		Tag:      "trojan-tls",
+		Protocol: "trojan",
+		Port:     443,
+		Stream: `{
+			"network": "tcp",
+			"security": "tls",
+			"tlsSettings": {
+				"serverName": "edge.example.com"
+			}
+		}`,
+	}}
+
+	client := model.Client{UUID: "test-uuid"}
+	encoded := buildBase64Links(inbounds, client, "panel.internal")
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode base64 links: %v", err)
+	}
+
+	links := string(raw)
+	if !strings.Contains(links, "trojan://test-uuid@edge.example.com:443") {
+		t.Fatalf("expected base64 subscription links to use TLS serverName when request host differs, got: %s", links)
+	}
+	if strings.Contains(links, "@panel.internal:443") {
+		t.Fatalf("expected request host to be excluded when TLS serverName is available, got: %s", links)
+	}
+}
+
+func TestBuildBase64LinksUsesInboundServerAddressOverrideForReality(t *testing.T) {
+	inbounds := []model.Inbound{{
+		Tag:      "reality-node",
+		Protocol: "vless",
+		Port:     443,
+		Settings: `{"flow":"xtls-rprx-vision"}`,
+		Stream: `{
+			"network":"tcp",
+			"security":"reality",
+			"realitySettings":{
+				"serverNames":["www.microsoft.com"],
+				"shortIds":["ab"],
+				"settings":{"publicKey":"pbk123","fingerprint":"chrome","spiderX":"/"}
+			}
+		}`,
+	}}
+	setInboundServerAddress(t, &inbounds[0], "vpn.example.com")
+
+	client := model.Client{UUID: "test-uuid"}
+	encoded := buildBase64Links(inbounds, client, "panel.internal")
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode base64 links: %v", err)
+	}
+
+	links := string(raw)
+	if !strings.Contains(links, "vless://test-uuid@vpn.example.com:443") {
+		t.Fatalf("expected base64 reality link to use inbound server override, got: %s", links)
+	}
+	if strings.Contains(links, "@panel.internal:443") {
+		t.Fatalf("expected request host to be excluded when inbound server override exists, got: %s", links)
 	}
 }

@@ -169,6 +169,7 @@ export default {
       port: 'ポート',
       transport: 'トランスポート',
       listen: 'リッスンアドレス',
+      serverAddress: '公開ホスト / IP',
       settingsJson: '設定 (JSON) - プロトコル設定',
       streamJson: 'ストリーム (JSON) - トランスポートと TLS',
       noInbounds: 'インバウンドが設定されていません',
@@ -260,6 +261,7 @@ export default {
       },
       fields: {
         defaultPort: 'デフォルトポート',
+        serverAddress: '公開ホスト / IP',
         destSni: '宛先（SNI ターゲット）',
         serverNames: 'サーバー名',
         privateKey: '秘密鍵（自動生成）',

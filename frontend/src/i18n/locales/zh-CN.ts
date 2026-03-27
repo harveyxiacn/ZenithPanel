@@ -169,6 +169,7 @@ export default {
       port: '端口',
       transport: '传输层',
       listen: '监听地址',
+      serverAddress: '公网主机 / IP',
       settingsJson: '设置 (JSON) - 协议配置',
       streamJson: '传输 (JSON) - 传输层与 TLS',
       noInbounds: '尚未配置入站节点',
@@ -260,6 +261,7 @@ export default {
       },
       fields: {
         defaultPort: '默认端口',
+        serverAddress: '公网主机 / IP',
         destSni: '目标地址（SNI 伪装）',
         serverNames: '服务器名称',
         privateKey: '私钥（自动生成）',

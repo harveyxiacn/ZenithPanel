@@ -177,6 +177,53 @@ func getServerAddr(c *gin.Context) string {
 	return host
 }
 
+func normalizeServerAddress(raw string) string {
+	addr := strings.TrimSpace(raw)
+	if addr == "" {
+		return ""
+	}
+
+	if parsed, err := url.Parse(addr); err == nil && parsed.Host != "" {
+		addr = parsed.Host
+	}
+
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+
+	return strings.Trim(addr, "[]")
+}
+
+func resolveInboundServerAddress(in model.Inbound, requestHost string) string {
+	if explicit := normalizeServerAddress(in.ServerAddress); explicit != "" {
+		return explicit
+	}
+
+	si := parseStream(in.Stream)
+	if si.Security == "tls" {
+		if sni := normalizeServerAddress(si.SNI); sni != "" {
+			return sni
+		}
+	}
+
+	switch si.Network {
+	case "ws":
+		if host := normalizeServerAddress(si.WSHost); host != "" {
+			return host
+		}
+	case "h2":
+		if host := normalizeServerAddress(si.H2Host); host != "" {
+			return host
+		}
+	case "httpupgrade":
+		if host := normalizeServerAddress(si.HTTPUpgradeHost); host != "" {
+			return host
+		}
+	}
+
+	return normalizeServerAddress(requestHost)
+}
+
 // GenerateSubscription creates subscription output in Clash YAML or base64-encoded links.
 func GenerateSubscription(c *gin.Context) {
 	uuid := c.Param("uuid")
@@ -285,14 +332,23 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 	sb.WriteString("proxies:\n")
 
 	var proxyNames []string
+	serverRules := make([]string, 0, len(inbounds))
+	seenServerRules := make(map[string]struct{})
 
 	for _, in := range inbounds {
 		si := parseStream(in.Stream)
+		publicServer := resolveInboundServerAddress(in, serverAddr)
 		name := in.Tag
 		if name == "" {
 			name = fmt.Sprintf("%s-%d", in.Protocol, in.Port)
 		}
 		proxyNames = append(proxyNames, name)
+		if publicServer != "" {
+			if _, seen := seenServerRules[publicServer]; !seen {
+				serverRules = append(serverRules, publicServer)
+				seenServerRules[publicServer] = struct{}{}
+			}
+		}
 
 		switch in.Protocol {
 		case "vless":
@@ -303,7 +359,7 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 			}
 			sb.WriteString(fmt.Sprintf("  - name: \"%s\"\n", name))
 			sb.WriteString("    type: vless\n")
-			sb.WriteString(fmt.Sprintf("    server: %s\n", serverAddr))
+			sb.WriteString(fmt.Sprintf("    server: %s\n", publicServer))
 			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
 			sb.WriteString(fmt.Sprintf("    uuid: %s\n", client.UUID))
 			sb.WriteString("    udp: true\n")
@@ -347,7 +403,7 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 		case "vmess":
 			sb.WriteString(fmt.Sprintf("  - name: \"%s\"\n", name))
 			sb.WriteString("    type: vmess\n")
-			sb.WriteString(fmt.Sprintf("    server: %s\n", serverAddr))
+			sb.WriteString(fmt.Sprintf("    server: %s\n", publicServer))
 			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
 			sb.WriteString(fmt.Sprintf("    uuid: %s\n", client.UUID))
 			sb.WriteString("    alterId: 0\n")
@@ -373,7 +429,7 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 		case "trojan":
 			sb.WriteString(fmt.Sprintf("  - name: \"%s\"\n", name))
 			sb.WriteString("    type: trojan\n")
-			sb.WriteString(fmt.Sprintf("    server: %s\n", serverAddr))
+			sb.WriteString(fmt.Sprintf("    server: %s\n", publicServer))
 			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
 			sb.WriteString(fmt.Sprintf("    password: %s\n", client.UUID))
 			sb.WriteString("    udp: true\n")
@@ -405,7 +461,7 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 			method, password := parseSSSettings(in.Settings)
 			sb.WriteString(fmt.Sprintf("  - name: \"%s\"\n", name))
 			sb.WriteString("    type: ss\n")
-			sb.WriteString(fmt.Sprintf("    server: %s\n", serverAddr))
+			sb.WriteString(fmt.Sprintf("    server: %s\n", publicServer))
 			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
 			sb.WriteString(fmt.Sprintf("    cipher: %s\n", method))
 			sb.WriteString(fmt.Sprintf("    password: %s\n", password))
@@ -413,7 +469,7 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 		case "hysteria2":
 			sb.WriteString(fmt.Sprintf("  - name: \"%s\"\n", name))
 			sb.WriteString("    type: hysteria2\n")
-			sb.WriteString(fmt.Sprintf("    server: %s\n", serverAddr))
+			sb.WriteString(fmt.Sprintf("    server: %s\n", publicServer))
 			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
 			sb.WriteString(fmt.Sprintf("    password: %s\n", client.UUID))
 			if si.SNI != "" {
@@ -449,12 +505,12 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 
 	// Rules — prevent proxy loop: server address must go DIRECT
 	sb.WriteString("rules:\n")
-	if net.ParseIP(serverAddr) != nil {
-		// Server is an IP address
-		sb.WriteString(fmt.Sprintf("  - IP-CIDR,%s/32,DIRECT,no-resolve\n", serverAddr))
-	} else {
-		// Server is a domain
-		sb.WriteString(fmt.Sprintf("  - DOMAIN,%s,DIRECT\n", serverAddr))
+	for _, ruleServer := range serverRules {
+		if net.ParseIP(ruleServer) != nil {
+			sb.WriteString(fmt.Sprintf("  - IP-CIDR,%s/32,DIRECT,no-resolve\n", ruleServer))
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("  - DOMAIN,%s,DIRECT\n", ruleServer))
 	}
 	// LAN / private
 	sb.WriteString("  - DOMAIN-SUFFIX,local,DIRECT\n")
@@ -516,6 +572,7 @@ func buildBase64Links(inbounds []model.Inbound, client model.Client, serverAddr 
 
 	for _, in := range inbounds {
 		si := parseStream(in.Stream)
+		publicServer := resolveInboundServerAddress(in, serverAddr)
 		remark := in.Tag
 		if remark == "" {
 			remark = fmt.Sprintf("%s-%d", in.Protocol, in.Port)
@@ -524,15 +581,15 @@ func buildBase64Links(inbounds []model.Inbound, client model.Client, serverAddr 
 		var link string
 		switch in.Protocol {
 		case "vless":
-			link = buildVLESSLink(in, client, serverAddr, si)
+			link = buildVLESSLink(in, client, publicServer, si)
 		case "vmess":
-			link = buildVMessLink(in, client, serverAddr, si)
+			link = buildVMessLink(in, client, publicServer, si)
 		case "trojan":
-			link = buildTrojanLink(in, client, serverAddr, si, remark)
+			link = buildTrojanLink(in, client, publicServer, si, remark)
 		case "shadowsocks":
-			link = buildSSLink(in, serverAddr, remark)
+			link = buildSSLink(in, publicServer, remark)
 		case "hysteria2":
-			link = buildHysteria2Link(in, client, serverAddr, si, remark)
+			link = buildHysteria2Link(in, client, publicServer, si, remark)
 		default:
 			continue
 		}

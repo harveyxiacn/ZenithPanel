@@ -96,6 +96,7 @@ docker run -d \
 ```
 
 > 如果要启用完整的代理节点监听能力，请使用 `--network host`，并参考 [docs/proxy-setup-guide-cn.md](docs/proxy-setup-guide-cn.md) 中的专用部署方式。
+> 如果继续使用桥接网络，还需要手动映射每一个入站端口，否则客户端虽然能导入订阅，但实际连接会失败。
 
 部署完成后，在浏览器打开 `http://<你的服务器IP>:8080`。
 
@@ -113,6 +114,10 @@ cd ZenithPanel
 
 # 构建前端
 cd frontend && npm install && npm run build && cd ..
+
+# 将前端产物同步到后端嵌入目录
+# （Docker 镜像构建时会自动完成这一步）
+cp -r frontend/dist/* backend/internal/api/dist/
 
 # 构建后端（自动嵌入前端）
 cd backend && go build -o zenithpanel . && cd ..
