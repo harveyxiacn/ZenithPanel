@@ -53,7 +53,7 @@ const inbounds = ref<any[]>([])
 const inboundsLoading = ref(false)
 const showInboundForm = ref(false)
 const editingInbound = ref<any>(null)
-const inboundForm = ref({ tag: '', protocol: 'vless', listen: '0.0.0.0', port: 443, settings: '{}', stream: '{}' })
+const inboundForm = ref({ tag: '', protocol: 'vless', listen: '', port: 443, settings: '{}', stream: '{}' })
 const editMode = ref<'visual' | 'json'>('visual')
 
 // Visual form fields extracted from settings/stream JSON
@@ -176,12 +176,12 @@ function parseJsonToVisual(settingsStr: string, streamStr: string) {
     }
     if (st.realitySettings) {
       const r = st.realitySettings
-      if (r.dest) vf.value.realityDest = r.dest
+      if (r.target || r.dest) vf.value.realityDest = r.target || r.dest
       if (r.serverNames) vf.value.realityServerNames = Array.isArray(r.serverNames) ? r.serverNames.join(',') : r.serverNames
       if (r.privateKey) vf.value.realityPrivateKey = r.privateKey
-      if (r.publicKey) vf.value.realityPublicKey = r.publicKey
+      if (r.publicKey || r.settings?.publicKey) vf.value.realityPublicKey = r.publicKey || r.settings.publicKey
       if (r.shortIds?.[0]) vf.value.realityShortId = r.shortIds[0]
-      if (r.fingerprint) vf.value.fingerprint = r.fingerprint
+      if (r.fingerprint || r.settings?.fingerprint) vf.value.fingerprint = r.fingerprint || r.settings.fingerprint
     }
     if (st.wsSettings) {
       if (st.wsSettings.path) vf.value.wsPath = st.wsSettings.path
@@ -221,13 +221,27 @@ function buildVisualToJson(protocol: string): { settings: string, stream: string
     if (v.alpn) stream.tlsSettings.alpn = v.alpn.split(',').map((a: string) => a.trim()).filter(Boolean)
     if (v.fingerprint) stream.tlsSettings.fingerprint = v.fingerprint
   } else if (v.security === 'reality') {
+    const serverNames = v.realityServerNames.split(',').map((s: string) => s.trim()).filter(Boolean)
+    const shortIds = v.realityShortId ? [v.realityShortId] : []
     stream.realitySettings = {
-      dest: v.realityDest,
-      serverNames: v.realityServerNames.split(',').map((s: string) => s.trim()).filter(Boolean),
+      show: false,
+      xver: 0,
+      target: v.realityDest,
+      serverNames,
       privateKey: v.realityPrivateKey,
-      publicKey: v.realityPublicKey,
-      shortIds: [v.realityShortId],
-      fingerprint: v.fingerprint || 'chrome',
+      shortIds,
+      settings: {
+        publicKey: v.realityPublicKey,
+        fingerprint: v.fingerprint || 'chrome',
+        serverName: '',
+        spiderX: '/',
+      },
+    }
+    if (v.network === 'tcp') {
+      stream.tcpSettings = {
+        acceptProxyProtocol: false,
+        header: { type: 'none' },
+      }
     }
   }
 
@@ -274,7 +288,7 @@ function openInboundForm(inbound?: any) {
     inboundForm.value = {
       tag: inbound.tag || '',
       protocol: inbound.protocol || 'vless',
-      listen: inbound.listen || '0.0.0.0',
+      listen: inbound.listen ?? '',
       port: inbound.port || 443,
       settings: JSON.stringify(JSON.parse(settingsStr || '{}'), null, 2),
       stream: JSON.stringify(JSON.parse(streamStr || '{}'), null, 2),
@@ -282,7 +296,7 @@ function openInboundForm(inbound?: any) {
     parseJsonToVisual(settingsStr, streamStr)
   } else {
     editingInbound.value = null
-    inboundForm.value = { tag: '', protocol: 'vless', listen: '0.0.0.0', port: 443, settings: '{}', stream: '{}' }
+    inboundForm.value = { tag: '', protocol: 'vless', listen: '', port: 443, settings: '{}', stream: '{}' }
     resetVisualForm()
   }
   showInboundForm.value = true
@@ -358,7 +372,9 @@ async function saveClient() {
     await fetchClients()
     await loadProxyStatus()
     toast.success(t('common.created'))
-  } catch { toast.error(t('common.errorOccurred')) }
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || e?.message || t('common.errorOccurred'))
+  }
 }
 
 async function removeClient(id: number) {
@@ -498,25 +514,66 @@ const routingPresets = [
   { id: 'ru-direct', rule_tag: 'Russia Direct', domain: 'geosite:category-ru', ip: 'geoip:ru', outbound_tag: 'direct' },
 ]
 
+function normalizeRoutingCsv(raw: string | undefined) {
+  return (raw || '')
+    .split(',')
+    .map(part => part.trim().toLowerCase())
+    .filter(Boolean)
+    .filter((part, index, arr) => arr.indexOf(part) === index)
+    .sort()
+    .join(',')
+}
+
+function routingRuleSignature(rule: Partial<{ domain: string, ip: string, port: string, outbound_tag: string }>) {
+  return [
+    normalizeRoutingCsv(rule.domain),
+    normalizeRoutingCsv(rule.ip),
+    normalizeRoutingCsv(rule.port),
+    (rule.outbound_tag || '').trim().toLowerCase(),
+  ].join('|')
+}
+
+function hasEquivalentRoutingRule(rule: Partial<{ domain: string, ip: string, port: string, outbound_tag: string }>) {
+  const signature = routingRuleSignature(rule)
+  return routingRules.value.some((existing: any) => routingRuleSignature(existing) === signature)
+}
+
 const addingPresets = ref(false)
 async function addRoutingPreset(preset: typeof routingPresets[0]) {
+  await fetchRoutingRules()
+  if (hasEquivalentRoutingRule(preset)) {
+    toast.info('Rule already exists')
+    return
+  }
   addingPresets.value = true
   try {
     await createRoutingRule({ rule_tag: preset.rule_tag, domain: preset.domain, ip: preset.ip, port: preset.port || '', outbound_tag: preset.outbound_tag, enable: true })
     await fetchRoutingRules()
     await loadProxyStatus()
     toast.success(t('common.created'))
-  } catch { toast.error(t('common.errorOccurred')) }
+  } catch (e: any) {
+    if (e?.response?.status === 409) {
+      await fetchRoutingRules()
+    } else {
+      toast.error(t('common.errorOccurred'))
+    }
+  }
   addingPresets.value = false
 }
 
 async function addRecommendedRules() {
   addingPresets.value = true
+  await fetchRoutingRules()
   const recommended = routingPresets.filter(p => ['block-ads', 'block-private', 'cn-direct'].includes(p.id))
   for (const preset of recommended) {
+    if (hasEquivalentRoutingRule(preset)) continue
     try {
-      await createRoutingRule({ rule_tag: preset.rule_tag, domain: preset.domain, ip: preset.ip, outbound_tag: preset.outbound_tag, enable: true })
-    } catch { toast.error(t('common.errorOccurred')) }
+      await createRoutingRule({ rule_tag: preset.rule_tag, domain: preset.domain, ip: preset.ip, port: preset.port || '', outbound_tag: preset.outbound_tag, enable: true })
+    } catch (e: any) {
+      if (e?.response?.status !== 409) {
+        toast.error(t('common.errorOccurred'))
+      }
+    }
   }
   await fetchRoutingRules()
   await loadProxyStatus()
@@ -524,8 +581,8 @@ async function addRecommendedRules() {
   addingPresets.value = false
 }
 
-const isPresetAdded = (ruleTag: string) => {
-  return routingRules.value.some((r: any) => r.rule_tag === ruleTag)
+const isPresetAdded = (preset: typeof routingPresets[0]) => {
+  return hasEquivalentRoutingRule(preset)
 }
 
 // ---- Helpers ----
@@ -626,6 +683,10 @@ function randomBase64(bytes: number): string {
   return btoa(String.fromCharCode(...arr))
 }
 
+function normalizeDefaultClientEmail(base = 'user1') {
+  return base.trim() || 'user1'
+}
+
 function openQuickSetup() {
   showQuickSetup.value = true
   quickSetupStep.value = 1
@@ -633,6 +694,7 @@ function openQuickSetup() {
   presetConfigs.value = {}
   quickSetupResults.value = []
   quickSetupCreating.value = false
+  defaultClientEmail.value = normalizeDefaultClientEmail('user1')
 }
 
 function togglePreset(id: string) {
@@ -711,12 +773,22 @@ function buildPayload(presetId: string) {
       stream = {
         network: 'tcp', security: 'reality',
         realitySettings: {
-          dest: cfg.dest,
-          serverNames: cfg.serverNames.split(',').map((s: string) => s.trim()),
+          show: false,
+          xver: 0,
+          target: cfg.dest,
+          serverNames: cfg.serverNames.split(',').map((s: string) => s.trim()).filter(Boolean),
           privateKey: cfg.privateKey,
-          publicKey: cfg.publicKey,
-          shortIds: [cfg.shortId],
-          fingerprint: cfg.fingerprint || 'chrome',
+          shortIds: cfg.shortId ? [cfg.shortId] : [],
+          settings: {
+            publicKey: cfg.publicKey,
+            fingerprint: cfg.fingerprint || 'chrome',
+            serverName: '',
+            spiderX: '/',
+          },
+        },
+        tcpSettings: {
+          acceptProxyProtocol: false,
+          header: { type: 'none' },
         },
       }
       break
@@ -760,7 +832,7 @@ function buildPayload(presetId: string) {
     tag: cfg.tag,
     protocol: preset.protocol,
     port: cfg.port,
-    listen: '0.0.0.0',
+    listen: '',
     settings: JSON.stringify(settings),
     stream: JSON.stringify(stream),
     enable: true,
@@ -770,28 +842,49 @@ function buildPayload(presetId: string) {
 async function executeQuickSetup() {
   quickSetupCreating.value = true
   quickSetupResults.value = []
+  const createdInboundIds: number[] = []
 
   for (const id of selectedPresetIds.value) {
     const cfg = presetConfigs.value[id]
     try {
       const payload = buildPayload(id)
-      await createInbound(payload)
+      const res: any = await createInbound(payload)
+      const createdId = Number(res?.data?.id || 0)
+      if (createdId > 0) createdInboundIds.push(createdId)
       quickSetupResults.value.push({ tag: cfg.tag, success: true })
     } catch (e: any) {
-      toast.error(e?.message || t('proxy.quickSetup.failed'))
-      quickSetupResults.value.push({ tag: cfg.tag, success: false, error: e?.message || t('proxy.quickSetup.failed') })
+      const msg = e?.response?.data?.msg || e?.message || t('proxy.quickSetup.failed')
+      toast.error(msg)
+      quickSetupResults.value.push({ tag: cfg.tag, success: false, error: msg })
     }
   }
 
   if (addDefaultRouting.value) {
-    try { await createRoutingRule({ rule_tag: 'Block Ads', domain: 'geosite:category-ads-all', outbound_tag: 'block', enable: true }) } catch { toast.error(t('common.errorOccurred')) }
-    try { await createRoutingRule({ rule_tag: 'Block Private IP', ip: 'geoip:private', outbound_tag: 'block', enable: true }) } catch { toast.error(t('common.errorOccurred')) }
+    // Refresh routing rules to get latest state before duplicate check
+    await fetchRoutingRules()
+    const defaultRules = [
+      { rule_tag: 'Block Ads', domain: 'geosite:category-ads-all', outbound_tag: 'block', enable: true },
+      { rule_tag: 'Block Private IP', ip: 'geoip:private', outbound_tag: 'block', enable: true },
+    ]
+    for (const rule of defaultRules) {
+      if (hasEquivalentRoutingRule(rule)) continue
+      try {
+        await createRoutingRule({ ...rule, port: '' })
+      } catch (e: any) {
+        // 409 = duplicate, silently skip (expected when re-running setup)
+        if (e?.response?.status !== 409) {
+          toast.error(t('common.errorOccurred'))
+        }
+      }
+    }
   }
 
-  if (addDefaultClient.value && selectedPresetIds.value.length > 0) {
-    await fetchInbounds()
-    if (inbounds.value.length > 0) {
-      try { await createClient({ email: defaultClientEmail.value, inbound_id: inbounds.value[0].id, enable: true }) } catch { toast.error(t('common.errorOccurred')) }
+  if (addDefaultClient.value && createdInboundIds.length > 0) {
+    try {
+      const email = normalizeDefaultClientEmail(defaultClientEmail.value)
+      await createClient({ email, inbound_id: createdInboundIds[0], enable: true })
+    } catch (e: any) {
+      toast.error(e?.response?.data?.msg || e?.message || t('common.errorOccurred'))
     }
   }
 
@@ -1178,13 +1271,13 @@ onMounted(() => {
               v-for="preset in routingPresets"
               :key="preset.id"
               @click="addRoutingPreset(preset)"
-              :disabled="addingPresets || isPresetAdded(preset.rule_tag)"
+              :disabled="addingPresets || isPresetAdded(preset)"
               class="inline-flex items-center px-3 py-1.5 text-xs font-medium rounded-full border transition disabled:opacity-50"
               :class="preset.outbound_tag === 'block'
                 ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
                 : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'"
             >
-              <CheckCircleIcon v-if="isPresetAdded(preset.rule_tag)" class="h-3 w-3 mr-1" />
+              <CheckCircleIcon v-if="isPresetAdded(preset)" class="h-3 w-3 mr-1" />
               <PlusIcon v-else class="h-3 w-3 mr-1" />
               {{ preset.rule_tag }}
               <span class="ml-1.5 text-[10px] opacity-60">→ {{ preset.outbound_tag }}</span>

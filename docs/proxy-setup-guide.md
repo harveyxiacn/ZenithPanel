@@ -48,14 +48,16 @@ The easiest way — one-click auto-configuration:
 6. Toggle **Create first client** to auto-create a user with subscription link.
 7. Click **Create All** — done!
 
-| Preset | Default Port | Domain Needed? | Notes |
-|--------|-------------|---------------|-------|
-| VLESS + Reality | 443 | No | Most censorship-resistant |
-| VLESS + WS + TLS | 2083 | Yes | CDN (Cloudflare) compatible |
-| VMess + WS + TLS | 2087 | Yes | Wide client support |
-| Trojan + TLS | 2096 | Yes | Simple, fast |
-| Hysteria2 | 8443 | Yes | UDP/QUIC, ultra fast |
-| Shadowsocks | 8388 | No | Lightweight |
+| Preset | Default Port | Domain Needed? | Engine | Notes |
+|--------|-------------|---------------|--------|-------|
+| VLESS + Reality | 443 | No | Xray / Sing-box | Most censorship-resistant |
+| VLESS + WS + TLS | 2083 | Yes | Xray / Sing-box | CDN (Cloudflare) compatible |
+| VMess + WS + TLS | 2087 | Yes | Xray / Sing-box | Wide client support |
+| Trojan + TLS | 2096 | Yes | Xray / Sing-box | Simple, fast |
+| Hysteria2 | 8443 | Yes | **Sing-box only** | UDP/QUIC, ultra fast |
+| Shadowsocks | 8388 | No | Xray / Sing-box | Lightweight |
+
+> **Important**: Hysteria2 is only supported by the Sing-box engine. If you use Hysteria2 with Xray, the Hysteria2 inbound will be automatically skipped and a warning displayed. Switch to Sing-box engine via the **Apply** dropdown to use Hysteria2.
 
 ### Option B: Manual Setup (Advanced)
 
@@ -217,15 +219,30 @@ For full control, click **Add Node** and configure manually:
 
 ## Step 2: Apply Configuration
 
-After creating inbounds, click the **Apply Configuration** button at the top of the Proxy Services page. This generates the Xray config and starts/restarts the Xray process.
+After creating inbounds, click the **Apply Configuration** button at the top of the Proxy Services page. This generates the config and starts/restarts the proxy engine.
 
-The page header will also show whether Xray is currently running, plus the number of enabled nodes, users, and routing rules.
+### Engine Selection
+
+ZenithPanel supports two proxy engines:
+
+| Engine | Command | Protocols |
+|--------|---------|-----------|
+| **Xray** (default) | `POST /api/v1/proxy/apply?engine=xray` | VLESS, VMess, Trojan, Shadowsocks |
+| **Sing-box** | `POST /api/v1/proxy/apply?engine=singbox` | All of the above + **Hysteria2** |
+
+If your inbounds include Hysteria2, you **must** use Sing-box. Xray will automatically skip unsupported protocols and display a warning.
+
+### Crash Detection
+
+If the proxy engine crashes on startup (bad config, port conflict, missing binary), the API now returns the error message with stderr output. The status endpoint also includes `xray_last_error` / `singbox_last_error` for debugging.
 
 You can preview the generated config, inspect runtime status, or trigger apply through the API:
 ```
 GET /api/v1/proxy/status
 POST /api/v1/proxy/apply?engine=xray
+POST /api/v1/proxy/apply?engine=singbox
 GET /api/v1/proxy/config/xray
+GET /api/v1/proxy/config/singbox
 ```
 
 ---
@@ -323,10 +340,16 @@ Example: Direct traffic to China:
 
 ## Troubleshooting
 
-**Xray fails to start:**
+**Xray/Sing-box fails to start:**
+- The Apply button now shows the exact error message if the engine crashes on startup
+- Check the status API: `GET /api/v1/proxy/status` — look for `xray_last_error` or `singbox_last_error`
 - Check if the port is already in use: `netstat -tlnp | grep 443`
-- Check Xray logs in the terminal: `cat /opt/zenithpanel/xray_config.json` to verify config
-- Run manually: `xray run -c /opt/zenithpanel/xray_config.json`
+- Preview the generated config: `GET /api/v1/proxy/config/xray`
+- Run manually: `xray run -c /opt/zenithpanel/data/xray_config.json`
+
+**Xray keeps crashing with Hysteria2:**
+- Hysteria2 is **not supported by Xray**. Switch to Sing-box engine: `POST /api/v1/proxy/apply?engine=singbox`
+- Xray will automatically skip Hysteria2 inbounds and show a warning
 
 **TLS certificate errors:**
 - Ensure cert files exist inside the container. If using Let's Encrypt on the host, mount the cert directory:
@@ -334,11 +357,13 @@ Example: Direct traffic to China:
   -v /etc/letsencrypt:/etc/letsencrypt:ro
   ```
 
-**Client can't connect:**
-- Verify the firewall port is open
-- Verify the inbound is enabled
+**Client can't connect (DIRECT works but proxy doesn't):**
+- Verify the firewall port is open on the VPS
+- Verify the inbound is enabled and the engine is running (check status)
 - Verify the client is enabled and not expired
-- Check that the subscription URL is accessible
+- For Reality: ensure keys were generated (Quick Setup does this automatically)
+- Check the subscription URL returns valid config: `curl -v https://server:port/api/v1/sub/UUID`
+- For Clash: the subscription auto-adds a DIRECT rule for the server address to prevent proxy loops
 
 **Reality key pair:**
 Quick Setup generates keys automatically. For manual setup:

@@ -239,20 +239,85 @@ func parseUintID(c *gin.Context) (uint, bool) {
 	return uint(n), true
 }
 
+type inboundPayload struct {
+	Tag            *string                      `json:"tag"`
+	Protocol       *string                      `json:"protocol"`
+	Listen         *string                      `json:"listen"`
+	Port           *int                         `json:"port"`
+	Network        *string                      `json:"network"`
+	Settings       *string                      `json:"settings"`
+	Stream         *string                      `json:"stream"`
+	StreamSettings *string                      `json:"streamSettings"`
+	ClientStats    *[]threeXUIClientStatPayload `json:"clientStats"`
+	Enable         *bool                        `json:"enable"`
+	Remark         *string                      `json:"remark"`
+}
+
 type clientPayload struct {
-	InboundID    *uint   `json:"inbound_id"`
-	Email        *string `json:"email"`
-	UUID         *string `json:"uuid"`
-	Enable       *bool   `json:"enable"`
-	Total        *int64  `json:"total"`
-	TrafficLimit *int64  `json:"traffic_limit"`
-	ExpiryTime   *int64  `json:"expiry_time"`
-	Remark       *string `json:"remark"`
+	InboundID        *uint   `json:"inbound_id"`
+	InboundIDLegacy  *uint   `json:"inboundId"`
+	Email            *string `json:"email"`
+	UUID             *string `json:"uuid"`
+	Enable           *bool   `json:"enable"`
+	Total            *int64  `json:"total"`
+	TrafficLimit     *int64  `json:"traffic_limit"`
+	ExpiryTime       *int64  `json:"expiry_time"`
+	ExpiryTimeLegacy *int64  `json:"expiryTime"`
+	Remark           *string `json:"remark"`
+}
+
+func applyInboundPayload(target *model.Inbound, payload inboundPayload) {
+	if payload.Tag != nil {
+		target.Tag = strings.TrimSpace(*payload.Tag)
+	}
+	if payload.Protocol != nil {
+		target.Protocol = strings.TrimSpace(*payload.Protocol)
+	}
+	if payload.Listen != nil {
+		target.Listen = strings.TrimSpace(*payload.Listen)
+	}
+	if payload.Port != nil {
+		target.Port = *payload.Port
+	}
+	if payload.Network != nil {
+		target.Network = strings.TrimSpace(*payload.Network)
+	}
+	if payload.Settings != nil {
+		target.Settings = strings.TrimSpace(*payload.Settings)
+	}
+	switch {
+	case payload.Stream != nil:
+		target.Stream = strings.TrimSpace(*payload.Stream)
+	case payload.StreamSettings != nil:
+		target.Stream = strings.TrimSpace(*payload.StreamSettings)
+	}
+	if payload.Enable != nil {
+		target.Enable = *payload.Enable
+	}
+	if payload.Remark != nil {
+		target.Remark = strings.TrimSpace(*payload.Remark)
+	}
+}
+
+func validateInbound(target model.Inbound) string {
+	if strings.TrimSpace(target.Tag) == "" {
+		return "Tag is required"
+	}
+	if strings.TrimSpace(target.Protocol) == "" {
+		return "Protocol is required"
+	}
+	if target.Port <= 0 || target.Port > 65535 {
+		return "Port must be between 1 and 65535"
+	}
+	return ""
 }
 
 func applyClientPayload(target *model.Client, payload clientPayload) {
-	if payload.InboundID != nil {
+	switch {
+	case payload.InboundID != nil:
 		target.InboundID = *payload.InboundID
+	case payload.InboundIDLegacy != nil:
+		target.InboundID = *payload.InboundIDLegacy
 	}
 	if payload.Email != nil {
 		target.Email = strings.TrimSpace(*payload.Email)
@@ -269,8 +334,11 @@ func applyClientPayload(target *model.Client, payload clientPayload) {
 	case payload.TrafficLimit != nil:
 		target.Total = *payload.TrafficLimit
 	}
-	if payload.ExpiryTime != nil {
+	switch {
+	case payload.ExpiryTime != nil:
 		target.ExpiryTime = *payload.ExpiryTime
+	case payload.ExpiryTimeLegacy != nil:
+		target.ExpiryTime = *payload.ExpiryTimeLegacy
 	}
 	if payload.Remark != nil {
 		target.Remark = strings.TrimSpace(*payload.Remark)
@@ -285,6 +353,51 @@ func validateClient(target model.Client) string {
 		return "Email is required"
 	}
 	return ""
+}
+
+func ensureInboundExists(inboundID uint) bool {
+	var count int64
+	config.DB.Model(&model.Inbound{}).Where("id = ?", inboundID).Count(&count)
+	return count > 0
+}
+
+func isClientInboundEmailConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "clients.inbound_id, clients.email") ||
+		strings.Contains(msg, "idx_clients_inbound_email")
+}
+
+func validateRoutingRule(target model.RoutingRule) string {
+	if strings.TrimSpace(target.OutboundTag) == "" {
+		return "Outbound tag is required"
+	}
+	if target.Domain == "" && target.IP == "" && target.Port == "" {
+		return "At least one of domain, IP, or port is required"
+	}
+	return ""
+}
+
+func findDuplicateRoutingRule(target model.RoutingRule, excludeID uint) (*model.RoutingRule, error) {
+	var rules []model.RoutingRule
+	if err := config.DB.Find(&rules).Error; err != nil {
+		return nil, err
+	}
+
+	signature := proxy.RoutingRuleSignature(target)
+	for _, rule := range rules {
+		if excludeID != 0 && rule.ID == excludeID {
+			continue
+		}
+		if proxy.RoutingRuleSignature(rule) == signature {
+			match := rule
+			return &match, nil
+		}
+	}
+
+	return nil, nil
 }
 
 // SetupRoutes configures all the Gin routes.
@@ -734,17 +847,87 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": inbounds})
 		})
 
+		authGroup.POST("/inbounds/import-3xui", func(c *gin.Context) {
+			body, err := io.ReadAll(c.Request.Body)
+			if err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Failed to read request body"})
+				return
+			}
+
+			items, err := parseThreeXUIImportRequest(body)
+			if err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": fmt.Sprintf("Invalid 3x-ui payload: %v", err)})
+				return
+			}
+
+			results := make([]map[string]interface{}, 0, len(items))
+			successCount := 0
+			for _, item := range items {
+				inbound, importedUsers, err := func() (model.Inbound, int, error) {
+					var created model.Inbound
+					importedUsers := 0
+					err := config.DB.Transaction(func(tx *gorm.DB) error {
+						var txErr error
+						created, importedUsers, txErr = importThreeXUIInbound(tx, item)
+						return txErr
+					})
+					return created, importedUsers, err
+				}()
+				if err != nil {
+					results = append(results, map[string]interface{}{
+						"success":       false,
+						"source_tag":    strings.TrimSpace(item.Tag),
+						"source_remark": strings.TrimSpace(item.Remark),
+						"error":         err.Error(),
+					})
+					continue
+				}
+
+				successCount++
+				recordAudit(c, "inbound.import_3xui", inbound.Tag)
+				results = append(results, map[string]interface{}{
+					"success":        true,
+					"inbound_id":     inbound.ID,
+					"imported_tag":   inbound.Tag,
+					"source_tag":     strings.TrimSpace(item.Tag),
+					"source_remark":  strings.TrimSpace(item.Remark),
+					"imported_users": importedUsers,
+				})
+			}
+
+			c.JSON(200, gin.H{
+				"code": 200,
+				"msg":  fmt.Sprintf("Imported %d/%d inbound(s)", successCount, len(items)),
+				"data": results,
+			})
+		})
+
 		authGroup.POST("/inbounds", func(c *gin.Context) {
-			var inbound model.Inbound
-			if err := c.ShouldBindJSON(&inbound); err != nil {
+			var payload inboundPayload
+			if err := c.ShouldBindJSON(&payload); err != nil {
 				log.Printf("Inbound bind error: %v", err)
 				c.JSON(400, gin.H{"code": 400, "msg": fmt.Sprintf("Invalid parameters: %v", err)})
+				return
+			}
+			inbound := model.Inbound{Enable: true}
+			applyInboundPayload(&inbound, payload)
+			if msg := validateInbound(inbound); msg != "" {
+				c.JSON(400, gin.H{"code": 400, "msg": msg})
 				return
 			}
 			if inbound.Settings == "" {
 				inbound.Settings = "{}"
 			}
-			if err := config.DB.Create(&inbound).Error; err != nil {
+			if inbound.Stream == "" {
+				inbound.Stream = "{}"
+			}
+			err := config.DB.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Create(&inbound).Error; err != nil {
+					return err
+				}
+				return syncImportedInboundClients(tx, inbound, payload)
+			})
+			if err != nil {
 				log.Printf("DB error creating inbound: %v", err)
 				if strings.Contains(err.Error(), "UNIQUE constraint") {
 					c.JSON(409, gin.H{"code": 409, "msg": fmt.Sprintf("Tag '%s' already exists", inbound.Tag)})
@@ -767,11 +950,29 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(404, gin.H{"code": 404, "msg": "Inbound not found"})
 				return
 			}
-			if err := c.ShouldBindJSON(&inbound); err != nil {
+			var payload inboundPayload
+			if err := c.ShouldBindJSON(&payload); err != nil {
 				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
 				return
 			}
-			if err := config.DB.Save(&inbound).Error; err != nil {
+			applyInboundPayload(&inbound, payload)
+			if msg := validateInbound(inbound); msg != "" {
+				c.JSON(400, gin.H{"code": 400, "msg": msg})
+				return
+			}
+			if inbound.Settings == "" {
+				inbound.Settings = "{}"
+			}
+			if inbound.Stream == "" {
+				inbound.Stream = "{}"
+			}
+			err := config.DB.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Save(&inbound).Error; err != nil {
+					return err
+				}
+				return syncImportedInboundClients(tx, inbound, payload)
+			})
+			if err != nil {
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update inbound"})
 				return
 			}
@@ -784,12 +985,49 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			if !ok {
 				return
 			}
-			if err := config.DB.Delete(&model.Inbound{}, "id = ?", id).Error; err != nil {
+			var inbound model.Inbound
+			if err := config.DB.First(&inbound, "id = ?", id).Error; err != nil {
+				c.JSON(404, gin.H{"code": 404, "msg": "Inbound not found"})
+				return
+			}
+			if err := config.DB.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Delete(&model.Client{}, "inbound_id = ?", id).Error; err != nil {
+					return err
+				}
+				return tx.Delete(&model.Inbound{}, "id = ?", id).Error
+			}); err != nil {
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete inbound"})
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
 			recordAudit(c, "inbound.delete", fmt.Sprintf("id=%d", id))
+		})
+
+		authGroup.GET("/inbounds/:id/export-3xui", func(c *gin.Context) {
+			id, ok := parseUintID(c)
+			if !ok {
+				return
+			}
+
+			var inbound model.Inbound
+			if err := config.DB.First(&inbound, "id = ?", id).Error; err != nil {
+				c.JSON(404, gin.H{"code": 404, "msg": "Inbound not found"})
+				return
+			}
+
+			var clients []model.Client
+			if err := config.DB.Where("inbound_id = ?", inbound.ID).Order("id ASC").Find(&clients).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to load inbound clients"})
+				return
+			}
+
+			exported, err := buildThreeXUIInboundExport(inbound, clients)
+			if err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": fmt.Sprintf("Failed to export 3x-ui payload: %v", err)})
+				return
+			}
+
+			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": exported})
 		})
 
 		// ======================================
@@ -821,6 +1059,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(400, gin.H{"code": 400, "msg": msg})
 				return
 			}
+			if !ensureInboundExists(client.InboundID) {
+				c.JSON(400, gin.H{"code": 400, "msg": "Inbound not found"})
+				return
+			}
 			// Auto-generate UUID if not provided
 			if client.UUID == "" {
 				b := make([]byte, 16)
@@ -830,6 +1072,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			if err := config.DB.Create(&client).Error; err != nil {
 				log.Printf("DB error creating client: %v", err)
+				if isClientInboundEmailConflict(err) {
+					c.JSON(409, gin.H{"code": 409, "msg": fmt.Sprintf("Email '%s' already exists on this inbound", client.Email)})
+					return
+				}
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create client"})
 				return
 			}
@@ -857,6 +1103,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(400, gin.H{"code": 400, "msg": msg})
 				return
 			}
+			if !ensureInboundExists(client.InboundID) {
+				c.JSON(400, gin.H{"code": 400, "msg": "Inbound not found"})
+				return
+			}
 			if client.UUID == "" {
 				b := make([]byte, 16)
 				rand.Read(b)
@@ -864,6 +1114,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 			}
 			if err := config.DB.Save(&client).Error; err != nil {
+				if isClientInboundEmailConflict(err) {
+					c.JSON(409, gin.H{"code": 409, "msg": fmt.Sprintf("Email '%s' already exists on this inbound", client.Email)})
+					return
+				}
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update client"})
 				return
 			}
@@ -902,6 +1156,21 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
 				return
 			}
+			rule = proxy.NormalizeRoutingRule(rule)
+			if msg := validateRoutingRule(rule); msg != "" {
+				c.JSON(400, gin.H{"code": 400, "msg": msg})
+				return
+			}
+			duplicate, err := findDuplicateRoutingRule(rule, 0)
+			if err != nil {
+				log.Printf("DB error checking duplicate rule: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create rule"})
+				return
+			}
+			if duplicate != nil {
+				c.JSON(409, gin.H{"code": 409, "msg": "Routing rule already exists", "data": duplicate})
+				return
+			}
 			if err := config.DB.Create(&rule).Error; err != nil {
 				log.Printf("DB error creating rule: %v", err)
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create rule"})
@@ -922,6 +1191,21 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			if err := c.ShouldBindJSON(&rule); err != nil {
 				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			rule = proxy.NormalizeRoutingRule(rule)
+			if msg := validateRoutingRule(rule); msg != "" {
+				c.JSON(400, gin.H{"code": 400, "msg": msg})
+				return
+			}
+			duplicate, err := findDuplicateRoutingRule(rule, id)
+			if err != nil {
+				log.Printf("DB error checking duplicate rule: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update rule"})
+				return
+			}
+			if duplicate != nil {
+				c.JSON(409, gin.H{"code": 409, "msg": "Routing rule already exists", "data": duplicate})
 				return
 			}
 			if err := config.DB.Save(&rule).Error; err != nil {
@@ -1072,19 +1356,33 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				var enabledRules int64
 
 				config.DB.Model(&model.Inbound{}).Where("enable = ?", true).Count(&enabledInbounds)
-				config.DB.Model(&model.Client{}).Where("enable = ?", true).Count(&enabledClients)
+				config.DB.Model(&model.Client{}).
+					Joins("JOIN inbounds ON inbounds.id = clients.inbound_id AND inbounds.deleted_at IS NULL").
+					Where("clients.enable = ? AND inbounds.enable = ?", true, true).
+					Count(&enabledClients)
 				config.DB.Model(&model.RoutingRule{}).Where("enable = ?", true).Count(&enabledRules)
 
+				data := gin.H{
+					"xray_running":     xm.Status(),
+					"singbox_running":  sm.Status(),
+					"enabled_inbounds": enabledInbounds,
+					"enabled_clients":  enabledClients,
+					"enabled_rules":    enabledRules,
+				}
+				if !xm.Status() {
+					if e := xm.LastError(); e != "" {
+						data["xray_last_error"] = e
+					}
+				}
+				if !sm.Status() {
+					if e := sm.LastError(); e != "" {
+						data["singbox_last_error"] = e
+					}
+				}
 				c.JSON(http.StatusOK, gin.H{
 					"code": 200,
 					"msg":  "Success",
-					"data": gin.H{
-						"xray_running":     xm.Status(),
-						"singbox_running":  sm.Status(),
-						"enabled_inbounds": enabledInbounds,
-						"enabled_clients":  enabledClients,
-						"enabled_rules":    enabledRules,
-					},
+					"data": data,
 				})
 			})
 
@@ -1101,9 +1399,14 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 						})
 						return
 					}
+					msg := "Xray configuration applied successfully"
+					if skipped := xm.SkippedProtocols(); len(skipped) > 0 {
+						msg += fmt.Sprintf(" (skipped %d inbounds not supported by Xray: %s — use Sing-box engine for these)",
+							len(skipped), strings.Join(skipped, ", "))
+					}
 					c.JSON(http.StatusOK, gin.H{
 						"code": 200,
-						"msg":  "Xray configuration applied successfully",
+						"msg":  msg,
 					})
 					recordAudit(c, "proxy.apply", engine)
 				case "singbox", "sing-box":

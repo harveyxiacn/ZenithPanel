@@ -33,6 +33,9 @@ func InitDB(dbPath string) {
 	if err != nil {
 		log.Fatalf("Failed to auto migrate database: %v", err)
 	}
+	if err := migrateClientSchema(database); err != nil {
+		log.Fatalf("Failed to migrate client schema: %v", err)
+	}
 
 	// Audit log migration is non-fatal — don't block startup if it fails
 	if err := database.AutoMigrate(&model.AuditLog{}); err != nil {
@@ -130,4 +133,3 @@ func EnsurePort() string {
 	log.Printf("Generated random listen port: %s (saved to DB)", portStr)
 	return portStr
 }
-

@@ -48,14 +48,16 @@ docker run -d \
 6. 勾选 **Create first client** 自动创建首个用户（含订阅链接）。
 7. 点击 **Create All** — 完成！
 
-| 方案 | 默认端口 | 是否需要域名 | 备注 |
-|------|---------|------------|------|
-| VLESS + Reality | 443 | 否 | 抗封锁能力最强 |
-| VLESS + WS + TLS | 2083 | 是 | 支持 CDN（Cloudflare）转发 |
-| VMess + WS + TLS | 2087 | 是 | 客户端兼容性最广 |
-| Trojan + TLS | 2096 | 是 | 简单高速 |
-| Hysteria2 | 8443 | 是 | UDP/QUIC 超高速 |
-| Shadowsocks | 8388 | 否 | 轻量级 |
+| 方案 | 默认端口 | 是否需要域名 | 引擎 | 备注 |
+|------|---------|------------|------|------|
+| VLESS + Reality | 443 | 否 | Xray / Sing-box | 抗封锁能力最强 |
+| VLESS + WS + TLS | 2083 | 是 | Xray / Sing-box | 支持 CDN（Cloudflare）转发 |
+| VMess + WS + TLS | 2087 | 是 | Xray / Sing-box | 客户端兼容性最广 |
+| Trojan + TLS | 2096 | 是 | Xray / Sing-box | 简单高速 |
+| Hysteria2 | 8443 | 是 | **仅 Sing-box** | UDP/QUIC 超高速 |
+| Shadowsocks | 8388 | 否 | Xray / Sing-box | 轻量级 |
+
+> **重要提示**：Hysteria2 仅支持 Sing-box 引擎。如果使用 Xray 引擎，Hysteria2 入站节点会被自动跳过并显示警告。通过 **Apply** 下拉菜单切换到 Sing-box 引擎以使用 Hysteria2。
 
 ### 方式 B：手动配置（高级用户）
 
@@ -217,15 +219,30 @@ docker run -d \
 
 ## 第二步：应用配置
 
-创建入站节点后，点击代理服务页面顶部的 **Apply Configuration** 按钮。这将生成 Xray 配置文件并启动/重启 Xray 进程。
+创建入站节点后，点击代理服务页面顶部的 **Apply Configuration** 按钮。这将生成配置文件并启动/重启代理引擎。
 
-页面头部还会显示 Xray 当前是否运行，以及启用中的节点、用户和路由规则数量。
+### 引擎选择
+
+ZenithPanel 支持两种代理引擎：
+
+| 引擎 | API 命令 | 支持协议 |
+|------|---------|---------|
+| **Xray**（默认） | `POST /api/v1/proxy/apply?engine=xray` | VLESS, VMess, Trojan, Shadowsocks |
+| **Sing-box** | `POST /api/v1/proxy/apply?engine=singbox` | 以上所有 + **Hysteria2** |
+
+如果你的入站节点包含 Hysteria2，**必须**使用 Sing-box 引擎。Xray 会自动跳过不支持的协议并显示警告。
+
+### 崩溃检测
+
+如果代理引擎启动后立即崩溃（配置错误、端口冲突、缺少二进制文件），API 会返回包含 stderr 输出的错误消息。状态接口也会包含 `xray_last_error` / `singbox_last_error` 字段用于排查。
 
 你可以通过 API 查看运行状态、触发应用或预览生成配置：
 ```
 GET /api/v1/proxy/status
 POST /api/v1/proxy/apply?engine=xray
+POST /api/v1/proxy/apply?engine=singbox
 GET /api/v1/proxy/config/xray
+GET /api/v1/proxy/config/singbox
 ```
 
 ---
@@ -323,10 +340,16 @@ iptables -I INPUT -p udp --dport 8388 -j ACCEPT
 
 ## 常见问题
 
-**Xray 启动失败：**
+**Xray/Sing-box 启动失败：**
+- Apply 按钮现在会显示引擎崩溃时的具体错误信息
+- 检查状态 API：`GET /api/v1/proxy/status` — 查看 `xray_last_error` 或 `singbox_last_error`
 - 检查端口是否被占用：`netstat -tlnp | grep 443`
-- 检查生成的配置文件：`cat /opt/zenithpanel/xray_config.json`
-- 手动运行 Xray 排查：`xray run -c /opt/zenithpanel/xray_config.json`
+- 预览生成的配置：`GET /api/v1/proxy/config/xray`
+- 手动运行排查：`xray run -c /opt/zenithpanel/data/xray_config.json`
+
+**Xray 使用 Hysteria2 时持续崩溃：**
+- Hysteria2 **不支持 Xray** 引擎。请切换到 Sing-box：`POST /api/v1/proxy/apply?engine=singbox`
+- Xray 会自动跳过 Hysteria2 入站节点并显示警告
 
 **TLS 证书错误：**
 - 确保证书文件在容器内可访问。如果使用宿主机的 Let's Encrypt 证书，挂载证书目录：
@@ -334,11 +357,13 @@ iptables -I INPUT -p udp --dport 8388 -j ACCEPT
   -v /etc/letsencrypt:/etc/letsencrypt:ro
   ```
 
-**客户端无法连接：**
-- 确认防火墙端口已开放
-- 确认入站节点已启用（Enable）
+**客户端无法连接（直连正常但代理不通）：**
+- 确认 VPS 防火墙端口已开放
+- 确认入站节点已启用且引擎正在运行（检查状态）
 - 确认用户已启用且未过期
-- 检查订阅链接是否可访问
+- Reality 节点：确保密钥已生成（快速配置会自动生成）
+- 检查订阅链接返回的配置是否正确：`curl -v https://服务器:端口/api/v1/sub/UUID`
+- Clash 订阅会自动添加服务器地址的直连规则，防止代理回环
 
 **生成 Reality 密钥对：**
 快速配置会自动生成密钥。手动配置时：

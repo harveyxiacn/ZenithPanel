@@ -76,6 +76,9 @@ Thumbs.db
 /tmp/
 .temp/
 
+# 内部开发计划 (不上传)
+/docs/plans/
+
 # 忽略构建输出的 release 目录及各种包
 /release/
 zenithpanel-release.tar.gz
