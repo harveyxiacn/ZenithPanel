@@ -281,6 +281,12 @@ export default {
       confirmDelete: '確定要刪除此用戶端嗎？',
       unlimited: '無限制',
     },
+    subscription: {
+      title: '訂閱連結',
+      urlLabel: '訂閱 URL',
+      v2rayHint: 'V2RayN、v2rayNG、Nekoray 等 V2Ray 用戶端請使用明確的 Base64 訂閱連結。',
+      clashHint: 'Clash、Mihomo、Stash 等用戶端請使用明確的 Clash/YAML 訂閱連結。',
+    },
     quickSetup: {
       title: '快速設定',
       steps: { select: '選擇', review: '檢查', done: '完成' },

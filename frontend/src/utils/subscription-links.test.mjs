@@ -17,3 +17,8 @@ test('buildSubscriptionLink appends explicit base64 format', () => {
   const got = buildSubscriptionLink('https://panel.example.com', 'abc-123', 'base64')
   assert.equal(got, 'https://panel.example.com/api/v1/sub/abc-123?format=base64')
 })
+
+test('buildSubscriptionLink URL-encodes UUID-like values safely', () => {
+  const got = buildSubscriptionLink('https://panel.example.com', 'abc 123', 'base64')
+  assert.equal(got, 'https://panel.example.com/api/v1/sub/abc%20123?format=base64')
+})

@@ -281,6 +281,12 @@ export default {
       confirmDelete: '确定要删除此客户端吗？',
       unlimited: '无限制',
     },
+    subscription: {
+      title: '订阅链接',
+      urlLabel: '订阅 URL',
+      v2rayHint: 'V2RayN、v2rayNG、Nekoray 等 V2Ray 客户端请使用明确的 Base64 订阅链接。',
+      clashHint: 'Clash、Mihomo、Stash 等客户端请使用明确的 Clash/YAML 订阅链接。',
+    },
     quickSetup: {
       title: '快速配置',
       steps: { select: '选择', review: '检查', done: '完成' },

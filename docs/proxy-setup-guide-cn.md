@@ -258,7 +258,7 @@ GET /api/v1/proxy/config/singbox
 | Traffic Limit | `0`（无限制）或总字节数（如 `107374182400` = 100GB） |
 
 UUID 会自动生成。创建后：
-- 点击 **Sub Link** 复制订阅链接。
+- 点击 **Sub Link** 打开格式选择器，并复制明确格式的订阅链接。
 - 点击 **QR Code** 生成手机客户端可扫描的二维码（支持 V2Ray/Base64 和 Clash/YAML 两种格式）。
 
 如果你是通过管理域名、反向代理或隧道访问面板，而真实代理节点需要使用另一个公网地址，请先编辑入站并填写 **公网主机 / IP**，再导入订阅。这个字段决定了 Clash 和 V2Ray 客户端配置里实际拨号的目标地址。
@@ -292,13 +292,15 @@ https://服务器:端口/api/v1/sub/UUID?format=base64
 
 ### V2RayN（Windows）
 1. 打开 V2RayN -> **订阅（Subscription）** -> **订阅设置**
-2. 添加新订阅，粘贴订阅链接
+2. 添加新订阅，粘贴 ZenithPanel 提供的明确 Base64 链接：
+   `https://服务器:端口/api/v1/sub/UUID?format=base64`
 3. 点击 **更新订阅** -> 节点会出现在列表中
 4. 右键节点 -> **设为活动服务器**
 
 ### V2RayNG（Android）
 1. 打开 V2RayNG -> 点击 **+** -> **从URL导入配置**
-2. 粘贴订阅链接
+2. 粘贴 ZenithPanel 提供的明确 Base64 链接：
+   `https://服务器:端口/api/v1/sub/UUID?format=base64`
 3. 点击播放按钮连接
 
 ### Shadowrocket（iOS）

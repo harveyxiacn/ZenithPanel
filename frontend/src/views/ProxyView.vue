@@ -441,6 +441,27 @@ async function copySubLink(uuid: string, format?: 'clash' | 'base64') {
   }
 }
 
+// ---- Subscription Link Modal ----
+const showSubLinkModal = ref(false)
+const subLinkUuid = ref('')
+const subLinkEmail = ref('')
+const subLinkFormat = ref<'base64' | 'clash'>('base64')
+
+const subLinkValue = computed(() => {
+  return buildSubscriptionLink(location.origin, subLinkUuid.value, subLinkFormat.value)
+})
+
+function openSubLinkModal(uuid: string, email: string) {
+  subLinkUuid.value = uuid
+  subLinkEmail.value = email
+  subLinkFormat.value = 'base64'
+  showSubLinkModal.value = true
+}
+
+async function copyCurrentSubscriptionLink() {
+  await copySubLink(subLinkUuid.value, subLinkFormat.value)
+}
+
 // ---- QR Code ----
 const showQrModal = ref(false)
 const qrUuid = ref('')
@@ -1405,7 +1426,7 @@ onMounted(() => {
                 </span>
               </td>
               <td class="px-6 py-4 text-right text-sm font-medium space-x-2">
-                <button @click="copySubLink(user.uuid)" class="text-emerald-600 hover:text-emerald-900 inline-flex items-center">
+                <button @click="openSubLinkModal(user.uuid, user.email)" class="text-emerald-600 hover:text-emerald-900 inline-flex items-center">
                   <ClipboardDocumentIcon class="h-4 w-4 mr-1" />
                   {{ copiedUuid === user.uuid ? $t('proxy.clients.copied') : $t('proxy.clients.subLink') }}
                 </button>
@@ -1704,6 +1725,61 @@ onMounted(() => {
     </div>
 
     <!-- QR Code Modal -->
+    <div v-if="showSubLinkModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+        <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h2 class="text-lg font-bold text-slate-800">{{ $t('proxy.subscription.title') }}</h2>
+            <p class="text-xs text-slate-500 mt-0.5">{{ subLinkEmail }}</p>
+          </div>
+          <button @click="showSubLinkModal = false" class="text-slate-400 hover:text-slate-600 transition">
+            <XMarkIcon class="h-5 w-5" />
+          </button>
+        </div>
+
+        <div class="p-6">
+          <div class="flex rounded-lg bg-slate-100 p-1 mb-5">
+            <button
+              @click="subLinkFormat = 'base64'"
+              :class="[
+                'flex-1 px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                subLinkFormat === 'base64' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              ]"
+            >{{ $t('proxy.qr.v2ray') }}</button>
+            <button
+              @click="subLinkFormat = 'clash'"
+              :class="[
+                'flex-1 px-3 py-1.5 text-sm font-medium rounded-md transition-colors',
+                subLinkFormat === 'clash' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              ]"
+            >{{ $t('proxy.qr.clash') }}</button>
+          </div>
+
+          <p class="text-sm text-slate-600 leading-6 mb-4">
+            {{ subLinkFormat === 'base64' ? $t('proxy.subscription.v2rayHint') : $t('proxy.subscription.clashHint') }}
+          </p>
+
+          <label class="block text-xs font-medium text-slate-500 mb-2">{{ $t('proxy.subscription.urlLabel') }}</label>
+          <input
+            :value="subLinkValue"
+            readonly
+            class="input-field text-sm w-full font-mono text-xs"
+          />
+
+          <div class="mt-5 flex gap-2">
+            <button
+              @click="copyCurrentSubscriptionLink"
+              class="flex-1 bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition"
+            >{{ copiedUuid === subLinkUuid ? $t('proxy.clients.copied') : $t('proxy.qr.copyLink') }}</button>
+            <button
+              @click="showSubLinkModal = false"
+              class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition"
+            >{{ $t('common.close') }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="showQrModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
       <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden">
         <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">

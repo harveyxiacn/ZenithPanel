@@ -281,6 +281,12 @@ export default {
       confirmDelete: 'このクライアントを削除しますか？',
       unlimited: '無制限',
     },
+    subscription: {
+      title: '購読リンク',
+      urlLabel: '購読 URL',
+      v2rayHint: 'V2RayN、v2rayNG、Nekoray などの V2Ray クライアントでは、明示的な Base64 購読 URL を使用してください。',
+      clashHint: 'Clash、Mihomo、Stash などのクライアントでは、明示的な Clash/YAML 購読 URL を使用してください。',
+    },
     quickSetup: {
       title: 'クイックセットアップ',
       steps: { select: '選択', review: '確認', done: '完了' },

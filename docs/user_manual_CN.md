@@ -118,7 +118,7 @@ docker run -d \
 1. 进入 `Proxy` 面板，选择 `Nodes -> Add Node`
 2. 选择协议，输入端口，手动填写 Settings/Stream JSON
 3. 前往 `Users` 界面为此节点分配用户
-4. 进入 `Subscriptions` 面板，复制订阅链接，在客户端更新即可
+4. 进入 `Subscriptions` 面板，使用带格式选择的订阅链接复制功能，并把正确格式的链接导入客户端
 
 详细的 JSON 配置示例请参见[代理设置指南](proxy-setup-guide-cn.md)。
 
@@ -131,7 +131,7 @@ docker run -d \
 - **V2Ray / V2RayN** 格式：生成 Base64 订阅二维码，适用于 V2RayN、V2RayNG、Shadowrocket。
 - **Clash / Mihomo** 格式：生成 Clash YAML 订阅二维码，适用于 Clash、Mihomo、Stash。
 
-支持切换格式、下载 PNG 图片，或直接从弹窗复制订阅链接。
+支持切换格式、下载 PNG 图片，或直接从弹窗复制明确的 V2Ray/Base64 或 Clash/YAML 订阅链接。
 
 ---
 
