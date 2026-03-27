@@ -1,5 +1,17 @@
 import apiClient from './client'
 
+export interface AccessConfigData {
+  panel_path?: string
+  port?: string
+  usage_profile?: string
+}
+
+export interface AccessConfigUpdatePayload {
+  panel_path?: string
+  port?: string
+  usage_profile?: string
+}
+
 export function getSystemMonitor() {
   return apiClient.get('/v1/system/monitor')
 }
@@ -42,7 +54,7 @@ export function getAccessConfig() {
   return apiClient.get('/v1/admin/access')
 }
 
-export function updateAccessConfig(data: { panel_path?: string; port?: string }) {
+export function updateAccessConfig(data: AccessConfigUpdatePayload) {
   return apiClient.put('/v1/admin/access', data)
 }
 

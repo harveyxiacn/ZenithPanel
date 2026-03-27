@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import type { Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import { useI18n } from 'vue-i18n'
@@ -18,6 +19,8 @@ import {
   MoonIcon
 } from '@heroicons/vue/24/outline'
 import { useDarkMode } from '@/composables/useDarkMode'
+import { navigationForProfile, type NavigationIconKey } from '@/config/usage-profiles'
+import { useUsageProfile } from '@/composables/useUsageProfile'
 
 const { isDark, toggle: toggleDark } = useDarkMode()
 
@@ -26,14 +29,25 @@ const authStore = useAuthStore()
 const { t, locale } = useI18n()
 const sidebarOpen = ref(false)
 const showLangMenu = ref(false)
+const { usageProfile, currentProfileOption, loadUsageProfile } = useUsageProfile()
 
-const navigation = computed(() => [
-  { name: t('nav.dashboard'), href: '/dashboard', icon: HomeIcon },
-  { name: t('nav.servers'), href: '/servers', icon: ServerIcon },
-  { name: t('nav.proxyNodes'), href: '/nodes', icon: GlobeAltIcon },
-  { name: t('nav.usersSubs'), href: '/users', icon: UsersIcon },
-  { name: t('nav.security'), href: '/security', icon: ShieldCheckIcon },
-])
+const navigationIcons: Record<NavigationIconKey, Component> = {
+  dashboard: HomeIcon,
+  servers: ServerIcon,
+  nodes: GlobeAltIcon,
+  users: UsersIcon,
+  security: ShieldCheckIcon,
+}
+
+const navigation = computed(() => {
+  return navigationForProfile(usageProfile.value).map((item) => ({
+    ...item,
+    name: t(item.labelKey),
+    icon: navigationIcons[item.icon],
+  }))
+})
+
+const currentProfileLabelKey = computed(() => currentProfileOption.value?.labelKey ?? 'usageProfile.mixed.label')
 
 const currentLocaleName = computed(() => {
   return availableLocales.find(l => l.code === locale.value)?.name || 'English'
@@ -52,6 +66,10 @@ const handleLogout = () => {
 const handleNavClick = () => {
   sidebarOpen.value = false
 }
+
+onMounted(() => {
+  void loadUsageProfile()
+})
 </script>
 
 <template>
@@ -73,7 +91,10 @@ const handleNavClick = () => {
       <div class="h-16 flex items-center px-6 border-b border-slate-800 justify-between">
         <div class="flex items-center">
           <ShieldCheckIcon class="h-8 w-8 text-primary-500 mr-2" />
-          <span class="text-xl font-bold tracking-wider text-white">ZENITH<span class="text-primary-500">PANEL</span></span>
+          <div>
+            <span class="text-xl font-bold tracking-wider text-white">ZENITH<span class="text-primary-500">PANEL</span></span>
+            <p class="text-[10px] uppercase tracking-[0.32em] text-slate-500 mt-1">{{ t(currentProfileLabelKey) }}</p>
+          </div>
         </div>
         <button class="md:hidden text-slate-400 hover:text-white" @click="sidebarOpen = false">
           <XMarkIcon class="h-6 w-6" />
@@ -154,7 +175,10 @@ const handleNavClick = () => {
         <button @click="sidebarOpen = true" class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white">
           <Bars3Icon class="h-6 w-6" />
         </button>
-        <span class="ml-4 text-lg font-bold text-slate-800 dark:text-white">ZENITH<span class="text-primary-500">PANEL</span></span>
+        <div class="ml-4">
+          <span class="text-lg font-bold text-slate-800 dark:text-white">ZENITH<span class="text-primary-500">PANEL</span></span>
+          <p class="text-[10px] uppercase tracking-[0.28em] text-slate-500 dark:text-slate-400 mt-0.5">{{ t(currentProfileLabelKey) }}</p>
+        </div>
       </div>
 
       <main class="flex-1 overflow-x-hidden overflow-y-auto bg-slate-50 dark:bg-slate-900 p-4 md:p-8">

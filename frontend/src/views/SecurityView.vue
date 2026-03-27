@@ -5,10 +5,13 @@ import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIco
 import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup } from '@/api/system'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '../composables/useToast'
+import { useUsageProfile } from '@/composables/useUsageProfile'
+import { usageProfileOptions, type UsageProfile, type UsageProfileOptionTone } from '@/config/usage-profiles'
 
 const { t } = useI18n()
 const { confirm: confirmDialog } = useConfirm()
 const toast = useToast()
+const { usageProfile, loadUsageProfile, syncUsageProfile } = useUsageProfile()
 
 // ---- Change Password ----
 const showPasswordForm = ref(false)
@@ -219,17 +222,35 @@ async function onRemoveTLS() {
 // ---- Access Configuration ----
 const accessPath = ref('')
 const accessPort = ref('')
+const accessUsageProfile = ref<UsageProfile>('mixed')
 const accessLoading = ref(false)
 const accessMsg = ref('')
 const accessMsgType = ref<'success' | 'error'>('success')
 
+function profileToneClasses(tone: UsageProfileOptionTone, selected: boolean) {
+  if (!selected) {
+    return 'border-slate-200 bg-white hover:border-primary-300'
+  }
+
+  switch (tone) {
+    case 'emerald':
+      return 'border-emerald-300 bg-emerald-50 shadow-[0_0_0_1px_rgba(52,211,153,0.25)]'
+    case 'sky':
+      return 'border-sky-300 bg-sky-50 shadow-[0_0_0_1px_rgba(56,189,248,0.25)]'
+    default:
+      return 'border-amber-300 bg-amber-50 shadow-[0_0_0_1px_rgba(251,191,36,0.25)]'
+  }
+}
+
 async function loadAccessConfig() {
   try {
+    await loadUsageProfile()
     const res = await getAccessConfig() as any
     if (res.code === 200) {
       accessPath.value = res.data.panel_path || ''
       accessPort.value = res.data.port || ''
       accessOriginalPort.value = res.data.port || ''
+      accessUsageProfile.value = usageProfile.value
     }
   } catch { toast.error(t('common.errorOccurred')) }
 }
@@ -244,8 +265,10 @@ async function onSaveAccess() {
     const res = await updateAccessConfig({
       panel_path: accessPath.value,
       port: accessPort.value,
+      usage_profile: accessUsageProfile.value,
     }) as any
     if (res.code === 200) {
+      syncUsageProfile(accessUsageProfile.value)
       accessMsg.value = res.msg
       accessMsgType.value = 'success'
       toast.success(t('common.saved'))
@@ -772,6 +795,26 @@ onMounted(() => {
             </div>
           </div>
           <div class="p-6 space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-2">{{ $t('security.access.usageProfile') }}</label>
+              <div class="grid grid-cols-1 gap-3">
+                <button
+                  v-for="option in usageProfileOptions"
+                  :key="option.value"
+                  type="button"
+                  @click="accessUsageProfile = option.value"
+                  :class="[
+                    'text-left rounded-xl border px-4 py-3 transition-all duration-200',
+                    profileToneClasses(option.tone, accessUsageProfile === option.value)
+                  ]"
+                >
+                  <p class="font-medium text-slate-800">{{ $t(option.labelKey) }}</p>
+                  <p class="text-sm text-slate-500 mt-1">{{ $t(option.descriptionKey) }}</p>
+                  <p class="text-xs text-slate-400 mt-2">{{ $t(option.emphasisKey) }}</p>
+                </button>
+              </div>
+              <p class="text-xs text-slate-400 mt-2">{{ $t('security.access.usageProfileHint') }}</p>
+            </div>
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">{{ $t('security.access.panelPort') }}</label>
               <div class="flex items-center space-x-2">

@@ -36,6 +36,24 @@ export default {
     logout: 'Logout',
   },
 
+  usageProfile: {
+    personalProxy: {
+      label: 'Personal Proxy',
+      description: 'Lead with nodes, clients, subscriptions, and endpoint health.',
+      emphasis: 'Best for personal devices, family, or a small private group.',
+    },
+    vpsOps: {
+      label: 'VPS Ops',
+      description: 'Lead with monitoring, terminal, files, Docker, and firewall.',
+      emphasis: 'Best when ZenithPanel is primarily your server operations surface.',
+    },
+    mixed: {
+      label: 'Mixed',
+      description: 'Balance proxy operations and VPS management in one workspace.',
+      emphasis: 'Best when you actively use both sides of the panel.',
+    },
+  },
+
   // Login
   login: {
     title: 'Login to Zenith',
@@ -65,6 +83,8 @@ export default {
     minChars: 'Minimum 8 characters',
     retypePassword: 'Re-type new password',
     customPanelPath: 'Custom Panel URL Path',
+    usageProfile: 'Usage Profile',
+    usageProfileHint: 'This changes which workflows ZenithPanel emphasizes first. You can change it later in Settings.',
     customPanelPathHint: 'Change to prevent automated scanning.',
     applyInit: 'Apply & Initialize Zenith',
     completeTitle: 'Initialization Complete!',
@@ -80,6 +100,9 @@ export default {
   dashboard: {
     title: 'System Overview',
     subtitle: 'Real-time performance metrics and proxy status.',
+    profileOverview: 'Profile-aware workspace',
+    profileHint: 'ZenithPanel keeps one shared feature set, but changes the order, emphasis, and recommended actions to fit your selected usage profile.',
+    quickActions: 'Quick Actions',
     cpuUsage: 'CPU Usage',
     memory: 'Memory',
     diskUsage: 'Disk Usage',
@@ -93,6 +116,39 @@ export default {
     cpu: 'CPU',
     disk: 'Disk',
     customizeCards: 'Customize Cards',
+    profile: {
+      primaryActionBadge: 'Recommended',
+      personalProxy: {
+        title: 'Proxy-first overview',
+        description: 'Jump back into nodes, subscriptions, and diagnostics without digging through server tooling first.',
+        primaryAction: 'Open Proxy Nodes',
+        primaryActionHint: 'Manage inbounds, routing, apply, and diagnostics.',
+        secondaryActionClients: 'Manage Clients & Subs',
+        secondaryActionClientsHint: 'Add users, copy links, and rotate subscriptions.',
+        secondaryActionSecurity: 'Review Security Settings',
+        secondaryActionSecurityHint: 'Update panel access, TLS, and profile preferences.',
+      },
+      vpsOps: {
+        title: 'Server-first overview',
+        description: 'Keep core VPS operations in front while still retaining proxy tools when you need them.',
+        primaryAction: 'Open Servers & Files',
+        primaryActionHint: 'Go to terminal, files, Docker, and firewall workflows.',
+        secondaryActionSecurity: 'Review Security Settings',
+        secondaryActionSecurityHint: 'Manage access, updates, TLS, and optimization.',
+        secondaryActionProxy: 'Open Proxy Nodes',
+        secondaryActionProxyHint: 'Jump into proxy operations when server work is done.',
+      },
+      mixed: {
+        title: 'Balanced overview',
+        description: 'Keep proxy and VPS operations side by side without overcommitting the interface to either side.',
+        primaryAction: 'Open Dashboard',
+        primaryActionHint: 'Stay on the combined overview with balanced system context.',
+        secondaryActionServers: 'Open Servers & Files',
+        secondaryActionServersHint: 'Go straight to operations, Docker, and filesystem tools.',
+        secondaryActionNodes: 'Open Proxy Nodes',
+        secondaryActionNodesHint: 'Go straight to inbounds, clients, and subscriptions.',
+      },
+    },
   },
 
   // Servers
@@ -324,6 +380,8 @@ export default {
     access: {
       title: 'Access Configuration',
       subtitle: 'Customize how you connect to ZenithPanel',
+      usageProfile: 'Usage Profile',
+      usageProfileHint: 'Reorders navigation, dashboard emphasis, and recommendations without disabling any features.',
       securityPath: 'Security Path Suffix',
       panelPort: 'Panel Port',
       portHint: 'Use a Cloudflare-compatible HTTPS port: 443, 2053, 2083, 2087, 2096, 8443',

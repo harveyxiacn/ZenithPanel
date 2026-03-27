@@ -8,6 +8,7 @@ export function setupComplete(data: {
   username: string
   password: string
   panel_path: string
+  usage_profile?: 'personal_proxy' | 'vps_ops' | 'mixed'
 }) {
   return apiClient.post('/setup/complete', data)
 }

@@ -34,6 +34,24 @@ export default {
     logout: 'ログアウト',
   },
 
+  usageProfile: {
+    personalProxy: {
+      label: '個人プロキシ',
+      description: 'ノード、クライアント、購読、エンドポイント状態を優先表示します。',
+      emphasis: '個人端末、家族、少人数の私用グループ向けです。',
+    },
+    vpsOps: {
+      label: 'VPS 運用',
+      description: '監視、ターミナル、ファイル、Docker、ファイアウォールを優先表示します。',
+      emphasis: 'ZenithPanel を主にサーバー運用パネルとして使う場合に適しています。',
+    },
+    mixed: {
+      label: '混合モード',
+      description: 'プロキシ管理と VPS 運用をバランスよく扱います。',
+      emphasis: '両方の機能を日常的に使う場合に適しています。',
+    },
+  },
+
   login: {
     title: 'Zenith にログイン',
     username: 'ユーザー名',
@@ -61,6 +79,8 @@ export default {
     minChars: '8文字以上',
     retypePassword: '新しいパスワードを再入力',
     customPanelPath: 'カスタムパネル URL パス',
+    usageProfile: '利用プロファイル',
+    usageProfileHint: 'ZenithPanel がどのワークフローを優先するかを変えます。後から設定で変更できます。',
     customPanelPathHint: '自動スキャンを防ぐために変更してください。',
     applyInit: '適用して Zenith を初期化',
     completeTitle: '初期化完了！',
@@ -75,6 +95,9 @@ export default {
   dashboard: {
     title: 'システム概要',
     subtitle: 'リアルタイムパフォーマンス指標とプロキシ状態。',
+    profileOverview: 'プロファイル対応ワークスペース',
+    profileHint: 'ZenithPanel は同じ機能セットを保ったまま、選択した利用プロファイルに合わせて導線、強調点、推奨操作を調整します。',
+    quickActions: 'クイックアクション',
     cpuUsage: 'CPU 使用率',
     memory: 'メモリ',
     diskUsage: 'ディスク使用率',
@@ -88,6 +111,39 @@ export default {
     cpu: 'CPU',
     disk: 'ディスク',
     customizeCards: 'カードをカスタマイズ',
+    profile: {
+      primaryActionBadge: 'おすすめ',
+      personalProxy: {
+        title: 'プロキシ優先の概要',
+        description: 'まずノード、購読、診断に戻り、サーバー運用を前面に出しすぎません。',
+        primaryAction: 'プロキシノードを開く',
+        primaryActionHint: 'インバウンド、ルーティング、適用、診断を管理します。',
+        secondaryActionClients: 'クライアントと購読を管理',
+        secondaryActionClientsHint: 'ユーザー追加、リンクコピー、購読ローテーションを行います。',
+        secondaryActionSecurity: 'セキュリティ設定を確認',
+        secondaryActionSecurityHint: 'パネルアクセス、TLS、プロファイル設定を更新します。',
+      },
+      vpsOps: {
+        title: '運用優先の概要',
+        description: 'VPS 運用を先頭に置きつつ、必要な時にプロキシ機能もすぐ使えます。',
+        primaryAction: 'サーバー管理を開く',
+        primaryActionHint: 'ターミナル、ファイル、Docker、ファイアウォールへ移動します。',
+        secondaryActionSecurity: 'セキュリティ設定を確認',
+        secondaryActionSecurityHint: 'アクセス、更新、TLS、最適化を管理します。',
+        secondaryActionProxy: 'プロキシノードを開く',
+        secondaryActionProxyHint: 'サーバー作業の後にプロキシ運用へ戻ります。',
+      },
+      mixed: {
+        title: 'バランス型の概要',
+        description: 'プロキシと VPS 運用を並列に扱い、どちらか一方に偏らせません。',
+        primaryAction: 'ダッシュボードを開く',
+        primaryActionHint: '総合概要に留まり、バランスの取れたシステム状況を確認します。',
+        secondaryActionServers: 'サーバー管理を開く',
+        secondaryActionServersHint: '運用、Docker、ファイルシステムツールへ移動します。',
+        secondaryActionNodes: 'プロキシノードを開く',
+        secondaryActionNodesHint: 'インバウンド、クライアント、購読管理へ移動します。',
+      },
+    },
   },
 
   servers: {
@@ -315,6 +371,8 @@ export default {
     access: {
       title: 'アクセス設定',
       subtitle: 'ZenithPanel への接続方法をカスタマイズ',
+      usageProfile: '利用プロファイル',
+      usageProfileHint: 'ナビゲーション、ダッシュボードの強調、推奨内容を調整しますが、機能自体は無効化しません。',
       securityPath: 'セキュリティパスサフィックス',
       panelPort: 'パネルポート',
       portHint: 'Cloudflare 対応の HTTPS ポートを使用：443、2053、2083、2087、2096、8443',
