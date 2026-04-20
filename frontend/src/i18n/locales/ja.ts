@@ -321,6 +321,9 @@ export default {
         ultraFast: '超高速',
         lightweight: '軽量',
       },
+      errors: {
+        publicHostRequired: '{preset}：「公開ホスト / IP」か「ドメイン」のどちらかを入力してください。クライアントはこの値を使ってプロキシに接続します。',
+      },
       fields: {
         defaultPort: 'デフォルトポート',
         serverAddress: '公開ホスト / IP',
@@ -332,6 +335,7 @@ export default {
         fingerprint: 'フィンガープリント',
         domain: 'ドメイン（TLS 証明書用）',
         domainRequired: 'TLS に必須。このサーバーに向けたドメインを使用してください。',
+        publicHostHint: '下の「公開ホスト / IP」と「ドメイン」のどちらか一方は必須です。クライアントはこの値でプロキシに接続します。',
         certFile: '証明書ファイル',
         keyFile: '鍵ファイル',
         wsPath: 'WebSocket パス',

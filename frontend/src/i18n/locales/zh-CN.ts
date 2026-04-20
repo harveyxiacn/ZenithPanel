@@ -321,6 +321,9 @@ export default {
         ultraFast: '极速',
         lightweight: '轻量级',
       },
+      errors: {
+        publicHostRequired: '{preset}：请先填写"公网主机 / IP"或"域名"——客户端需要此信息才能连接代理。',
+      },
       fields: {
         defaultPort: '默认端口',
         serverAddress: '公网主机 / IP',
@@ -332,6 +335,7 @@ export default {
         fingerprint: '指纹',
         domain: '域名（用于 TLS 证书）',
         domainRequired: 'TLS 必填。使用已解析到此服务器的域名。',
+        publicHostHint: '下方的"公网主机 / IP"与"域名"至少填一个，客户端会用它连接代理。',
         certFile: '证书文件',
         keyFile: '密钥文件',
         wsPath: 'WebSocket 路径',

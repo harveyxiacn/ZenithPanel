@@ -321,6 +321,9 @@ export default {
         ultraFast: '極速',
         lightweight: '輕量級',
       },
+      errors: {
+        publicHostRequired: '{preset}：請先填寫「公網主機 / IP」或「網域」——用戶端需要此資訊才能連線到代理。',
+      },
       fields: {
         defaultPort: '預設連接埠',
         serverAddress: '公網主機 / IP',
@@ -332,6 +335,7 @@ export default {
         fingerprint: '指紋',
         domain: '網域（用於 TLS 憑證）',
         domainRequired: 'TLS 必填。使用已解析到此伺服器的網域。',
+        publicHostHint: '下方的「公網主機 / IP」與「網域」至少要填一個，用戶端會透過它連線到代理。',
         certFile: '憑證檔案',
         keyFile: '金鑰檔案',
         wsPath: 'WebSocket 路徑',

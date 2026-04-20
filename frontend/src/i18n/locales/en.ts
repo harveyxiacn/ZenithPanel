@@ -329,6 +329,9 @@ export default {
         ultraFast: 'Ultra Fast',
         lightweight: 'Lightweight',
       },
+      errors: {
+        publicHostRequired: '{preset}: please fill either Public Host / IP or Domain before applying — clients need it to reach the proxy.',
+      },
       fields: {
         defaultPort: 'Default port',
         serverAddress: 'Public Host / IP',
@@ -340,6 +343,7 @@ export default {
         fingerprint: 'Fingerprint',
         domain: 'Domain (for TLS certificate)',
         domainRequired: 'Required for TLS. Use your domain pointed to this server.',
+        publicHostHint: 'Fill either Public Host/IP or Domain below — clients use this value to reach the proxy.',
         certFile: 'Certificate File',
         keyFile: 'Key File',
         wsPath: 'WebSocket Path',

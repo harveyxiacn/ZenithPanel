@@ -350,7 +350,7 @@ func validateInbound(target model.Inbound) string {
 		return "Listen must be blank or a valid IP address"
 	}
 	if strings.TrimSpace(target.ServerAddress) == "" && !inboundHasDerivedPublicHost(target.Stream) {
-		return "Public Host / IP is required when the inbound does not define a safe public host in its stream settings"
+		return "Fill 'Public Host / IP' or a stream host (TLS serverName, WebSocket Host, HTTP/2 host, or HTTPUpgrade host) — clients need this to reach the proxy."
 	}
 	return ""
 }

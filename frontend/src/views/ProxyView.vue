@@ -885,6 +885,20 @@ function buildPayload(presetId: string) {
 }
 
 async function executeQuickSetup() {
+  // Pre-flight: for TLS presets, either a Public Host/IP or a domain is
+  // required, otherwise the backend rejects the inbound because it cannot
+  // build a safe subscription URL.
+  for (const id of selectedPresetIds.value) {
+    const preset = presets.find(p => p.id === id)!
+    const cfg = presetConfigs.value[id]
+    const host = (cfg?.serverAddress || '').trim()
+    const domain = (cfg?.domain || '').trim()
+    if (preset.needsDomain && !host && !domain) {
+      toast.error(t('proxy.quickSetup.errors.publicHostRequired', { preset: id }))
+      return
+    }
+  }
+
   quickSetupCreating.value = true
   quickSetupResults.value = []
   const createdInboundIds: number[] = []
@@ -1548,8 +1562,12 @@ onMounted(() => {
                       <input v-model.number="presetConfigs[id].port" type="number" class="input-field text-sm w-full" />
                     </div>
                     <div>
-                      <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.serverAddress') }}</label>
+                      <label class="block text-xs font-medium text-slate-500 mb-1">
+                        {{ $t('proxy.quickSetup.fields.serverAddress') }}
+                        <span v-if="presets.find(p => p.id === id)?.needsDomain" class="text-rose-400">*</span>
+                      </label>
                       <input v-model="presetConfigs[id].serverAddress" class="input-field text-sm w-full" placeholder="vpn.example.com" />
+                      <p v-if="presets.find(p => p.id === id)?.needsDomain" class="text-xs text-slate-400 mt-1">{{ $t('proxy.quickSetup.fields.publicHostHint') }}</p>
                     </div>
                   </div>
 
