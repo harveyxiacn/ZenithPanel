@@ -42,7 +42,8 @@
 
 ### 🚀 代理服务管理
 - **入站 (Inbound) 管理**：Xray / Sing-box 入站配置的完整增删改查，含协议选择器与 JSON 设置编辑器。
-- **协议覆盖**：VLESS（含 Reality）、VMess、Trojan、Shadowsocks（含 plugin 支持）、Hysteria2（含 salamander `obfs` 与端口跳跃）在 Xray 与 Sing-box 双内核下均可使用；订阅链接与 Clash YAML 会按协议导出完整参数。
+- **协议覆盖**：VLESS（含 Reality）、VMess、Trojan、Shadowsocks（含 plugin 支持）、Hysteria2（含 salamander `obfs` 与端口跳跃）以及 **TUIC v5**（Sing-box）在双内核下均可使用；订阅链接与 Clash YAML 会按协议导出完整参数。
+- **备份与恢复**：可将入站、客户端、路由规则、Cron 任务与非敏感设置打包导出为可迁移的 zip 归档；管理员凭证、JWT 密钥与 TLS 证书路径不会被导出，恢复后登录信息保持不变。
 - **客户端 / 用户管理**：按入站添加和删除客户端，自动生成 UUID，并支持带格式选择的订阅链接分享。
 - **路由规则管理**：以结构化表单管理域名、地理位置 (geo) 和出站路由规则。
 - **代理运行状态**：可直接查看 Xray 是否运行，以及当前启用的节点、用户和路由规则数量。
@@ -76,6 +77,8 @@
 | Cron 定时任务调度器 | ✅ 已完成 |
 | 入站 / 客户端 / 路由规则 CRUD | ✅ 已完成 |
 | JWT + bcrypt 认证体系 | ✅ 已完成 |
+| TUIC v5 协议支持（Sing-box） | ✅ 已完成 |
+| 备份 / 恢复（可迁移归档） | ✅ 已完成 |
 | 实时流量图表 (ECharts) | 🔜 规划中 |
 | ACME / Let's Encrypt 自动 TLS | 🔜 规划中 |
 | WARP WireGuard 一键出站 | 🔜 规划中 |

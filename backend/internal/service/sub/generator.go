@@ -614,6 +614,29 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 			fmt.Fprintf(sb, "    password: %s\n", password)
 			sb.WriteString("    udp: true\n")
 
+		case "tuic":
+			congestion, udpRelay, zeroRTT := parseTUICExtras(in.Settings)
+			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
+			sb.WriteString("    type: tuic\n")
+			fmt.Fprintf(sb, "    server: %s\n", publicServer)
+			fmt.Fprintf(sb, "    port: %d\n", in.Port)
+			fmt.Fprintf(sb, "    uuid: %s\n", client.UUID)
+			fmt.Fprintf(sb, "    password: %s\n", client.UUID)
+			if si.SNI != "" {
+				fmt.Fprintf(sb, "    sni: %s\n", si.SNI)
+			}
+			writeClashALPN(sb, si.ALPN)
+			if congestion != "" {
+				fmt.Fprintf(sb, "    congestion-controller: %s\n", congestion)
+			}
+			if udpRelay != "" {
+				fmt.Fprintf(sb, "    udp-relay-mode: %s\n", udpRelay)
+			}
+			if zeroRTT {
+				sb.WriteString("    reduce-rtt: true\n")
+			}
+			fmt.Fprintf(sb, "    skip-cert-verify: %t\n", skipVerify)
+
 		case "hysteria2":
 			extras := parseHysteria2Extras(in.Settings)
 			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
@@ -762,6 +785,8 @@ func buildBase64Links(inbounds []model.Inbound, client model.Client, serverAddr 
 			link = buildSSLink(in, publicServer, remark)
 		case "hysteria2":
 			link = buildHysteria2Link(in, client, publicServer, si, remark)
+		case "tuic":
+			link = buildTUICLink(in, client, publicServer, si, remark)
 		default:
 			continue
 		}
@@ -974,6 +999,61 @@ func buildSSLink(in model.Inbound, server string, remark string) string {
 		base += "/?" + q.Encode()
 	}
 	return base + "#" + url.PathEscape(remark)
+}
+
+// parseTUICExtras reads optional TUIC-specific settings.
+func parseTUICExtras(settingsJSON string) (congestion, udpRelay string, zeroRTT bool) {
+	congestion = "bbr"
+	if settingsJSON == "" || settingsJSON == "{}" {
+		return
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(settingsJSON), &raw); err != nil {
+		return
+	}
+	if v, ok := raw["congestion_control"].(string); ok && v != "" {
+		congestion = v
+	}
+	if v, ok := raw["udp_relay_mode"].(string); ok {
+		udpRelay = v
+	}
+	if v, ok := raw["zero_rtt_handshake"].(bool); ok {
+		zeroRTT = v
+	}
+	return
+}
+
+// buildTUICLink generates a tuic:// share link (sing-box / v2rayN format).
+// Share link shape: tuic://uuid:password@host:port?sni=...&alpn=...&congestion_control=...#tag
+func buildTUICLink(in model.Inbound, client model.Client, server string, si streamInfo, remark string) string {
+	congestion, udpRelay, zeroRTT := parseTUICExtras(in.Settings)
+	params := url.Values{}
+	if si.SNI != "" {
+		params.Set("sni", si.SNI)
+	}
+	if si.ALPN != "" {
+		params.Set("alpn", si.ALPN)
+	}
+	if si.AllowInsecure {
+		params.Set("allow_insecure", "1")
+	}
+	if congestion != "" {
+		params.Set("congestion_control", congestion)
+	}
+	if udpRelay != "" {
+		params.Set("udp_relay_mode", udpRelay)
+	}
+	if zeroRTT {
+		params.Set("zero_rtt_handshake", "1")
+	}
+
+	q := ""
+	if encoded := params.Encode(); encoded != "" {
+		q = "?" + encoded
+	}
+	return fmt.Sprintf("tuic://%s:%s@%s:%d%s#%s",
+		url.PathEscape(client.UUID), url.PathEscape(client.UUID),
+		server, in.Port, q, url.PathEscape(remark))
 }
 
 // buildHysteria2Link generates a hysteria2:// share link.

@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon, GlobeAltIcon, Cog6ToothIcon, BoltIcon, CpuChipIcon, AdjustmentsHorizontalIcon, TrashIcon } from '@heroicons/vue/24/outline'
-import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup } from '@/api/system'
+import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup, downloadBackup, restoreBackup } from '@/api/system'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '../composables/useToast'
 import { useUsageProfile } from '@/composables/useUsageProfile'
@@ -647,6 +647,75 @@ async function onRunCleanup() {
   cleanupRunning.value = false
 }
 
+// ---- Backup / Restore ----
+const backupExporting = ref(false)
+const backupRestoring = ref(false)
+const backupMsg = ref('')
+const backupMsgType = ref<'success' | 'error'>('success')
+const restoreInputRef = ref<HTMLInputElement | null>(null)
+
+async function onExportBackup() {
+  backupExporting.value = true
+  backupMsg.value = ''
+  try {
+    const res = await downloadBackup() as any
+    const blob = res instanceof Blob ? res : res.data
+    if (!(blob instanceof Blob)) {
+      throw new Error('Unexpected response body')
+    }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)
+    a.download = `zenithpanel-backup-${stamp}.zip`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    toast.success(t('security.backup.exported'))
+    backupMsg.value = t('security.backup.exported')
+    backupMsgType.value = 'success'
+  } catch (e: any) {
+    backupMsg.value = e?.response?.data?.msg || e?.message || 'Failed'
+    backupMsgType.value = 'error'
+    toast.error(backupMsg.value)
+  }
+  backupExporting.value = false
+}
+
+async function onRestoreFileChosen(ev: Event) {
+  const input = ev.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const ok = await confirmDialog({
+    title: t('security.backup.confirmTitle'),
+    message: t('security.backup.confirmRestore'),
+    confirmText: t('security.backup.restore'),
+    variant: 'warning',
+  })
+  if (!ok) return
+  backupRestoring.value = true
+  backupMsg.value = ''
+  try {
+    const res = await restoreBackup(file) as any
+    if (res.code === 200) {
+      backupMsg.value = t('security.backup.restored')
+      backupMsgType.value = 'success'
+      toast.success(backupMsg.value)
+    } else {
+      backupMsg.value = res.msg || 'Failed'
+      backupMsgType.value = 'error'
+      toast.error(backupMsg.value)
+    }
+  } catch (e: any) {
+    backupMsg.value = e?.response?.data?.msg || e?.message || 'Failed'
+    backupMsgType.value = 'error'
+    toast.error(backupMsg.value)
+  }
+  backupRestoring.value = false
+}
+
 // ---- Port Security ----
 const panelPort = ref(window.location.port || (window.location.protocol === 'https:' ? '443' : '80'))
 const cloudflarePorts = [443, 2053, 2083, 2087, 2096, 8443]
@@ -1061,6 +1130,32 @@ onMounted(() => {
               <button @click="onRunCleanup" :disabled="cleanupRunning || cleanupScanning" class="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
                 {{ cleanupRunning ? $t('optimize.cleanup.running') : $t('optimize.cleanup.run') }}
               </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Backup / Restore -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-6 border-b border-slate-100 flex items-center">
+            <div class="bg-indigo-500/10 text-indigo-500 p-2 rounded-lg mr-4">
+              <ArrowDownTrayIcon class="h-6 w-6" />
+            </div>
+            <div>
+              <h3 class="text-lg font-medium text-slate-800">{{ $t('security.backup.title') }}</h3>
+              <p class="text-sm text-slate-500">{{ $t('security.backup.subtitle') }}</p>
+            </div>
+          </div>
+          <div class="p-6 space-y-4">
+            <p class="text-sm text-slate-600">{{ $t('security.backup.desc') }}</p>
+            <div v-if="backupMsg" :class="['text-sm p-2 rounded-lg', backupMsgType === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700']">{{ backupMsg }}</div>
+            <div class="flex items-center space-x-3">
+              <button @click="onExportBackup" :disabled="backupExporting || backupRestoring" class="bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                {{ backupExporting ? $t('security.backup.exporting') : $t('security.backup.export') }}
+              </button>
+              <button @click="restoreInputRef?.click()" :disabled="backupRestoring || backupExporting" class="bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">
+                {{ backupRestoring ? $t('security.backup.restoring') : $t('security.backup.restore') }}
+              </button>
+              <input ref="restoreInputRef" type="file" accept=".zip,application/zip" class="hidden" @change="onRestoreFileChosen" />
             </div>
           </div>
         </div>

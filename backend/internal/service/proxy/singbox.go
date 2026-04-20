@@ -193,6 +193,35 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 			})
 		}
 		entry["users"] = users
+
+	case "tuic":
+		// TUIC v5: each user has a UUID + password. We reuse the client's UUID
+		// for both (same pattern as Hysteria2 / VLESS) unless the settings JSON
+		// supplies a dedicated per-user password. congestion_control defaults
+		// to "bbr" which is the sing-box recommendation.
+		users := make([]map[string]interface{}, 0, len(clients))
+		for _, c := range clients {
+			users = append(users, map[string]interface{}{
+				"name":     c.Email,
+				"uuid":     c.UUID,
+				"password": c.UUID,
+			})
+		}
+		entry["users"] = users
+		if settingsRaw != nil {
+			if cc, ok := settingsRaw["congestion_control"].(string); ok && cc != "" {
+				entry["congestion_control"] = cc
+			}
+			if um, ok := settingsRaw["udp_relay_mode"].(string); ok && um != "" {
+				entry["udp_relay_mode"] = um
+			}
+			if zrh, ok := settingsRaw["zero_rtt_handshake"].(bool); ok {
+				entry["zero_rtt_handshake"] = zrh
+			}
+		}
+		if _, ok := entry["congestion_control"]; !ok {
+			entry["congestion_control"] = "bbr"
+		}
 	}
 
 	// Parse and apply stream settings (TLS + transport)

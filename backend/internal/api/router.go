@@ -32,6 +32,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/docker"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
+	backupsvc "github.com/harveyxiacn/ZenithPanel/backend/internal/service/backup"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/cert"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/diagnostic"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/firewall"
@@ -2073,6 +2074,46 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "token": token})
+		})
+
+		// ======================================
+		// Backup / Restore
+		// ======================================
+		authGroup.GET("/admin/backup/export", func(c *gin.Context) {
+			filename := fmt.Sprintf("zenithpanel-backup-%s.zip", time.Now().UTC().Format("20060102-150405"))
+			c.Header("Content-Type", "application/zip")
+			c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+			counts, err := backupsvc.Export(c.Writer)
+			if err != nil {
+				log.Printf("Backup export failed: %v", err)
+				// Response body is already being written; trailers are best-effort here.
+				c.Status(500)
+				return
+			}
+			recordAudit(c, "backup.export", fmt.Sprintf("items=%v", counts))
+		})
+
+		authGroup.POST("/admin/backup/restore", func(c *gin.Context) {
+			// Cap body at 16 MB — backups are JSON-in-zip and should stay small.
+			const maxBackupBytes = 16 * 1024 * 1024
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBackupBytes)
+			body, err := io.ReadAll(c.Request.Body)
+			if err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Failed to read backup payload (max 16 MB)"})
+				return
+			}
+			if len(body) == 0 {
+				c.JSON(400, gin.H{"code": 400, "msg": "Empty backup payload"})
+				return
+			}
+			counts, err := backupsvc.Restore(body)
+			if err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": fmt.Sprintf("Restore failed: %v", err)})
+				return
+			}
+			sub.InvalidateSubCache()
+			recordAudit(c, "backup.restore", fmt.Sprintf("items=%v", counts))
+			c.JSON(200, gin.H{"code": 200, "msg": "Restored", "data": counts})
 		})
 	}
 

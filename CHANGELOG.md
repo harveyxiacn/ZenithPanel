@@ -5,6 +5,22 @@ All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 
 ## [Unreleased]
 
+### Added — features
+- **TUIC v5 protocol** — end-to-end support via Sing-box. Inbound generation
+  writes users with `uuid` + `password`, lets settings JSON override
+  `congestion_control` (default `bbr`), `udp_relay_mode`, and
+  `zero_rtt_handshake`. Subscription output includes a spec-compliant
+  `tuic://uuid:password@host:port?sni&alpn&...` link and a matching Clash
+  `type: tuic` proxy block (`congestion-controller`, `udp-relay-mode`,
+  `reduce-rtt`).
+- **Backup / Restore** — `GET /api/v1/admin/backup/export` streams a zip with
+  a `backup.json` entry covering inbounds, clients, routing rules, cron jobs,
+  and non-secret settings. `POST /api/v1/admin/backup/restore` validates
+  format version and rebuilds state inside a single transaction. Admin
+  credentials, JWT secret, and TLS paths are never exported and never
+  overwritten — restoring a backup keeps your current login. UI lives under
+  **Security → Backup & Restore** in EN / 简体 / 繁體 / 日本語.
+
 ### Performance — tuned for 1C / 1–2G VPS
 - **System monitor cache** — `/api/v1/system/monitor` now caches gopsutil
   snapshots for 3s and memoizes the hostname, cutting syscall pressure roughly
@@ -43,7 +59,10 @@ All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 - **VLESS Clash output** — `skip-cert-verify` now reflects the `allowInsecure`
   flag rather than being hard-coded to `true`.
 
-### Added
+### Tests
 - Ring-buffer + subscription-cache-invalidate unit tests, and link-format unit
   tests for VMess (httpupgrade + Reality), Trojan (Reality), Hysteria2 (obfs +
-  insecure flag), and Shadowsocks (SIP002 + plugin).
+  insecure flag), Shadowsocks (SIP002 + plugin), and TUIC v5 (share link +
+  Clash block).
+- Backup round-trip test verifies `jwt_secret` is not leaked into the archive
+  and survives untouched across restore.

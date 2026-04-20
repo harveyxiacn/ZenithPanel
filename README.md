@@ -42,7 +42,8 @@ Current server panels (like 1Panel, BT) focus on website hosting and general mai
 
 ### 🚀 Proxy Orchestration
 - **Inbound Management**: Full CRUD for Xray / Sing-box inbound configs with protocol selector and JSON settings editor.
-- **Protocol Coverage**: VLESS (incl. Reality), VMess, Trojan, Shadowsocks (with plugin support), and Hysteria2 (with `obfs` salamander + port-hopping) across Xray and Sing-box engines. Subscription links and Clash YAML are emitted with the full parameter set for each protocol.
+- **Protocol Coverage**: VLESS (incl. Reality), VMess, Trojan, Shadowsocks (with plugin support), Hysteria2 (with `obfs` salamander + port-hopping), and **TUIC v5** (Sing-box) across Xray and Sing-box engines. Subscription links and Clash YAML are emitted with the full parameter set for each protocol.
+- **Backup & Restore**: Export inbounds, clients, routing rules, cron jobs, and non-secret settings to a portable zip archive, then restore on any instance. Admin credentials, JWT secret, and TLS paths are preserved across restore.
 - **Client / User Management**: Add and remove clients per inbound, auto-generated UUID, and format-aware subscription link sharing.
 - **Routing Rules**: Manage domain, geo, and outbound routing rules in a structured form.
 - **Proxy Runtime Status**: See whether Xray is running and how many enabled nodes, users, and routing rules are active.
@@ -76,6 +77,8 @@ Current server panels (like 1Panel, BT) focus on website hosting and general mai
 | Cron scheduler | ✅ Done |
 | Inbound / Client / Routing CRUD | ✅ Done |
 | JWT + bcrypt auth | ✅ Done |
+| TUIC v5 support (Sing-box) | ✅ Done |
+| Backup / restore (portable archive) | ✅ Done |
 | Real-time traffic charts (ECharts) | 🔜 Planned |
 | ACME / Let's Encrypt (auto TLS) | 🔜 Planned |
 | WARP WireGuard one-click outbound | 🔜 Planned |
