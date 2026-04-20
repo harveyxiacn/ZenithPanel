@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -38,6 +39,17 @@ type streamInfo struct {
 	RealitySID  string // short id
 	RealitySPX  string // spiderX
 	Fingerprint string
+	// TLS verification
+	AllowInsecure bool // user has explicitly allowed self-signed certs
+}
+
+// hysteria2Extras holds protocol-specific options read from an inbound's Settings JSON.
+type hysteria2Extras struct {
+	ObfsType     string // typically "salamander"
+	ObfsPassword string
+	Ports        string // port hopping spec, e.g. "20000-30000,40000"
+	UpMbps       int
+	DownMbps     int
 }
 
 // parseStream extracts transport info from the Stream JSON column.
@@ -54,7 +66,6 @@ func parseStream(streamJSON string) streamInfo {
 	if v, ok := raw["network"].(string); ok && v != "" {
 		si.Network = v
 	}
-	// Normalize "wss" → "ws" + TLS (wss is WebSocket over TLS, not a real transport)
 	if si.Network == "wss" {
 		si.Network = "ws"
 		if si.Security == "none" {
@@ -65,7 +76,6 @@ func parseStream(streamJSON string) streamInfo {
 		si.Security = v
 	}
 
-	// TLS settings
 	if tls, ok := raw["tlsSettings"].(map[string]interface{}); ok {
 		if v, ok := tls["serverName"].(string); ok {
 			si.SNI = v
@@ -82,9 +92,11 @@ func parseStream(streamJSON string) streamInfo {
 		if v, ok := tls["fingerprint"].(string); ok {
 			si.Fingerprint = v
 		}
+		if v, ok := tls["allowInsecure"].(bool); ok {
+			si.AllowInsecure = v
+		}
 	}
 
-	// Reality settings
 	if _, ok := raw["realitySettings"].(map[string]interface{}); ok {
 		info := proxyservice.ReadRealityStreamInfo(raw)
 		if info.PublicKey != "" {
@@ -107,7 +119,6 @@ func parseStream(streamJSON string) streamInfo {
 		}
 	}
 
-	// WebSocket settings
 	if ws, ok := raw["wsSettings"].(map[string]interface{}); ok {
 		if v, ok := ws["path"].(string); ok {
 			si.WSPath = v
@@ -119,14 +130,12 @@ func parseStream(streamJSON string) streamInfo {
 		}
 	}
 
-	// gRPC settings
 	if grpc, ok := raw["grpcSettings"].(map[string]interface{}); ok {
 		if v, ok := grpc["serviceName"].(string); ok {
 			si.GRPCServiceName = v
 		}
 	}
 
-	// HTTP/2 settings
 	if h2, ok := raw["httpSettings"].(map[string]interface{}); ok {
 		if v, ok := h2["path"].(string); ok {
 			si.H2Path = v
@@ -138,7 +147,6 @@ func parseStream(streamJSON string) streamInfo {
 		}
 	}
 
-	// HTTPUpgrade settings
 	if hu, ok := raw["httpupgradeSettings"].(map[string]interface{}); ok {
 		if v, ok := hu["path"].(string); ok {
 			si.HTTPUpgradePath = v
@@ -166,11 +174,57 @@ func parseSettingsFlow(settingsJSON string) string {
 	return ""
 }
 
+// parseHysteria2Extras reads obfs and port-hopping hints from Hysteria2 settings JSON.
+func parseHysteria2Extras(settingsJSON string) hysteria2Extras {
+	var h hysteria2Extras
+	if settingsJSON == "" || settingsJSON == "{}" {
+		return h
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(settingsJSON), &raw); err != nil {
+		return h
+	}
+	if obfs, ok := raw["obfs"].(map[string]interface{}); ok {
+		if t, ok := obfs["type"].(string); ok {
+			h.ObfsType = t
+		}
+		if pw, ok := obfs["password"].(string); ok {
+			h.ObfsPassword = pw
+		}
+	}
+	if p, ok := raw["ports"].(string); ok {
+		h.Ports = p
+	}
+	if v, ok := raw["up_mbps"].(float64); ok {
+		h.UpMbps = int(v)
+	}
+	if v, ok := raw["down_mbps"].(float64); ok {
+		h.DownMbps = int(v)
+	}
+	return h
+}
+
+// parseSSPlugin reads optional shadowsocks plugin settings (v2ray-plugin, obfs).
+func parseSSPlugin(settingsJSON string) (pluginName, pluginOpts string) {
+	if settingsJSON == "" || settingsJSON == "{}" {
+		return
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(settingsJSON), &raw); err != nil {
+		return
+	}
+	if v, ok := raw["plugin"].(string); ok {
+		pluginName = v
+	}
+	if v, ok := raw["plugin_opts"].(string); ok {
+		pluginOpts = v
+	}
+	return
+}
+
 // getServerAddr extracts the server IP/hostname from the HTTP request.
-// Falls back to the Host header (minus port).
 func getServerAddr(c *gin.Context) string {
 	host := c.Request.Host
-	// Strip port if present
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		return h
 	}
@@ -182,15 +236,12 @@ func normalizeServerAddress(raw string) string {
 	if addr == "" {
 		return ""
 	}
-
 	if parsed, err := url.Parse(addr); err == nil && parsed.Host != "" {
 		addr = parsed.Host
 	}
-
 	if host, _, err := net.SplitHostPort(addr); err == nil {
 		return host
 	}
-
 	return strings.Trim(addr, "[]")
 }
 
@@ -198,14 +249,12 @@ func resolveInboundServerAddress(in model.Inbound, requestHost string) string {
 	if explicit := normalizeServerAddress(in.ServerAddress); explicit != "" {
 		return explicit
 	}
-
 	si := parseStream(in.Stream)
 	if si.Security == "tls" {
 		if sni := normalizeServerAddress(si.SNI); sni != "" {
 			return sni
 		}
 	}
-
 	switch si.Network {
 	case "ws":
 		if host := normalizeServerAddress(si.WSHost); host != "" {
@@ -220,8 +269,55 @@ func resolveInboundServerAddress(in model.Inbound, requestHost string) string {
 			return host
 		}
 	}
-
 	return normalizeServerAddress(requestHost)
+}
+
+// Subscription response caching.
+// Low-volume endpoint with expensive string building — cache by (uuid, format, host).
+// TTL is short so traffic counters stay ~fresh and revoked clients drop out quickly.
+const subCacheTTL = 8 * time.Second
+
+type subCacheEntry struct {
+	body        string
+	contentType string
+	userInfo    string
+	storedAt    time.Time
+}
+
+var (
+	subCacheMu sync.Mutex
+	subCache   = make(map[string]subCacheEntry)
+	subCacheGC time.Time
+)
+
+func subCacheGet(key string) (subCacheEntry, bool) {
+	subCacheMu.Lock()
+	defer subCacheMu.Unlock()
+	e, ok := subCache[key]
+	if !ok {
+		return subCacheEntry{}, false
+	}
+	if time.Since(e.storedAt) > subCacheTTL {
+		delete(subCache, key)
+		return subCacheEntry{}, false
+	}
+	return e, true
+}
+
+func subCachePut(key string, e subCacheEntry) {
+	subCacheMu.Lock()
+	defer subCacheMu.Unlock()
+	subCache[key] = e
+	// Opportunistic GC so the map doesn't grow unbounded on rotating UUIDs.
+	if time.Since(subCacheGC) > time.Minute {
+		cutoff := time.Now().Add(-subCacheTTL)
+		for k, v := range subCache {
+			if v.storedAt.Before(cutoff) {
+				delete(subCache, k)
+			}
+		}
+		subCacheGC = time.Now()
+	}
 }
 
 // GenerateSubscription creates subscription output in Clash YAML or base64-encoded links.
@@ -229,38 +325,6 @@ func GenerateSubscription(c *gin.Context) {
 	uuid := c.Param("uuid")
 	format := c.Query("format") // empty, "clash", or "base64"
 
-	var client model.Client
-	if err := config.DB.Where("uuid = ?", uuid).First(&client).Error; err != nil {
-		c.Status(404)
-		return
-	}
-	if !client.Enable {
-		c.Status(404)
-		return
-	}
-	if client.ExpiryTime > 0 && time.Now().Unix() > client.ExpiryTime {
-		c.Status(404)
-		return
-	}
-
-	// Fetch inbounds that this client is associated with (via inbound_id).
-	// A client may have multiple records with the same UUID across different inbounds.
-	var clientRecords []model.Client
-	config.DB.Where("uuid = ? AND enable = ?", client.UUID, true).Find(&clientRecords)
-
-	var inboundIDs []uint
-	for _, cr := range clientRecords {
-		inboundIDs = append(inboundIDs, cr.InboundID)
-	}
-
-	var inbounds []model.Inbound
-	if len(inboundIDs) > 0 {
-		config.DB.Where("id IN ? AND enable = ?", inboundIDs, true).Find(&inbounds)
-	}
-
-	serverAddr := getServerAddr(c)
-
-	// Determine format
 	userAgent := c.GetHeader("User-Agent")
 	if format == "" {
 		if detectClashClient(userAgent) {
@@ -270,23 +334,100 @@ func GenerateSubscription(c *gin.Context) {
 		}
 	}
 
-	if format == "clash" {
-		yamlStr := buildClashConfig(inbounds, client, serverAddr)
-		c.Header("Content-Type", "text/yaml; charset=utf-8")
-		c.Header("Content-Disposition", "inline; filename=\"clash.yaml\"")
-		// Add subscription-userinfo header for traffic info (always send, total=0 means unlimited)
-		c.Header("subscription-userinfo",
-			fmt.Sprintf("upload=%d; download=%d; total=%d", client.UpLoad, client.DownLoad, client.Total))
-		c.String(200, yamlStr)
+	serverAddr := getServerAddr(c)
+	cacheKey := uuid + "|" + format + "|" + serverAddr
+
+	// Fast path — serve from cache if available.
+	if entry, ok := subCacheGet(cacheKey); ok {
+		c.Header("Content-Type", entry.contentType)
+		c.Header("subscription-userinfo", entry.userInfo)
+		if format == "clash" {
+			c.Header("Content-Disposition", "inline; filename=\"clash.yaml\"")
+		}
+		c.String(200, entry.body)
 		return
 	}
 
-	// Default: Standard Base64 encoded links
-	links := buildBase64Links(inbounds, client, serverAddr)
-	c.Header("Content-Type", "text/plain; charset=utf-8")
-	c.Header("subscription-userinfo",
-		fmt.Sprintf("upload=%d; download=%d; total=%d", client.UpLoad, client.DownLoad, client.Total))
-	c.String(200, links)
+	// One query fetches every enabled (client, inbound) pair for this UUID.
+	// Previously took 3 round-trips (client by uuid, all records, all inbounds).
+	type row struct {
+		model.Client
+		InboundTag           string `gorm:"column:inbound_tag"`
+		InboundProtocol      string `gorm:"column:inbound_protocol"`
+		InboundPort          int    `gorm:"column:inbound_port"`
+		InboundSettings      string `gorm:"column:inbound_settings"`
+		InboundStream        string `gorm:"column:inbound_stream"`
+		InboundServerAddress string `gorm:"column:inbound_server_address"`
+	}
+	var rows []row
+	err := config.DB.
+		Table("clients").
+		Select(`clients.*,
+			inbounds.tag AS inbound_tag,
+			inbounds.protocol AS inbound_protocol,
+			inbounds.port AS inbound_port,
+			inbounds.settings AS inbound_settings,
+			inbounds.stream AS inbound_stream,
+			inbounds.server_address AS inbound_server_address`).
+		Joins("JOIN inbounds ON inbounds.id = clients.inbound_id AND inbounds.enable = ? AND inbounds.deleted_at IS NULL", true).
+		Where("clients.uuid = ? AND clients.enable = ? AND clients.deleted_at IS NULL", uuid, true).
+		Scan(&rows).Error
+	if err != nil || len(rows) == 0 {
+		c.Status(404)
+		return
+	}
+
+	// Use first row as canonical client (all rows share the same UUID/traffic counters).
+	client := rows[0].Client
+	if client.ExpiryTime > 0 && time.Now().Unix() > client.ExpiryTime {
+		c.Status(404)
+		return
+	}
+
+	inbounds := make([]model.Inbound, 0, len(rows))
+	for _, r := range rows {
+		inbounds = append(inbounds, model.Inbound{
+			ID:            r.InboundID,
+			Tag:           r.InboundTag,
+			Protocol:      r.InboundProtocol,
+			Port:          r.InboundPort,
+			Settings:      r.InboundSettings,
+			Stream:        r.InboundStream,
+			ServerAddress: r.InboundServerAddress,
+		})
+	}
+
+	userInfo := fmt.Sprintf("upload=%d; download=%d; total=%d",
+		client.UpLoad, client.DownLoad, client.Total)
+
+	var body, contentType string
+	if format == "clash" {
+		body = buildClashConfig(inbounds, client, serverAddr)
+		contentType = "text/yaml; charset=utf-8"
+		c.Header("Content-Disposition", "inline; filename=\"clash.yaml\"")
+	} else {
+		body = buildBase64Links(inbounds, client, serverAddr)
+		contentType = "text/plain; charset=utf-8"
+	}
+
+	subCachePut(cacheKey, subCacheEntry{
+		body:        body,
+		contentType: contentType,
+		userInfo:    userInfo,
+		storedAt:    time.Now(),
+	})
+
+	c.Header("Content-Type", contentType)
+	c.Header("subscription-userinfo", userInfo)
+	c.String(200, body)
+}
+
+// InvalidateSubCache drops all cached subscription responses. Callers should invoke
+// this after mutating inbounds or clients so clients see the change within one request.
+func InvalidateSubCache() {
+	subCacheMu.Lock()
+	subCache = make(map[string]subCacheEntry)
+	subCacheMu.Unlock()
 }
 
 func detectClashClient(ua string) bool {
@@ -302,7 +443,8 @@ func detectClashClient(ua string) bool {
 
 // buildClashConfig generates a Clash Meta (Mihomo) YAML configuration.
 func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr string) string {
-	var sb strings.Builder
+	sb := &strings.Builder{}
+	sb.Grow(2048 + 512*len(inbounds))
 
 	sb.WriteString("port: 7890\n")
 	sb.WriteString("socks-port: 7891\n")
@@ -349,63 +491,58 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 				seenServerRules[publicServer] = struct{}{}
 			}
 		}
+		skipVerify := si.AllowInsecure
 
 		switch in.Protocol {
 		case "vless":
 			flow := parseSettingsFlow(in.Settings)
 			fp := si.Fingerprint
 			if fp == "" {
-				fp = "chrome" // default fingerprint for client
+				fp = "chrome"
 			}
-			sb.WriteString(fmt.Sprintf("  - name: \"%s\"\n", name))
+			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
 			sb.WriteString("    type: vless\n")
-			sb.WriteString(fmt.Sprintf("    server: %s\n", publicServer))
-			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
-			sb.WriteString(fmt.Sprintf("    uuid: %s\n", client.UUID))
+			fmt.Fprintf(sb, "    server: %s\n", publicServer)
+			fmt.Fprintf(sb, "    port: %d\n", in.Port)
+			fmt.Fprintf(sb, "    uuid: %s\n", client.UUID)
 			sb.WriteString("    udp: true\n")
 			if flow != "" {
-				sb.WriteString(fmt.Sprintf("    flow: %s\n", flow))
+				fmt.Fprintf(sb, "    flow: %s\n", flow)
 			}
-			// Map "httpupgrade" to "ws" for Clash compatibility
 			clashNetwork := si.Network
 			if clashNetwork == "httpupgrade" {
 				clashNetwork = "ws"
 			}
-			sb.WriteString(fmt.Sprintf("    network: %s\n", clashNetwork))
-			sb.WriteString(fmt.Sprintf("    client-fingerprint: %s\n", fp))
+			fmt.Fprintf(sb, "    network: %s\n", clashNetwork)
+			fmt.Fprintf(sb, "    client-fingerprint: %s\n", fp)
 			if si.Security == "tls" {
 				sb.WriteString("    tls: true\n")
 				if si.SNI != "" {
-					sb.WriteString(fmt.Sprintf("    servername: %s\n", si.SNI))
+					fmt.Fprintf(sb, "    servername: %s\n", si.SNI)
 				}
-				if si.ALPN != "" {
-					sb.WriteString("    alpn:\n")
-					for _, a := range strings.Split(si.ALPN, ",") {
-						sb.WriteString(fmt.Sprintf("      - %s\n", strings.TrimSpace(a)))
-					}
-				}
-				sb.WriteString("    skip-cert-verify: true\n")
+				writeClashALPN(sb, si.ALPN)
+				fmt.Fprintf(sb, "    skip-cert-verify: %t\n", skipVerify)
 			} else if si.Security == "reality" {
 				sb.WriteString("    tls: true\n")
 				if si.SNI != "" {
-					sb.WriteString(fmt.Sprintf("    servername: %s\n", si.SNI))
+					fmt.Fprintf(sb, "    servername: %s\n", si.SNI)
 				}
 				sb.WriteString("    reality-opts:\n")
 				if si.RealityPBK != "" {
-					sb.WriteString(fmt.Sprintf("      public-key: %s\n", si.RealityPBK))
+					fmt.Fprintf(sb, "      public-key: %s\n", si.RealityPBK)
 				}
 				if si.RealitySID != "" {
-					sb.WriteString(fmt.Sprintf("      short-id: %s\n", si.RealitySID))
+					fmt.Fprintf(sb, "      short-id: %s\n", si.RealitySID)
 				}
 			}
-			writeClashTransport(&sb, si)
+			writeClashTransport(sb, si)
 
 		case "vmess":
-			sb.WriteString(fmt.Sprintf("  - name: \"%s\"\n", name))
+			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
 			sb.WriteString("    type: vmess\n")
-			sb.WriteString(fmt.Sprintf("    server: %s\n", publicServer))
-			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
-			sb.WriteString(fmt.Sprintf("    uuid: %s\n", client.UUID))
+			fmt.Fprintf(sb, "    server: %s\n", publicServer)
+			fmt.Fprintf(sb, "    port: %d\n", in.Port)
+			fmt.Fprintf(sb, "    uuid: %s\n", client.UUID)
 			sb.WriteString("    alterId: 0\n")
 			sb.WriteString("    cipher: auto\n")
 			sb.WriteString("    udp: true\n")
@@ -413,82 +550,109 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 			if clashNet == "httpupgrade" {
 				clashNet = "ws"
 			}
-			sb.WriteString(fmt.Sprintf("    network: %s\n", clashNet))
+			fmt.Fprintf(sb, "    network: %s\n", clashNet)
 			if si.Security == "tls" {
 				sb.WriteString("    tls: true\n")
 				if si.SNI != "" {
-					sb.WriteString(fmt.Sprintf("    servername: %s\n", si.SNI))
+					fmt.Fprintf(sb, "    servername: %s\n", si.SNI)
 				}
 				if si.Fingerprint != "" {
-					sb.WriteString(fmt.Sprintf("    client-fingerprint: %s\n", si.Fingerprint))
+					fmt.Fprintf(sb, "    client-fingerprint: %s\n", si.Fingerprint)
 				}
-				sb.WriteString("    skip-cert-verify: true\n")
+				writeClashALPN(sb, si.ALPN)
+				fmt.Fprintf(sb, "    skip-cert-verify: %t\n", skipVerify)
 			}
-			writeClashTransport(&sb, si)
+			writeClashTransport(sb, si)
 
 		case "trojan":
-			sb.WriteString(fmt.Sprintf("  - name: \"%s\"\n", name))
+			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
 			sb.WriteString("    type: trojan\n")
-			sb.WriteString(fmt.Sprintf("    server: %s\n", publicServer))
-			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
-			sb.WriteString(fmt.Sprintf("    password: %s\n", client.UUID))
+			fmt.Fprintf(sb, "    server: %s\n", publicServer)
+			fmt.Fprintf(sb, "    port: %d\n", in.Port)
+			fmt.Fprintf(sb, "    password: %s\n", client.UUID)
 			sb.WriteString("    udp: true\n")
 			clashNet := si.Network
 			if clashNet == "httpupgrade" {
 				clashNet = "ws"
 			}
-			sb.WriteString(fmt.Sprintf("    network: %s\n", clashNet))
-			// Trojan requires TLS unless explicitly set to "none"
-			if si.Security != "none" {
+			fmt.Fprintf(sb, "    network: %s\n", clashNet)
+			if si.Security == "reality" {
 				sb.WriteString("    tls: true\n")
 				if si.SNI != "" {
-					sb.WriteString(fmt.Sprintf("    sni: %s\n", si.SNI))
+					fmt.Fprintf(sb, "    sni: %s\n", si.SNI)
 				}
 				if si.Fingerprint != "" {
-					sb.WriteString(fmt.Sprintf("    client-fingerprint: %s\n", si.Fingerprint))
+					fmt.Fprintf(sb, "    client-fingerprint: %s\n", si.Fingerprint)
 				}
-				if si.ALPN != "" {
-					sb.WriteString("    alpn:\n")
-					for _, a := range strings.Split(si.ALPN, ",") {
-						sb.WriteString(fmt.Sprintf("      - %s\n", strings.TrimSpace(a)))
-					}
+				sb.WriteString("    reality-opts:\n")
+				if si.RealityPBK != "" {
+					fmt.Fprintf(sb, "      public-key: %s\n", si.RealityPBK)
 				}
-				sb.WriteString("    skip-cert-verify: true\n")
+				if si.RealitySID != "" {
+					fmt.Fprintf(sb, "      short-id: %s\n", si.RealitySID)
+				}
+			} else if si.Security != "none" {
+				sb.WriteString("    tls: true\n")
+				if si.SNI != "" {
+					fmt.Fprintf(sb, "    sni: %s\n", si.SNI)
+				}
+				if si.Fingerprint != "" {
+					fmt.Fprintf(sb, "    client-fingerprint: %s\n", si.Fingerprint)
+				}
+				writeClashALPN(sb, si.ALPN)
+				fmt.Fprintf(sb, "    skip-cert-verify: %t\n", skipVerify)
 			}
-			writeClashTransport(&sb, si)
+			writeClashTransport(sb, si)
 
 		case "shadowsocks":
 			method, password := parseSSSettings(in.Settings)
-			sb.WriteString(fmt.Sprintf("  - name: \"%s\"\n", name))
+			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
 			sb.WriteString("    type: ss\n")
-			sb.WriteString(fmt.Sprintf("    server: %s\n", publicServer))
-			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
-			sb.WriteString(fmt.Sprintf("    cipher: %s\n", method))
-			sb.WriteString(fmt.Sprintf("    password: %s\n", password))
+			fmt.Fprintf(sb, "    server: %s\n", publicServer)
+			fmt.Fprintf(sb, "    port: %d\n", in.Port)
+			fmt.Fprintf(sb, "    cipher: %s\n", method)
+			fmt.Fprintf(sb, "    password: %s\n", password)
+			sb.WriteString("    udp: true\n")
 
 		case "hysteria2":
-			sb.WriteString(fmt.Sprintf("  - name: \"%s\"\n", name))
+			extras := parseHysteria2Extras(in.Settings)
+			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
 			sb.WriteString("    type: hysteria2\n")
-			sb.WriteString(fmt.Sprintf("    server: %s\n", publicServer))
-			sb.WriteString(fmt.Sprintf("    port: %d\n", in.Port))
-			sb.WriteString(fmt.Sprintf("    password: %s\n", client.UUID))
-			if si.SNI != "" {
-				sb.WriteString(fmt.Sprintf("    sni: %s\n", si.SNI))
+			fmt.Fprintf(sb, "    server: %s\n", publicServer)
+			fmt.Fprintf(sb, "    port: %d\n", in.Port)
+			if extras.Ports != "" {
+				fmt.Fprintf(sb, "    ports: %s\n", extras.Ports)
 			}
-			sb.WriteString("    skip-cert-verify: true\n")
+			fmt.Fprintf(sb, "    password: %s\n", client.UUID)
+			if si.SNI != "" {
+				fmt.Fprintf(sb, "    sni: %s\n", si.SNI)
+			}
+			if extras.ObfsType != "" {
+				fmt.Fprintf(sb, "    obfs: %s\n", extras.ObfsType)
+				if extras.ObfsPassword != "" {
+					fmt.Fprintf(sb, "    obfs-password: %s\n", extras.ObfsPassword)
+				}
+			}
+			if extras.UpMbps > 0 {
+				fmt.Fprintf(sb, "    up: \"%d Mbps\"\n", extras.UpMbps)
+			}
+			if extras.DownMbps > 0 {
+				fmt.Fprintf(sb, "    down: \"%d Mbps\"\n", extras.DownMbps)
+			}
+			writeClashALPN(sb, si.ALPN)
+			fmt.Fprintf(sb, "    skip-cert-verify: %t\n", skipVerify)
 		}
 
 		sb.WriteString("\n")
 	}
 
-	// Proxy groups
 	sb.WriteString("proxy-groups:\n")
 	sb.WriteString("  - name: PROXY\n")
 	sb.WriteString("    type: select\n")
 	sb.WriteString("    proxies:\n")
 	sb.WriteString("      - AUTO\n")
 	for _, name := range proxyNames {
-		sb.WriteString(fmt.Sprintf("      - \"%s\"\n", name))
+		fmt.Fprintf(sb, "      - \"%s\"\n", name)
 	}
 	sb.WriteString("      - DIRECT\n")
 	sb.WriteString("\n")
@@ -496,34 +660,43 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 	sb.WriteString("    type: url-test\n")
 	sb.WriteString("    proxies:\n")
 	for _, name := range proxyNames {
-		sb.WriteString(fmt.Sprintf("      - \"%s\"\n", name))
+		fmt.Fprintf(sb, "      - \"%s\"\n", name)
 	}
 	sb.WriteString("    url: http://www.gstatic.com/generate_204\n")
 	sb.WriteString("    interval: 300\n")
 	sb.WriteString("    tolerance: 50\n")
 	sb.WriteString("\n")
 
-	// Rules — prevent proxy loop: server address must go DIRECT
 	sb.WriteString("rules:\n")
 	for _, ruleServer := range serverRules {
 		if net.ParseIP(ruleServer) != nil {
-			sb.WriteString(fmt.Sprintf("  - IP-CIDR,%s/32,DIRECT,no-resolve\n", ruleServer))
+			fmt.Fprintf(sb, "  - IP-CIDR,%s/32,DIRECT,no-resolve\n", ruleServer)
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("  - DOMAIN,%s,DIRECT\n", ruleServer))
+		fmt.Fprintf(sb, "  - DOMAIN,%s,DIRECT\n", ruleServer)
 	}
-	// LAN / private
 	sb.WriteString("  - DOMAIN-SUFFIX,local,DIRECT\n")
 	sb.WriteString("  - IP-CIDR,127.0.0.0/8,DIRECT,no-resolve\n")
 	sb.WriteString("  - IP-CIDR,10.0.0.0/8,DIRECT,no-resolve\n")
 	sb.WriteString("  - IP-CIDR,172.16.0.0/12,DIRECT,no-resolve\n")
 	sb.WriteString("  - IP-CIDR,192.168.0.0/16,DIRECT,no-resolve\n")
-	// China direct
 	sb.WriteString("  - GEOIP,CN,DIRECT\n")
-	// Everything else through proxy
 	sb.WriteString("  - MATCH,PROXY\n")
 
 	return sb.String()
+}
+
+// writeClashALPN writes an alpn block if the ALPN string is non-empty.
+func writeClashALPN(sb *strings.Builder, alpn string) {
+	if alpn == "" {
+		return
+	}
+	sb.WriteString("    alpn:\n")
+	for _, a := range strings.Split(alpn, ",") {
+		if a = strings.TrimSpace(a); a != "" {
+			fmt.Fprintf(sb, "      - %s\n", a)
+		}
+	}
 }
 
 // writeClashTransport appends transport-specific options (ws, grpc, h2, httpupgrade).
@@ -532,35 +705,34 @@ func writeClashTransport(sb *strings.Builder, si streamInfo) {
 	case "ws":
 		sb.WriteString("    ws-opts:\n")
 		if si.WSPath != "" {
-			sb.WriteString(fmt.Sprintf("      path: %s\n", si.WSPath))
+			fmt.Fprintf(sb, "      path: %s\n", si.WSPath)
 		}
 		if si.WSHost != "" {
 			sb.WriteString("      headers:\n")
-			sb.WriteString(fmt.Sprintf("        Host: %s\n", si.WSHost))
+			fmt.Fprintf(sb, "        Host: %s\n", si.WSHost)
 		}
 	case "grpc":
 		sb.WriteString("    grpc-opts:\n")
 		if si.GRPCServiceName != "" {
-			sb.WriteString(fmt.Sprintf("      grpc-service-name: %s\n", si.GRPCServiceName))
+			fmt.Fprintf(sb, "      grpc-service-name: %s\n", si.GRPCServiceName)
 		}
 	case "h2":
 		sb.WriteString("    h2-opts:\n")
 		if si.H2Host != "" {
 			sb.WriteString("      host:\n")
-			sb.WriteString(fmt.Sprintf("        - %s\n", si.H2Host))
+			fmt.Fprintf(sb, "        - %s\n", si.H2Host)
 		}
 		if si.H2Path != "" {
-			sb.WriteString(fmt.Sprintf("      path: %s\n", si.H2Path))
+			fmt.Fprintf(sb, "      path: %s\n", si.H2Path)
 		}
 	case "httpupgrade":
-		// Clash Meta supports httpupgrade as a first-class transport
-		sb.WriteString("    ws-opts:\n") // httpupgrade uses ws-opts in Clash Meta
+		sb.WriteString("    ws-opts:\n") // Clash Meta uses ws-opts with v2ray-http-upgrade flag
 		if si.HTTPUpgradePath != "" {
-			sb.WriteString(fmt.Sprintf("      path: %s\n", si.HTTPUpgradePath))
+			fmt.Fprintf(sb, "      path: %s\n", si.HTTPUpgradePath)
 		}
 		if si.HTTPUpgradeHost != "" {
 			sb.WriteString("      headers:\n")
-			sb.WriteString(fmt.Sprintf("        Host: %s\n", si.HTTPUpgradeHost))
+			fmt.Fprintf(sb, "        Host: %s\n", si.HTTPUpgradeHost)
 		}
 		sb.WriteString("      v2ray-http-upgrade: true\n")
 	}
@@ -568,7 +740,7 @@ func writeClashTransport(sb *strings.Builder, si streamInfo) {
 
 // buildBase64Links generates base64-encoded V2Ray/Xray subscription links.
 func buildBase64Links(inbounds []model.Inbound, client model.Client, serverAddr string) string {
-	var lines []string
+	lines := make([]string, 0, len(inbounds))
 
 	for _, in := range inbounds {
 		si := parseStream(in.Stream)
@@ -624,8 +796,10 @@ func buildVLESSLink(in model.Inbound, client model.Client, server string, si str
 	if si.Fingerprint != "" {
 		params.Set("fp", si.Fingerprint)
 	}
+	if si.AllowInsecure {
+		params.Set("allowInsecure", "1")
+	}
 
-	// Reality
 	if si.Security == "reality" {
 		if si.RealityPBK != "" {
 			params.Set("pbk", si.RealityPBK)
@@ -638,43 +812,13 @@ func buildVLESSLink(in model.Inbound, client model.Client, server string, si str
 		}
 	}
 
-	// Transport
-	switch si.Network {
-	case "tcp":
-		params.Set("headerType", "none")
-	case "ws":
-		if si.WSPath != "" {
-			params.Set("path", si.WSPath)
-		}
-		if si.WSHost != "" {
-			params.Set("host", si.WSHost)
-		}
-	case "grpc":
-		if si.GRPCServiceName != "" {
-			params.Set("serviceName", si.GRPCServiceName)
-		}
-		params.Set("mode", "gun")
-	case "h2":
-		if si.H2Path != "" {
-			params.Set("path", si.H2Path)
-		}
-		if si.H2Host != "" {
-			params.Set("host", si.H2Host)
-		}
-	case "httpupgrade":
-		if si.HTTPUpgradePath != "" {
-			params.Set("path", si.HTTPUpgradePath)
-		}
-		if si.HTTPUpgradeHost != "" {
-			params.Set("host", si.HTTPUpgradeHost)
-		}
-	}
+	appendTransportParams(params, si)
 
 	return fmt.Sprintf("vless://%s@%s:%d?%s#%s",
 		client.UUID, server, in.Port, params.Encode(), url.PathEscape(remark))
 }
 
-// buildVMessLink generates a vmess:// share link (V2RayN standard).
+// buildVMessLink generates a vmess:// share link (V2RayN JSON format).
 func buildVMessLink(in model.Inbound, client model.Client, server string, si streamInfo) string {
 	vmessObj := map[string]interface{}{
 		"v":    "2",
@@ -699,6 +843,24 @@ func buildVMessLink(in model.Inbound, client model.Client, server string, si str
 		if si.Fingerprint != "" {
 			vmessObj["fp"] = si.Fingerprint
 		}
+		if si.AllowInsecure {
+			vmessObj["allowInsecure"] = "1"
+		}
+	} else if si.Security == "reality" {
+		vmessObj["tls"] = "reality"
+		vmessObj["sni"] = si.SNI
+		if si.Fingerprint != "" {
+			vmessObj["fp"] = si.Fingerprint
+		}
+		if si.RealityPBK != "" {
+			vmessObj["pbk"] = si.RealityPBK
+		}
+		if si.RealitySID != "" {
+			vmessObj["sid"] = si.RealitySID
+		}
+		if si.RealitySPX != "" {
+			vmessObj["spx"] = si.RealitySPX
+		}
 	}
 	switch si.Network {
 	case "ws":
@@ -711,6 +873,11 @@ func buildVMessLink(in model.Inbound, client model.Client, server string, si str
 		vmessObj["net"] = "h2"
 		vmessObj["path"] = si.H2Path
 		vmessObj["host"] = si.H2Host
+	case "httpupgrade":
+		// V2RayN reads httpupgrade as "httpupgrade" net kind with path/host fields.
+		vmessObj["net"] = "httpupgrade"
+		vmessObj["path"] = si.HTTPUpgradePath
+		vmessObj["host"] = si.HTTPUpgradeHost
 	}
 
 	jsonBytes, _ := json.Marshal(vmessObj)
@@ -731,7 +898,29 @@ func buildTrojanLink(in model.Inbound, client model.Client, server string, si st
 	if si.Fingerprint != "" {
 		params.Set("fp", si.Fingerprint)
 	}
+	if si.AllowInsecure {
+		params.Set("allowInsecure", "1")
+	}
+	if si.Security == "reality" {
+		if si.RealityPBK != "" {
+			params.Set("pbk", si.RealityPBK)
+		}
+		if si.RealitySID != "" {
+			params.Set("sid", si.RealitySID)
+		}
+		if si.RealitySPX != "" {
+			params.Set("spx", si.RealitySPX)
+		}
+	}
 
+	appendTransportParams(params, si)
+
+	return fmt.Sprintf("trojan://%s@%s:%d?%s#%s",
+		url.PathEscape(client.UUID), server, in.Port, params.Encode(), url.PathEscape(remark))
+}
+
+// appendTransportParams sets the transport-specific query fields for vless/trojan URIs.
+func appendTransportParams(params url.Values, si streamInfo) {
 	switch si.Network {
 	case "tcp":
 		params.Set("headerType", "none")
@@ -762,28 +951,60 @@ func buildTrojanLink(in model.Inbound, client model.Client, server string, si st
 			params.Set("host", si.HTTPUpgradeHost)
 		}
 	}
-
-	return fmt.Sprintf("trojan://%s@%s:%d?%s#%s",
-		client.UUID, server, in.Port, params.Encode(), url.PathEscape(remark))
 }
 
-// buildSSLink generates a ss:// share link.
+// buildSSLink generates a ss:// share link per SIP002. Supports plugin hints.
 func buildSSLink(in model.Inbound, server string, remark string) string {
 	method, password := parseSSSettings(in.Settings)
-	userInfo := base64.URLEncoding.EncodeToString([]byte(method + ":" + password))
-	return fmt.Sprintf("ss://%s@%s:%d#%s", userInfo, server, in.Port, url.PathEscape(remark))
+	if method == "" || password == "" {
+		return ""
+	}
+	// SIP002: userinfo is base64url(method:password) without padding.
+	userInfo := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + password))
+	base := fmt.Sprintf("ss://%s@%s:%d", userInfo, server, in.Port)
+
+	pluginName, pluginOpts := parseSSPlugin(in.Settings)
+	if pluginName != "" {
+		q := url.Values{}
+		if pluginOpts != "" {
+			q.Set("plugin", pluginName+";"+pluginOpts)
+		} else {
+			q.Set("plugin", pluginName)
+		}
+		base += "/?" + q.Encode()
+	}
+	return base + "#" + url.PathEscape(remark)
 }
 
 // buildHysteria2Link generates a hysteria2:// share link.
 func buildHysteria2Link(in model.Inbound, client model.Client, server string, si streamInfo, remark string) string {
+	extras := parseHysteria2Extras(in.Settings)
 	params := url.Values{}
 	if si.SNI != "" {
 		params.Set("sni", si.SNI)
 	}
-	params.Set("insecure", "1") // allow self-signed certs by default
-	q := "?" + params.Encode()
+	if si.AllowInsecure {
+		params.Set("insecure", "1")
+	}
+	if si.ALPN != "" {
+		params.Set("alpn", si.ALPN)
+	}
+	if extras.ObfsType != "" {
+		params.Set("obfs", extras.ObfsType)
+		if extras.ObfsPassword != "" {
+			params.Set("obfs-password", extras.ObfsPassword)
+		}
+	}
+	if extras.Ports != "" {
+		params.Set("mport", extras.Ports)
+	}
+
+	q := ""
+	if encoded := params.Encode(); encoded != "" {
+		q = "?" + encoded
+	}
 	return fmt.Sprintf("hysteria2://%s@%s:%d%s#%s",
-		client.UUID, server, in.Port, q, url.PathEscape(remark))
+		url.PathEscape(client.UUID), server, in.Port, q, url.PathEscape(remark))
 }
 
 // parseSSSettings extracts method and password from Shadowsocks settings JSON.

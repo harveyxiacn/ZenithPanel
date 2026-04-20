@@ -2,6 +2,8 @@ package monitor
 
 import (
 	"os"
+	"sync"
+	"time"
 
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
@@ -26,53 +28,69 @@ type SystemStats struct {
 	NetOut        uint64    `json:"net_out"`
 }
 
-// GetSystemStats retrieves current hardware telemetry like CPU, Memory, Disk
+// cacheTTL controls how long a stats snapshot is reused. Frontend polls at ~5s,
+// so a 3s window keeps the UI fresh while cutting gopsutil syscalls roughly in half.
+const cacheTTL = 3 * time.Second
+
+var (
+	statsMu       sync.Mutex
+	cachedStats   *SystemStats
+	cachedAt      time.Time
+	cachedHost    string
+	cachedHostSet bool
+)
+
+// GetSystemStats retrieves current hardware telemetry (CPU, memory, disk, load, network).
+// Results are cached for cacheTTL to reduce syscall pressure on low-spec VPS.
 func GetSystemStats() (*SystemStats, error) {
+	statsMu.Lock()
+	if cachedStats != nil && time.Since(cachedAt) < cacheTTL {
+		snap := *cachedStats
+		statsMu.Unlock()
+		return &snap, nil
+	}
+	statsMu.Unlock()
+
 	stats := &SystemStats{}
 
-	// CPU
-	cpuPercents, err := cpu.Percent(0, false)
-	if err == nil && len(cpuPercents) > 0 {
+	if cpuPercents, err := cpu.Percent(0, false); err == nil && len(cpuPercents) > 0 {
 		stats.CPUPercent = cpuPercents[0]
 	}
-
-	// Memory
-	vmStat, err := mem.VirtualMemory()
-	if err == nil {
+	if vmStat, err := mem.VirtualMemory(); err == nil {
 		stats.MemTotal = vmStat.Total
 		stats.MemUsed = vmStat.Used
 		stats.MemPercent = vmStat.UsedPercent
 	}
-
-	// Disk
-	diskStat, err := disk.Usage("/")
-	if err == nil {
+	if diskStat, err := disk.Usage("/"); err == nil {
 		stats.DiskTotal = diskStat.Total
 		stats.DiskUsed = diskStat.Used
 		stats.DiskPercent = diskStat.UsedPercent
 	}
-
-	// Uptime
-	uptime, err := host.Uptime()
-	if err == nil {
+	if uptime, err := host.Uptime(); err == nil {
 		stats.UptimeSeconds = uptime
 	}
 
-	// Hostname
-	stats.Hostname, _ = os.Hostname()
+	// Hostname effectively never changes for a running process; memoize it.
+	statsMu.Lock()
+	if !cachedHostSet {
+		cachedHost, _ = os.Hostname()
+		cachedHostSet = true
+	}
+	stats.Hostname = cachedHost
+	statsMu.Unlock()
 
-	// Load average
-	loadStat, err := load.Avg()
-	if err == nil {
+	if loadStat, err := load.Avg(); err == nil {
 		stats.LoadAvg = []float64{loadStat.Load1, loadStat.Load5, loadStat.Load15}
 	}
-
-	// Network I/O (aggregate all interfaces)
-	netCounters, err := net.IOCounters(false)
-	if err == nil && len(netCounters) > 0 {
+	if netCounters, err := net.IOCounters(false); err == nil && len(netCounters) > 0 {
 		stats.NetIn = netCounters[0].BytesRecv
 		stats.NetOut = netCounters[0].BytesSent
 	}
 
-	return stats, nil
+	statsMu.Lock()
+	cachedStats = stats
+	cachedAt = time.Now()
+	snap := *stats
+	statsMu.Unlock()
+	return &snap, nil
 }

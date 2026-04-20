@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 )
@@ -235,6 +236,178 @@ func TestBuildBase64LinksUsesTLSServerNameWhenRequestHostDiffers(t *testing.T) {
 	}
 	if strings.Contains(links, "@panel.internal:443") {
 		t.Fatalf("expected request host to be excluded when TLS serverName is available, got: %s", links)
+	}
+}
+
+func TestBuildVMessLinkIncludesHTTPUpgradeAndReality(t *testing.T) {
+	// httpupgrade transport
+	in := model.Inbound{
+		Tag: "vmess-hu", Protocol: "vmess", Port: 8443,
+		Stream: `{
+			"network": "httpupgrade",
+			"security": "tls",
+			"tlsSettings": {"serverName": "example.com", "alpn": ["h2", "http/1.1"]},
+			"httpupgradeSettings": {"path": "/hu", "host": "api.example.com"}
+		}`,
+	}
+	client := model.Client{UUID: "abc-uuid"}
+	si := parseStream(in.Stream)
+	link := buildVMessLink(in, client, "1.2.3.4", si)
+
+	if !strings.HasPrefix(link, "vmess://") {
+		t.Fatalf("expected vmess:// prefix, got %s", link)
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(link, "vmess://"))
+	if err != nil {
+		t.Fatalf("decode vmess payload: %v", err)
+	}
+	payload := string(raw)
+	if !strings.Contains(payload, `"net":"httpupgrade"`) {
+		t.Fatalf("expected httpupgrade net field, got: %s", payload)
+	}
+	if !strings.Contains(payload, `"path":"/hu"`) {
+		t.Fatalf("expected path=/hu, got: %s", payload)
+	}
+	if !strings.Contains(payload, `"host":"api.example.com"`) {
+		t.Fatalf("expected host header, got: %s", payload)
+	}
+	if !strings.Contains(payload, `"alpn":"h2,http/1.1"`) {
+		t.Fatalf("expected alpn preserved, got: %s", payload)
+	}
+
+	// Reality for VMess
+	inReality := model.Inbound{
+		Tag: "vmess-reality", Protocol: "vmess", Port: 443,
+		Stream: `{
+			"network": "tcp",
+			"security": "reality",
+			"realitySettings": {
+				"serverNames": ["www.microsoft.com"],
+				"shortIds": ["ab"],
+				"settings": {"publicKey": "pbk-x", "fingerprint": "chrome"}
+			}
+		}`,
+	}
+	siR := parseStream(inReality.Stream)
+	linkR := buildVMessLink(inReality, client, "1.2.3.4", siR)
+	rawR, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(linkR, "vmess://"))
+	if !strings.Contains(string(rawR), `"tls":"reality"`) {
+		t.Fatalf("expected reality security, got: %s", string(rawR))
+	}
+	if !strings.Contains(string(rawR), `"pbk":"pbk-x"`) {
+		t.Fatalf("expected pbk field, got: %s", string(rawR))
+	}
+}
+
+func TestBuildTrojanLinkIncludesRealityParams(t *testing.T) {
+	in := model.Inbound{
+		Tag: "trojan-reality", Protocol: "trojan", Port: 443,
+		Stream: `{
+			"network": "tcp",
+			"security": "reality",
+			"realitySettings": {
+				"serverNames": ["www.google.com"],
+				"shortIds": ["ff"],
+				"settings": {"publicKey": "tpbk", "fingerprint": "firefox"}
+			}
+		}`,
+	}
+	client := model.Client{UUID: "trojan-pass"}
+	si := parseStream(in.Stream)
+	link := buildTrojanLink(in, client, "1.2.3.4", si, "trojan-reality")
+
+	if !strings.Contains(link, "security=reality") {
+		t.Fatalf("expected security=reality, got: %s", link)
+	}
+	if !strings.Contains(link, "pbk=tpbk") {
+		t.Fatalf("expected pbk in trojan link, got: %s", link)
+	}
+	if !strings.Contains(link, "sid=ff") {
+		t.Fatalf("expected sid in trojan link, got: %s", link)
+	}
+	if !strings.Contains(link, "fp=firefox") {
+		t.Fatalf("expected fingerprint in trojan link, got: %s", link)
+	}
+}
+
+func TestBuildHysteria2LinkRespectsObfsAndInsecureFlag(t *testing.T) {
+	in := model.Inbound{
+		Tag: "hy2", Protocol: "hysteria2", Port: 443,
+		Settings: `{
+			"obfs": {"type": "salamander", "password": "obfspw"},
+			"ports": "20000-30000"
+		}`,
+		Stream: `{
+			"network": "udp",
+			"security": "tls",
+			"tlsSettings": {"serverName": "hy.example.com", "allowInsecure": false}
+		}`,
+	}
+	client := model.Client{UUID: "hy-uuid"}
+	si := parseStream(in.Stream)
+	link := buildHysteria2Link(in, client, "1.2.3.4", si, "hy2")
+
+	if !strings.HasPrefix(link, "hysteria2://hy-uuid@") {
+		t.Fatalf("expected hysteria2 prefix, got: %s", link)
+	}
+	if !strings.Contains(link, "obfs=salamander") {
+		t.Fatalf("expected obfs param, got: %s", link)
+	}
+	if !strings.Contains(link, "obfs-password=obfspw") {
+		t.Fatalf("expected obfs-password, got: %s", link)
+	}
+	if !strings.Contains(link, "mport=20000-30000") {
+		t.Fatalf("expected port hopping mport, got: %s", link)
+	}
+	// allowInsecure=false means no insecure=1
+	if strings.Contains(link, "insecure=1") {
+		t.Fatalf("expected no insecure when cert verification enabled, got: %s", link)
+	}
+
+	// Now test with allowInsecure=true
+	in.Stream = `{"network":"udp","security":"tls","tlsSettings":{"serverName":"hy","allowInsecure":true}}`
+	si2 := parseStream(in.Stream)
+	link2 := buildHysteria2Link(in, client, "1.2.3.4", si2, "hy2")
+	if !strings.Contains(link2, "insecure=1") {
+		t.Fatalf("expected insecure=1 when allowInsecure=true, got: %s", link2)
+	}
+}
+
+func TestBuildSSLinkUsesRawURLEncodingAndPlugin(t *testing.T) {
+	in := model.Inbound{
+		Tag: "ss", Protocol: "shadowsocks", Port: 8388,
+		Settings: `{
+			"method": "aes-256-gcm",
+			"password": "secret",
+			"plugin": "obfs-local",
+			"plugin_opts": "obfs=tls;obfs-host=www.bing.com"
+		}`,
+	}
+	link := buildSSLink(in, "1.2.3.4", "ss-node")
+
+	if !strings.HasPrefix(link, "ss://") {
+		t.Fatalf("expected ss:// prefix, got: %s", link)
+	}
+	if strings.Contains(link, "=") && !strings.Contains(link, "plugin=") {
+		// userinfo shouldn't contain padding — check no '=' before '@'
+		at := strings.Index(link, "@")
+		if at > 0 && strings.Contains(link[5:at], "=") {
+			t.Fatalf("expected SIP002 raw url-safe userinfo (no padding), got: %s", link)
+		}
+	}
+	if !strings.Contains(link, "plugin=obfs-local") {
+		t.Fatalf("expected plugin query param, got: %s", link)
+	}
+}
+
+func TestSubCacheInvalidate(t *testing.T) {
+	subCachePut("test-key", subCacheEntry{body: "x", storedAt: time.Now()})
+	if _, ok := subCacheGet("test-key"); !ok {
+		t.Fatalf("expected cache hit before invalidation")
+	}
+	InvalidateSubCache()
+	if _, ok := subCacheGet("test-key"); ok {
+		t.Fatalf("expected cache miss after InvalidateSubCache")
 	}
 }
 

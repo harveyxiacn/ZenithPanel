@@ -42,6 +42,7 @@ Current server panels (like 1Panel, BT) focus on website hosting and general mai
 
 ### 🚀 Proxy Orchestration
 - **Inbound Management**: Full CRUD for Xray / Sing-box inbound configs with protocol selector and JSON settings editor.
+- **Protocol Coverage**: VLESS (incl. Reality), VMess, Trojan, Shadowsocks (with plugin support), and Hysteria2 (with `obfs` salamander + port-hopping) across Xray and Sing-box engines. Subscription links and Clash YAML are emitted with the full parameter set for each protocol.
 - **Client / User Management**: Add and remove clients per inbound, auto-generated UUID, and format-aware subscription link sharing.
 - **Routing Rules**: Manage domain, geo, and outbound routing rules in a structured form.
 - **Proxy Runtime Status**: See whether Xray is running and how many enabled nodes, users, and routing rules are active.
@@ -57,6 +58,7 @@ Current server panels (like 1Panel, BT) focus on website hosting and general mai
 
 ### 🏗️ Architecture
 - **Single Binary Distribution**: Vue 3 frontend embedded via `go:embed` — deploy one file, no `dist/` folder needed.
+- **Low-Spec VPS Ready**: Gin runs in release mode; system-monitor snapshots are cached; subscription output is cached for 8 s and served via a single `clients JOIN inbounds` query; proxy-engine log capture uses a bounded ring buffer; idle per-IP rate limiters are pruned periodically. See [CHANGELOG.md](CHANGELOG.md) for specifics.
 - **Graceful Shutdown**: HTTP server shuts down cleanly within 5 seconds on `SIGINT`/`SIGTERM`.
 - **Singleton Managers**: DockerManager, XrayManager, SingboxManager initialized once at startup and injected into routes.
 
