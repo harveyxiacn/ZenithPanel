@@ -88,3 +88,4 @@ dev_log.md
 /frontend/node_modules/
 /backend/vendor/
 /backend/bin/
+/.worktrees/
