@@ -521,6 +521,17 @@ async function fetchRoutingRules() {
 }
 
 async function saveRoutingRule() {
+  // Backend requires OutboundTag + at least one of domain/ip/port. Mirror that
+  // here so the user sees the error before the round-trip instead of after.
+  const f = routingForm.value
+  if (!f.outbound_tag?.trim()) {
+    toast.error(t('proxy.routing.errors.outboundRequired'))
+    return
+  }
+  if (!f.domain?.trim() && !f.ip?.trim() && !f.port?.trim()) {
+    toast.error(t('proxy.routing.errors.filterRequired'))
+    return
+  }
   try {
     await createRoutingRule(routingForm.value)
     showRoutingForm.value = false
@@ -528,7 +539,9 @@ async function saveRoutingRule() {
     await fetchRoutingRules()
     await loadProxyStatus()
     toast.success(t('common.created'))
-  } catch { toast.error(t('common.errorOccurred')) }
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || t('common.errorOccurred'))
+  }
 }
 
 async function removeRoutingRule(id: number) {
@@ -703,6 +716,16 @@ const presets = [
     needsCert: true,
   },
   {
+    id: 'tuic',
+    protocol: 'tuic',
+    badgeKey: 'ultraFast',
+    badgeColor: 'bg-fuchsia-100 text-fuchsia-700',
+    defaultPort: 9443,
+    needsRealityKeys: false,
+    needsDomain: true,
+    needsCert: true,
+  },
+  {
     id: 'shadowsocks',
     protocol: 'shadowsocks',
     badgeKey: 'lightweight',
@@ -860,10 +883,28 @@ function buildPayload(presetId: string) {
       }
       break
     case 'hysteria2':
-      settings = {}
+      // Auto-enable salamander obfuscation so the subscription link and the
+      // server-side sing-box config agree from the first apply. Without this
+      // the link emits obfs params that the bare-bones server won't honour.
+      settings = {
+        obfs: { type: 'salamander', password: cfg.obfsPassword || randomHex(16) },
+        up_mbps: 100,
+        down_mbps: 100,
+      }
       stream = {
-        network: 'tcp', security: 'tls',
-        tlsSettings: { serverName: cfg.domain, certificates: [{ certificateFile: cfg.certFile, keyFile: cfg.keyFile }] },
+        network: 'udp', security: 'tls',
+        tlsSettings: { serverName: cfg.domain, alpn: ['h3'], certificates: [{ certificateFile: cfg.certFile, keyFile: cfg.keyFile }] },
+      }
+      break
+    case 'tuic':
+      settings = {
+        congestion_control: 'bbr',
+        udp_relay_mode: 'native',
+        zero_rtt_handshake: false,
+      }
+      stream = {
+        network: 'udp', security: 'tls',
+        tlsSettings: { serverName: cfg.domain, alpn: ['h3'], certificates: [{ certificateFile: cfg.certFile, keyFile: cfg.keyFile }] },
       }
       break
     case 'shadowsocks':

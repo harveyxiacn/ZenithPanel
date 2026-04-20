@@ -193,6 +193,35 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 			})
 		}
 		entry["users"] = users
+		// Forward Hysteria2 protocol options so the server actually applies what
+		// the subscription link advertises. Without this, clients negotiating
+		// salamander obfuscation or bandwidth hints would mismatch the server.
+		if settingsRaw != nil {
+			if obfs, ok := settingsRaw["obfs"].(map[string]interface{}); ok {
+				cleaned := map[string]interface{}{}
+				if t, ok := obfs["type"].(string); ok && t != "" {
+					cleaned["type"] = t
+				}
+				if pw, ok := obfs["password"].(string); ok && pw != "" {
+					cleaned["password"] = pw
+				}
+				if len(cleaned) > 0 {
+					entry["obfs"] = cleaned
+				}
+			}
+			if v, ok := settingsRaw["up_mbps"].(float64); ok && v > 0 {
+				entry["up_mbps"] = int(v)
+			}
+			if v, ok := settingsRaw["down_mbps"].(float64); ok && v > 0 {
+				entry["down_mbps"] = int(v)
+			}
+			if v, ok := settingsRaw["masquerade"].(string); ok && v != "" {
+				entry["masquerade"] = v
+			}
+			if v, ok := settingsRaw["ignore_client_bandwidth"].(bool); ok {
+				entry["ignore_client_bandwidth"] = v
+			}
+		}
 
 	case "tuic":
 		// TUIC v5: each user has a UUID + password. We reuse the client's UUID

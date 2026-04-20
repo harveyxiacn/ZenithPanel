@@ -253,6 +253,10 @@ export default {
       title: 'ルーティングルール',
       subtitle: 'トラフィックを指定のアウトバウンドノードに転送。',
       addRule: 'ルール追加',
+      errors: {
+        outboundRequired: 'アウトバウンドタグは必須です',
+        filterRequired: 'ドメイン / IP / ポートのいずれか一つ以上を入力してください — マッチ条件が必要です。',
+      },
       ruleName: 'ルール名',
       outboundTag: 'アウトバウンドタグ (direct/block)',
       name: '名前',
@@ -311,6 +315,7 @@ export default {
         'vmess-ws-tls': { name: 'VMess + WS + TLS', desc: 'クラシックな V2Ray プロトコル。ほぼすべてのクライアントに対応。' },
         'trojan-tls': { name: 'Trojan + TLS', desc: 'シンプルで高速。通常の HTTPS トラフィックに偽装。' },
         'hysteria2': { name: 'Hysteria2', desc: 'UDP ベースの QUIC プロトコル。高遅延ネットワークに最適。' },
+        'tuic': { name: 'TUIC v5', desc: '低遅延 QUIC プロトコル、ネイティブ UDP 転送。Sing-box 専用。' },
         'shadowsocks': { name: 'Shadowsocks', desc: 'シンプルな暗号化プロキシ。幅広いクライアントに対応。' },
       },
       badges: {
