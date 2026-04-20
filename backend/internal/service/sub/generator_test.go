@@ -400,6 +400,58 @@ func TestBuildSSLinkUsesRawURLEncodingAndPlugin(t *testing.T) {
 	}
 }
 
+func TestBuildTUICLink(t *testing.T) {
+	in := model.Inbound{
+		Tag: "tuic-node", Protocol: "tuic", Port: 8443,
+		Settings: `{"congestion_control":"bbr","udp_relay_mode":"native","zero_rtt_handshake":true}`,
+		Stream: `{
+			"network": "udp",
+			"security": "tls",
+			"tlsSettings": {"serverName": "tuic.example.com", "alpn": ["h3"]}
+		}`,
+	}
+	client := model.Client{UUID: "tuic-uuid"}
+	si := parseStream(in.Stream)
+	link := buildTUICLink(in, client, "1.2.3.4", si, "tuic-node")
+
+	if !strings.HasPrefix(link, "tuic://tuic-uuid:tuic-uuid@1.2.3.4:8443") {
+		t.Fatalf("expected tuic://uuid:password@host:port form, got: %s", link)
+	}
+	if !strings.Contains(link, "sni=tuic.example.com") {
+		t.Fatalf("expected sni in tuic link, got: %s", link)
+	}
+	if !strings.Contains(link, "alpn=h3") {
+		t.Fatalf("expected alpn in tuic link, got: %s", link)
+	}
+	if !strings.Contains(link, "congestion_control=bbr") {
+		t.Fatalf("expected congestion_control in tuic link, got: %s", link)
+	}
+	if !strings.Contains(link, "udp_relay_mode=native") {
+		t.Fatalf("expected udp_relay_mode in tuic link, got: %s", link)
+	}
+	if !strings.Contains(link, "zero_rtt_handshake=1") {
+		t.Fatalf("expected zero_rtt_handshake in tuic link, got: %s", link)
+	}
+}
+
+func TestBuildClashTUICEmitsCorrectFields(t *testing.T) {
+	inbounds := []model.Inbound{{
+		Tag: "tuic-clash", Protocol: "tuic", Port: 9443,
+		Settings: `{"congestion_control":"cubic","udp_relay_mode":"native"}`,
+		Stream:   `{"network":"udp","security":"tls","tlsSettings":{"serverName":"tuic.test"}}`,
+	}}
+	yaml := buildClashConfig(inbounds, model.Client{UUID: "u"}, "1.2.3.4")
+	if !strings.Contains(yaml, "type: tuic") {
+		t.Fatalf("expected type: tuic in clash output, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "congestion-controller: cubic") {
+		t.Fatalf("expected congestion-controller field, got:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "udp-relay-mode: native") {
+		t.Fatalf("expected udp-relay-mode field, got:\n%s", yaml)
+	}
+}
+
 func TestSubCacheInvalidate(t *testing.T) {
 	subCachePut("test-key", subCacheEntry{body: "x", storedAt: time.Now()})
 	if _, ok := subCacheGet("test-key"); !ok {

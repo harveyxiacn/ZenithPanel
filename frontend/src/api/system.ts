@@ -130,3 +130,15 @@ export function getCleanupInfo() {
 export function runCleanup() {
   return apiClient.post('/v1/system/cleanup/run')
 }
+
+// Backup / Restore
+export function downloadBackup() {
+  return apiClient.get('/v1/admin/backup/export', { responseType: 'blob', timeout: 60000 })
+}
+
+export function restoreBackup(file: File) {
+  return apiClient.post('/v1/admin/backup/restore', file, {
+    headers: { 'Content-Type': 'application/zip' },
+    timeout: 60000,
+  })
+}
