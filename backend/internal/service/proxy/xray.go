@@ -49,6 +49,10 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 	config.DB.Where("enable = ?", true).Find(&rules)
 	rules = UniqueRoutingRules(rules)
 
+	// Batch-load every enabled client for the active inbounds in one query,
+	// then group by inbound_id. Avoids issuing one query per inbound inside the loop.
+	clientsByInbound := fetchClientsByInbound(inbounds)
+
 	xrayConfig := map[string]interface{}{
 		"log": map[string]interface{}{
 			"loglevel": "warning",
@@ -86,7 +90,7 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 			skipped = append(skipped, fmt.Sprintf("%s (%s)", in.Tag, in.Protocol))
 			continue
 		}
-		inboundEntry, err := buildXrayInbound(in)
+		inboundEntry, err := buildXrayInbound(in, clientsByInbound[in.ID])
 		if err != nil {
 			return "", fmt.Errorf("build inbound %q: %w", in.Tag, err)
 		}
@@ -107,8 +111,8 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 }
 
 // buildXrayInbound constructs a complete Xray inbound entry from the DB model,
-// parsing the Settings/Stream JSON and injecting clients from the Client table.
-func buildXrayInbound(in model.Inbound) (map[string]interface{}, error) {
+// parsing the Settings/Stream JSON and injecting the supplied client list.
+func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]interface{}, error) {
 	entry := map[string]interface{}{
 		"tag":      in.Tag,
 		"port":     in.Port,
@@ -131,10 +135,6 @@ func buildXrayInbound(in model.Inbound) (map[string]interface{}, error) {
 			return nil, fmt.Errorf("parse settings: %w", err)
 		}
 	}
-
-	// Fetch clients for this inbound and inject them
-	var clients []model.Client
-	config.DB.Where("inbound_id = ? AND enable = ?", in.ID, true).Find(&clients)
 
 	switch in.Protocol {
 	case "vless":
@@ -209,6 +209,26 @@ func buildXrayInbound(in model.Inbound) (map[string]interface{}, error) {
 	}
 
 	return entry, nil
+}
+
+// fetchClientsByInbound loads all enabled clients whose inbound_id is in the
+// supplied list with a single query and groups them by inbound ID.
+// Replaces the previous per-inbound query (N+1) during config generation.
+func fetchClientsByInbound(inbounds []model.Inbound) map[uint][]model.Client {
+	grouped := make(map[uint][]model.Client, len(inbounds))
+	if len(inbounds) == 0 {
+		return grouped
+	}
+	ids := make([]uint, 0, len(inbounds))
+	for _, in := range inbounds {
+		ids = append(ids, in.ID)
+	}
+	var clients []model.Client
+	config.DB.Where("inbound_id IN ? AND enable = ?", ids, true).Find(&clients)
+	for _, c := range clients {
+		grouped[c.InboundID] = append(grouped[c.InboundID], c)
+	}
+	return grouped
 }
 
 func splitAndTrimCSV(raw string) []string {

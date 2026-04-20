@@ -42,6 +42,7 @@
 
 ### 🚀 代理服务管理
 - **入站 (Inbound) 管理**：Xray / Sing-box 入站配置的完整增删改查，含协议选择器与 JSON 设置编辑器。
+- **协议覆盖**：VLESS（含 Reality）、VMess、Trojan、Shadowsocks（含 plugin 支持）、Hysteria2（含 salamander `obfs` 与端口跳跃）在 Xray 与 Sing-box 双内核下均可使用；订阅链接与 Clash YAML 会按协议导出完整参数。
 - **客户端 / 用户管理**：按入站添加和删除客户端，自动生成 UUID，并支持带格式选择的订阅链接分享。
 - **路由规则管理**：以结构化表单管理域名、地理位置 (geo) 和出站路由规则。
 - **代理运行状态**：可直接查看 Xray 是否运行，以及当前启用的节点、用户和路由规则数量。
@@ -57,6 +58,7 @@
 
 ### 🏗️ 架构特性
 - **单文件分发**：Vue 3 前端通过 `go:embed` 嵌入 Go 二进制，部署无需 `dist/` 目录。
+- **低配 VPS 友好**：Gin 以 Release 模式运行；系统监控快照带 3s 缓存；订阅输出 8s 内命中缓存并使用 `clients JOIN inbounds` 单查询；代理引擎日志采用环形缓冲区避免长期运行内存增长；空闲限流器定期回收。详情见 [CHANGELOG.md](CHANGELOG.md)。
 - **优雅停机**：监听 `SIGINT`/`SIGTERM` 信号，5 秒内完成 HTTP Server 的安全关闭。
 - **单例管理器**：DockerManager、XrayManager、SingboxManager 启动时初始化单例并注入路由，防止资源泄露。
 

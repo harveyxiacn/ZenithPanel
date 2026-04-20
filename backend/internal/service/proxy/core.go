@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,14 +25,78 @@ func WriteConfigToFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0600)
 }
 
-// BaseCore provides common functionalities for proxy cores
+// ringBuffer is a fixed-size buffer that keeps the most recent N bytes written
+// to it. It implements io.Writer so it can be used as cmd.Stdout/Stderr.
+// Used by BaseCore to capture proxy logs without unbounded memory growth.
+type ringBuffer struct {
+	mu   sync.Mutex
+	buf  []byte
+	size int
+	full bool
+	head int
+}
+
+func newRingBuffer(size int) *ringBuffer {
+	return &ringBuffer{buf: make([]byte, size), size: size}
+}
+
+func (r *ringBuffer) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := len(p)
+	if n == 0 {
+		return 0, nil
+	}
+	// Only keep the trailing "size" bytes if the incoming chunk is larger.
+	if n >= r.size {
+		copy(r.buf, p[n-r.size:])
+		r.head = 0
+		r.full = true
+		return n, nil
+	}
+	first := copy(r.buf[r.head:], p)
+	if first < n {
+		copy(r.buf, p[first:])
+		r.full = true
+		r.head = n - first
+	} else {
+		r.head = (r.head + n) % r.size
+		if r.head == 0 {
+			r.full = true
+		}
+	}
+	return n, nil
+}
+
+func (r *ringBuffer) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.full {
+		return string(r.buf[:r.head])
+	}
+	out := make([]byte, 0, r.size)
+	out = append(out, r.buf[r.head:]...)
+	out = append(out, r.buf[:r.head]...)
+	return string(out)
+}
+
+func (r *ringBuffer) Reset() {
+	r.mu.Lock()
+	r.head = 0
+	r.full = false
+	r.mu.Unlock()
+}
+
+// BaseCore provides common functionalities for proxy cores.
+// outputBuf captures stdout+stderr in a ring buffer so long-running engines
+// can report their most recent log output without leaking memory.
 type BaseCore struct {
 	BinaryPath string
 	ConfigPath string
 	mu         sync.RWMutex
 	cmd        *exec.Cmd
 	lastErr    string
-	outputBuf  bytes.Buffer // captures both stdout and stderr
+	outputBuf  *ringBuffer
 }
 
 func (c *BaseCore) Status() bool {
@@ -58,7 +121,9 @@ func (c *BaseCore) setCmd(cmd *exec.Cmd) {
 func (c *BaseCore) clearCmd(cmd *exec.Cmd) {
 	c.mu.Lock()
 	if c.cmd == cmd {
-		c.lastErr = c.outputBuf.String()
+		if c.outputBuf != nil {
+			c.lastErr = c.outputBuf.String()
+		}
 		c.cmd = nil
 	}
 	c.mu.Unlock()
@@ -95,10 +160,14 @@ func (c *BaseCore) startAndVerify(cmd *exec.Cmd) error {
 		return fmt.Errorf("%s %v", c.BinaryPath, err)
 	}
 
-	c.outputBuf.Reset()
+	if c.outputBuf == nil {
+		c.outputBuf = newRingBuffer(8 * 1024)
+	} else {
+		c.outputBuf.Reset()
+	}
 	// Capture both stdout and stderr — xray writes errors to stdout
-	cmd.Stdout = &c.outputBuf
-	cmd.Stderr = &c.outputBuf
+	cmd.Stdout = c.outputBuf
+	cmd.Stderr = c.outputBuf
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start %s: %w", c.BinaryPath, err)

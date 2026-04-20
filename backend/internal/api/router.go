@@ -179,6 +179,33 @@ func startLockoutCleanup() {
 	}()
 }
 
+// startLimiterCleanup removes idle per-IP rate limiters so the maps don't
+// accumulate indefinitely. A limiter is considered idle when its token bucket
+// is full, which means the IP hasn't issued a request recently.
+func startLimiterCleanup() {
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			ipRateLimiters.Lock()
+			for ip, l := range ipRateLimiters.m {
+				if l.Tokens() >= 4.9 {
+					delete(ipRateLimiters.m, ip)
+				}
+			}
+			ipRateLimiters.Unlock()
+
+			subRateLimiters.Range(func(k, v interface{}) bool {
+				l := v.(*rate.Limiter)
+				if l.Tokens() >= 2.9 {
+					subRateLimiters.Delete(k)
+				}
+				return true
+			})
+		}
+	}()
+}
+
 // isPathSafe ensures the resolved path stays within the sandbox root and is not a symlink.
 func isPathSafe(userPath string) (string, bool) {
 	cleaned := filepath.Clean(userPath)
@@ -973,6 +1000,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				})
 			}
 
+			if successCount > 0 {
+				sub.InvalidateSubCache()
+			}
 			c.JSON(200, gin.H{
 				"code": 200,
 				"msg":  fmt.Sprintf("Imported %d/%d inbound(s)", successCount, len(items)),
@@ -1014,6 +1044,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": fmt.Sprintf("DB error: %v", err)})
 				return
 			}
+			sub.InvalidateSubCache()
 			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": inbound})
 			recordAudit(c, "inbound.create", inbound.Tag)
 		})
@@ -1054,6 +1085,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update inbound"})
 				return
 			}
+			sub.InvalidateSubCache()
 			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": inbound})
 			recordAudit(c, "inbound.update", inbound.Tag)
 		})
@@ -1077,6 +1109,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete inbound"})
 				return
 			}
+			sub.InvalidateSubCache()
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
 			recordAudit(c, "inbound.delete", fmt.Sprintf("id=%d", id))
 		})
@@ -1157,6 +1190,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create client"})
 				return
 			}
+			sub.InvalidateSubCache()
 			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": client})
 			recordAudit(c, "client.create", client.Email)
 		})
@@ -1199,6 +1233,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update client"})
 				return
 			}
+			sub.InvalidateSubCache()
 			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": client})
 		})
 
@@ -1211,6 +1246,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete client"})
 				return
 			}
+			sub.InvalidateSubCache()
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
 			recordAudit(c, "client.delete", fmt.Sprintf("id=%d", id))
 		})
@@ -2040,6 +2076,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		})
 	}
 
-	// Start background lockout cleanup
+	// Start background lockout cleanup and rate-limiter map GC
 	startLockoutCleanup()
+	startLimiterCleanup()
 }

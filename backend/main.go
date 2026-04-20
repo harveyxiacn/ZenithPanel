@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	cryptotls "crypto/tls"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -84,8 +86,30 @@ func main() {
 	}
 	sched.Start()
 
-	// 6. Create a new Gin router
-	r := gin.Default()
+	// 6. Create a new Gin router.
+	// Release mode disables per-request debug printing; a custom logger skips
+	// hot paths (monitor polling, subscription fetches) to keep stdout quiet on
+	// low-spec VPS where disk I/O from logs is noticeable.
+	if os.Getenv("GIN_MODE") == "" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+	r := gin.New()
+	r.Use(gin.Recovery())
+	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+		SkipPaths: []string{
+			"/api/v1/system/monitor",
+			"/api/v1/proxy/status",
+		},
+		Formatter: func(p gin.LogFormatterParams) string {
+			// Skip subscription endpoint access logs (path starts with /api/v1/sub/)
+			if strings.HasPrefix(p.Path, "/api/v1/sub/") {
+				return ""
+			}
+			return fmt.Sprintf("[%s] %3d | %6v | %s %s\n",
+				p.TimeStamp.Format("2006-01-02 15:04:05"),
+				p.StatusCode, p.Latency, p.Method, p.Path)
+		},
+	}))
 
 	// 7. Setup API routes
 	api.SetupRoutes(r, dm, xm, sm, sched)

@@ -3,10 +3,40 @@ package proxy
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 )
+
+func TestRingBufferRetainsOnlyLastNBytes(t *testing.T) {
+	r := newRingBuffer(10)
+
+	// Small writes
+	r.Write([]byte("hello"))
+	r.Write([]byte("world"))
+	if got := r.String(); got != "helloworld" {
+		t.Fatalf("expected helloworld, got %q", got)
+	}
+
+	// Write that exceeds capacity — must keep only the trailing 10 bytes
+	r.Write([]byte("abcdefghij")) // head wraps; content now: "worldabcdefghij"[-10:] == "bcdefghij" + last char
+	got := r.String()
+	if len(got) != 10 {
+		t.Fatalf("expected len 10, got %d: %q", len(got), got)
+	}
+	if !strings.HasSuffix(got, "j") {
+		t.Fatalf("expected ring buffer to end with last written byte, got %q", got)
+	}
+
+	// Huge write larger than buffer — must keep only last 10 bytes
+	r.Reset()
+	big := strings.Repeat("X", 100) + "ABCDEFGHIJ"
+	r.Write([]byte(big))
+	if got := r.String(); got != "ABCDEFGHIJ" {
+		t.Fatalf("expected ABCDEFGHIJ, got %q", got)
+	}
+}
 
 func TestSplitAndTrimCSV(t *testing.T) {
 	input := " geosite:cn, geoip:private , ,443 , 8443-9443 "

@@ -33,6 +33,8 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 	config.DB.Where("enable = ?", true).Find(&rules)
 	rules = UniqueRoutingRules(rules)
 
+	clientsByInbound := fetchClientsByInbound(inbounds)
+
 	// Build route rules: sniff first, then hijack-dns, then user rules
 	routeRules := []interface{}{
 		map[string]interface{}{
@@ -99,7 +101,7 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 	}
 
 	for _, in := range inbounds {
-		inboundEntry, err := buildSingboxInbound(in)
+		inboundEntry, err := buildSingboxInbound(in, clientsByInbound[in.ID])
 		if err != nil {
 			return "", fmt.Errorf("build singbox inbound %q: %w", in.Tag, err)
 		}
@@ -110,7 +112,8 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 }
 
 // buildSingboxInbound constructs a sing-box inbound with users, TLS, and transport.
-func buildSingboxInbound(in model.Inbound) (map[string]interface{}, error) {
+// Clients are injected from the supplied list so the caller can batch-fetch them.
+func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]interface{}, error) {
 	listen := "::"
 	if in.Listen != "" {
 		listen = in.Listen
@@ -130,10 +133,6 @@ func buildSingboxInbound(in model.Inbound) (map[string]interface{}, error) {
 			return nil, fmt.Errorf("parse settings: %w", err)
 		}
 	}
-
-	// Fetch and inject clients/users
-	var clients []model.Client
-	config.DB.Where("inbound_id = ? AND enable = ?", in.ID, true).Find(&clients)
 
 	switch in.Protocol {
 	case "vless":
