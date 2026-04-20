@@ -444,12 +444,22 @@ func applyClientPayload(target *model.Client, payload clientPayload) {
 	}
 }
 
+// clientUUIDPattern permits UUIDs, hex strings, and simple base64-ish passwords.
+// Disallows characters that would ambiguate share-link parsing (@ ends userinfo,
+// # starts a fragment, ?/& split query, whitespace can't travel in a URI).
+var clientUUIDPattern = regexp.MustCompile(`^[A-Za-z0-9._\-+=/]{1,128}$`)
+
 func validateClient(target model.Client) string {
 	if target.InboundID == 0 {
 		return "Inbound is required"
 	}
 	if strings.TrimSpace(target.Email) == "" {
 		return "Email is required"
+	}
+	// Empty UUID is accepted — the POST /clients handler autogenerates one.
+	// But if the caller supplied a UUID, it has to be safe to embed in a share link.
+	if uuid := strings.TrimSpace(target.UUID); uuid != "" && !clientUUIDPattern.MatchString(uuid) {
+		return "UUID contains characters that would break subscription links (allowed: A-Z a-z 0-9 . _ - + = /)"
 	}
 	return ""
 }
@@ -1433,8 +1443,16 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
 				return
 			}
+			if strings.TrimSpace(job.Schedule) == "" {
+				c.JSON(400, gin.H{"code": 400, "msg": "Schedule is required"})
+				return
+			}
 			if len(job.Command) > 1000 {
 				c.JSON(400, gin.H{"code": 400, "msg": "Command too long (max 1000 characters)"})
+				return
+			}
+			if err := scheduler.ValidateSchedule(job.Schedule); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": fmt.Sprintf("Invalid cron schedule: %v", err)})
 				return
 			}
 			id, err := sched.AddJob(job)

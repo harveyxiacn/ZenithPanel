@@ -9,6 +9,47 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 )
 
+func TestBuildSingboxInboundForwardsHysteria2Obfs(t *testing.T) {
+	in := model.Inbound{
+		Tag: "hy2", Protocol: "hysteria2", Port: 443,
+		Settings: `{
+			"obfs": {"type": "salamander", "password": "obfspw"},
+			"up_mbps": 100,
+			"down_mbps": 200,
+			"masquerade": "https://www.bing.com",
+			"ignore_client_bandwidth": true
+		}`,
+		Stream: `{"network":"udp","security":"tls","tlsSettings":{"serverName":"hy.test"}}`,
+	}
+	clients := []model.Client{{Email: "a@x", UUID: "uuid-1"}}
+	entry, err := buildSingboxInbound(in, clients)
+	if err != nil {
+		t.Fatalf("buildSingboxInbound: %v", err)
+	}
+	obfs, ok := entry["obfs"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected obfs map on hysteria2 inbound, got %#v", entry["obfs"])
+	}
+	if obfs["type"] != "salamander" {
+		t.Fatalf("expected salamander obfs, got %#v", obfs["type"])
+	}
+	if obfs["password"] != "obfspw" {
+		t.Fatalf("expected obfs password propagated, got %#v", obfs["password"])
+	}
+	if entry["up_mbps"] != 100 {
+		t.Fatalf("expected up_mbps=100, got %#v", entry["up_mbps"])
+	}
+	if entry["down_mbps"] != 200 {
+		t.Fatalf("expected down_mbps=200, got %#v", entry["down_mbps"])
+	}
+	if entry["masquerade"] != "https://www.bing.com" {
+		t.Fatalf("expected masquerade propagated, got %#v", entry["masquerade"])
+	}
+	if entry["ignore_client_bandwidth"] != true {
+		t.Fatalf("expected ignore_client_bandwidth=true, got %#v", entry["ignore_client_bandwidth"])
+	}
+}
+
 func TestRingBufferRetainsOnlyLastNBytes(t *testing.T) {
 	r := newRingBuffer(10)
 

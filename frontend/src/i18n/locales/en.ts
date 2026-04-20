@@ -260,6 +260,10 @@ export default {
       title: 'Routing Rules',
       subtitle: 'Direct traffic to dedicated outbound nodes.',
       addRule: 'Add Rule',
+      errors: {
+        outboundRequired: 'Outbound tag is required',
+        filterRequired: 'Fill at least one of Domain, IP, or Port — rules need something to match on.',
+      },
       ruleName: 'Rule Name',
       outboundTag: 'Outbound Tag (direct/block)',
       name: 'Name',
@@ -319,6 +323,7 @@ export default {
         'vmess-ws-tls': { name: 'VMess + WS + TLS', desc: 'Classic V2Ray protocol. Supported by virtually all clients.' },
         'trojan-tls': { name: 'Trojan + TLS', desc: 'Simple and fast. Mimics regular HTTPS traffic.' },
         'hysteria2': { name: 'Hysteria2', desc: 'UDP-based QUIC protocol. Best for high-speed, high-latency networks.' },
+        'tuic': { name: 'TUIC v5', desc: 'Low-latency QUIC protocol with native UDP relay. Sing-box engine only.' },
         'shadowsocks': { name: 'Shadowsocks', desc: 'Simple encryption proxy. Wide client support, easy to deploy.' },
       },
       badges: {

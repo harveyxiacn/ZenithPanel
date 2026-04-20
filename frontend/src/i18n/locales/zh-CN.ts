@@ -253,6 +253,10 @@ export default {
       title: '路由规则',
       subtitle: '将流量导向指定出站节点。',
       addRule: '添加规则',
+      errors: {
+        outboundRequired: '必须填写出站标签',
+        filterRequired: '请至少填写一项：域名、IP 或端口——规则需要匹配条件。',
+      },
       ruleName: '规则名称',
       outboundTag: '出站标签 (direct/block)',
       name: '名称',
@@ -311,6 +315,7 @@ export default {
         'vmess-ws-tls': { name: 'VMess + WS + TLS', desc: '经典 V2Ray 协议。几乎所有客户端都支持。' },
         'trojan-tls': { name: 'Trojan + TLS', desc: '简单快速。伪装成普通 HTTPS 流量。' },
         'hysteria2': { name: 'Hysteria2', desc: '基于 UDP 的 QUIC 协议。最适合高延迟网络。' },
+        'tuic': { name: 'TUIC v5', desc: '低延迟 QUIC 协议，原生 UDP 转发。仅 Sing-box 引擎支持。' },
         'shadowsocks': { name: 'Shadowsocks', desc: '简单加密代理。客户端支持广泛，易于部署。' },
       },
       badges: {

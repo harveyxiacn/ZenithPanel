@@ -63,8 +63,22 @@ func (s *Scheduler) LoadFromDB() error {
 	return nil
 }
 
-// AddJob creates a new cron job in DB and schedules it
+// ValidateSchedule returns an error if the schedule expression can't be parsed
+// by the standard cron parser. Callers should invoke this before persisting a
+// job so the row only ever lands in the DB when it will actually run.
+func ValidateSchedule(schedule string) error {
+	_, err := cron.ParseStandard(schedule)
+	return err
+}
+
+// AddJob creates a new cron job in DB and schedules it.
+// The schedule is validated before any DB write so a bad expression can't
+// leave the job persisted-but-never-running (previous behaviour returned
+// success to the HTTP layer and silently skipped scheduling).
 func (s *Scheduler) AddJob(job model.CronJob) (uint, error) {
+	if err := ValidateSchedule(job.Schedule); err != nil {
+		return 0, err
+	}
 	if err := config.DB.Create(&job).Error; err != nil {
 		return 0, err
 	}
@@ -78,6 +92,7 @@ func (s *Scheduler) AddJob(job model.CronJob) (uint, error) {
 			}
 		})
 		if err != nil {
+			// Validate already ran; this would be an unexpected scheduler failure.
 			return job.ID, err
 		}
 		s.mu.Lock()
