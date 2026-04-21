@@ -50,6 +50,11 @@ const routes: RouteRecordRaw[] = [
         path: 'security',
         name: 'Security',
         component: () => import('@/views/SecurityView.vue')
+      },
+      {
+        path: 'smart-deploy',
+        name: 'SmartDeploy',
+        component: () => import('@/views/SmartDeploy.vue')
       }
     ]
   }
