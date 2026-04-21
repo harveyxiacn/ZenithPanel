@@ -4,6 +4,45 @@ This guide walks you through setting up proxy nodes in ZenithPanel and importing
 
 ---
 
+## 🚀 Recommended: Use Smart Deploy
+
+If your goal is a **stable unique egress IP** for avoiding platform risk control (bank/exchange/e-commerce account geo & IP profiling), skip manual node configuration and use Smart Deploy:
+
+1. Log into the panel and visit `/smart-deploy`
+2. **Step 1** — panel auto-probes the environment (kernel, BBR, port availability, time sync, firewall, ...)
+3. **Step 2** — pick one of four presets. **"Stable Egress" is the recommended default.**
+4. **Step 3** — (optional) provide domain / Reality SNI / custom port
+5. **Step 4** — preview the exact plan: protocols, tuning ops, cert mode, firewall ports, notes
+6. **Step 5** — confirm and apply; takes ~30 seconds
+
+Every deployment is reversible — one click rolls back all system changes (sysctl, systemd drop-ins, created inbounds).
+
+### Preset selection guide
+
+| Preset | Protocols | When to use |
+|---|---|---|
+| **Stable Egress** ⭐ | VLESS + Reality · TCP 443 | Fixed IP for fintech/e-commerce accounts; no domain required |
+| **Speed** | Hysteria2 · UDP 443 | Low latency, high throughput; ACME cert if domain provided |
+| **Combo** | Reality (TCP) + Hysteria2 (UDP) | TCP + UDP inbounds so the client can switch per network |
+| **Weak Network** | Hysteria2 + TUIC · two UDP ports | Mobile 4G/5G or lossy links |
+
+### Why "Stable Egress" defeats platform risk control
+
+Platform risk engines look at: IP stability, TLS fingerprint plausibility, datacenter/residential characteristics. The Stable Egress preset:
+
+- **Single IP, single port** — no rotation like commercial proxy pools
+- **Reality protocol** — handshake mimics a real site (default `www.microsoft.com`); TLS fingerprint matches Chrome
+- **TCP 443** — the most universally accepted port; UDP-filtering banks won't block it
+- **Your VPS's stable IP** — cleaner than shared residential proxies, more consistent than rotating pools
+
+---
+
+## Manual configuration (for advanced users)
+
+If you want fine-grained control per node, need custom routing rules, or Smart Deploy's presets don't cover your use case, continue below.
+
+---
+
 ## Prerequisites
 
 - ZenithPanel deployed and running (see `development_guide.md`)
