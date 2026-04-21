@@ -48,6 +48,12 @@ func InitDB(dbPath string) {
 		log.Printf("Warning: failed to migrate AuditLog table: %v", err)
 	}
 
+	// Smart Deploy tables (Phase 1). Non-fatal: an older panel should still
+	// boot if these migrations fail; smart deploy simply becomes unavailable.
+	if err := database.AutoMigrate(&model.Deployment{}, &model.DeploymentOp{}); err != nil {
+		log.Printf("Warning: failed to migrate Smart Deploy tables: %v", err)
+	}
+
 	DB = database
 	log.Println("Database initialized and migrated successfully")
 }
