@@ -2133,6 +2133,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			recordAudit(c, "backup.restore", fmt.Sprintf("items=%v", counts))
 			c.JSON(200, gin.H{"code": 200, "msg": "Restored", "data": counts})
 		})
+
+		// Smart Deploy — preset-driven one-click egress with reversible
+		// tuning. See docs/superpowers/specs/2026-04-21-smart-deploy-design.md.
+		RegisterDeployRoutes(authGroup)
 	}
 
 	// Start background lockout cleanup and rate-limiter map GC
