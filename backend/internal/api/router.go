@@ -39,6 +39,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/firewall"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/fs"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/monitor"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/notify"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
@@ -779,7 +780,13 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to get system stats"})
 				return
 			}
+			// Record network sample for the history ring buffer on every poll
+			monitor.RecordNetworkSample(stats.NetIn, stats.NetOut)
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": stats})
+		})
+
+		authGroup.GET("/system/network-history", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": monitor.GetNetworkHistory()})
 		})
 
 		// ======================================
@@ -2416,6 +2423,72 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			c.JSON(200, gin.H{"code": 200, "token": token})
+		})
+
+		// ======================================
+		// Notification Settings
+		// ======================================
+		notifyKeys := []string{
+			"notify_telegram_token",
+			"notify_telegram_chat_id",
+			"notify_webhook_url",
+			"notify_enable_expiring_soon",
+			"notify_enable_expired",
+			"notify_enable_traffic_limit",
+			"notify_enable_proxy_crashed",
+		}
+
+		authGroup.GET("/admin/notify", func(c *gin.Context) {
+			result := map[string]string{}
+			for _, k := range notifyKeys {
+				result[k] = config.GetSetting(k)
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": result})
+		})
+
+		authGroup.PUT("/admin/notify", func(c *gin.Context) {
+			var payload map[string]string
+			if err := c.ShouldBindJSON(&payload); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			allowed := map[string]bool{}
+			for _, k := range notifyKeys {
+				allowed[k] = true
+			}
+			for k, v := range payload {
+				if allowed[k] {
+					config.SetSetting(k, v)
+				}
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Saved"})
+		})
+
+		authGroup.POST("/admin/notify/test", func(c *gin.Context) {
+			var payload struct {
+				Channel string `json:"channel"` // "telegram" | "webhook"
+				Token   string `json:"token"`
+				ChatID  string `json:"chat_id"`
+				URL     string `json:"url"`
+			}
+			if err := c.ShouldBindJSON(&payload); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			cfg := notify.Config{
+				TelegramToken:  payload.Token,
+				TelegramChatID: payload.ChatID,
+				WebhookURL:     payload.URL,
+				EnableExpiringSoon: true,
+				EnableExpired: true,
+				EnableTrafficLimit: true,
+				EnableProxyCrashed: true,
+			}
+			if err := notify.SendTest(cfg); err != nil {
+				c.JSON(200, gin.H{"code": 500, "msg": fmt.Sprintf("Test failed: %v", err)})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Test notification sent"})
 		})
 
 		// ======================================

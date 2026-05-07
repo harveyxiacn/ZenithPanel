@@ -38,8 +38,19 @@ The following items from the original task checklist are **already implemented**
 | Shadowsocks AEAD-2022 per-user tracking | Done (d116708) |
 | subscription-userinfo expire header | Done (d116708) |
 | GitHub Actions CI (backend + frontend + Docker) | Done |
-| 3x-ui import/export bridge | Done (three_xui_bridge.go) |
-| Backup/restore service (JSON-in-zip) | Done (backup.go) |
+| 3x-ui import/export bridge | Done (three_xui_bridge.go); import UI added (2026-05-07) |
+| Backup/restore service (JSON-in-zip) | Done (backup.go + SecurityView.vue UI) |
+| Usage Profile UX (personal_proxy/vps_ops/mixed) | Done — useUsageProfile composable + config/usage-profiles.ts |
+| CI Node.js 20→24 upgrade | Done (Phase A, 2026-05-07) |
+| Install script auto-download from GitHub Releases | Done (Phase A, 2026-05-07) |
+| Client traffic quota progress bars | Done (Phase A, 2026-05-07) |
+| File sandbox sibling-prefix fix | Done (Phase B, 2026-05-07) |
+| JWT 401 deterministic session handling | Done (Phase B, 2026-05-07) |
+| Diagnostics script deterministic discovery | Done (Phase B, 2026-05-07) |
+| Updater digest-based check (no-pull) | Done (Phase B, 2026-05-07) |
+| Docker SDK full lifecycle (images/run/logs/stats) | Done (Phase C, 2026-05-07) |
+| Sing-box TLS fingerprint → uTLS block | Done (Phase D, 2026-05-07) |
+| WARP/WireGuard Outbound model + UI | Done (Phase E, 2026-05-07) |
 
 ---
 

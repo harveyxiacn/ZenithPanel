@@ -16,7 +16,14 @@ import {
   UsersIcon,
 } from '@heroicons/vue/24/outline'
 
-import { getSystemMonitor } from '@/api/system'
+import { getSystemMonitor, getNetworkHistory } from '@/api/system'
+import { use } from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+import VChart from 'vue-echarts'
+
+use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 import { dashboardViewForProfile, type DashboardCardId, type NavigationIconKey } from '@/config/usage-profiles'
 import { useUsageProfile } from '@/composables/useUsageProfile'
 import { useI18n } from 'vue-i18n'
@@ -190,6 +197,83 @@ function sparklinePath(data: number[], width = 120, height = 32): string {
   }).join(' ')
 }
 
+// ECharts bandwidth history chart
+const netHistoryLabels = ref<string[]>([])
+const netHistoryInRates = ref<number[]>([])
+const netHistoryOutRates = ref<number[]>([])
+
+const bandwidthChartOption = computed(() => ({
+  backgroundColor: 'transparent',
+  tooltip: {
+    trigger: 'axis',
+    formatter: (params: any[]) => {
+      const ts = params[0]?.name || ''
+      return `${ts}<br/>${params.map((p: any) => `${p.marker}${p.seriesName}: ${formatBytesRate(p.value)}`).join('<br/>')}`
+    }
+  },
+  legend: {
+    data: ['Download', 'Upload'],
+    textStyle: { color: '#94a3b8', fontSize: 11 },
+    top: 4,
+  },
+  grid: { left: 8, right: 8, top: 36, bottom: 4, containLabel: true },
+  xAxis: {
+    type: 'category',
+    data: netHistoryLabels.value,
+    axisLabel: { color: '#94a3b8', fontSize: 10, interval: 'auto' },
+    axisLine: { lineStyle: { color: '#334155' } },
+    splitLine: { show: false },
+  },
+  yAxis: {
+    type: 'value',
+    axisLabel: { color: '#94a3b8', fontSize: 10, formatter: (v: number) => formatBytesRate(v) },
+    splitLine: { lineStyle: { color: '#1e293b' } },
+    axisLine: { show: false },
+  },
+  series: [
+    {
+      name: 'Download',
+      type: 'line',
+      data: netHistoryInRates.value,
+      smooth: true,
+      symbol: 'none',
+      lineStyle: { color: '#10b981', width: 2 },
+      areaStyle: { color: 'rgba(16,185,129,0.12)' },
+    },
+    {
+      name: 'Upload',
+      type: 'line',
+      data: netHistoryOutRates.value,
+      smooth: true,
+      symbol: 'none',
+      lineStyle: { color: '#6366f1', width: 2 },
+      areaStyle: { color: 'rgba(99,102,241,0.10)' },
+    },
+  ],
+}))
+
+function formatBytesRate(bps: number): string {
+  if (bps === 0) return '0 B/s'
+  const k = 1024
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
+  const i = Math.min(Math.floor(Math.log(bps) / Math.log(k)), units.length - 1)
+  return `${(bps / Math.pow(k, i)).toFixed(1)} ${units[i]}`
+}
+
+async function fetchNetworkHistory() {
+  try {
+    const res = await getNetworkHistory() as any
+    if (res.code === 200 && Array.isArray(res.data) && res.data.length > 1) {
+      netHistoryLabels.value = res.data.map((s: any) => {
+        const d = new Date(s.ts)
+        return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`
+      })
+      netHistoryInRates.value = res.data.map((s: any) => s.in_rate || 0)
+      netHistoryOutRates.value = res.data.map((s: any) => s.out_rate || 0)
+    }
+  } catch { /* silent fail */ }
+}
+
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let lastNetIn = 0
 let lastNetOut = 0
@@ -253,7 +337,11 @@ function formatUptime(seconds: number): string {
 onMounted(() => {
   void loadUsageProfile()
   fetchStats()
-  pollTimer = setInterval(fetchStats, 5000)
+  fetchNetworkHistory()
+  pollTimer = setInterval(() => {
+    fetchStats()
+    fetchNetworkHistory()
+  }, 5000)
 })
 
 onUnmounted(() => {
@@ -404,6 +492,15 @@ onUnmounted(() => {
           </div>
         </template>
       </div>
+    </div>
+
+    <!-- Bandwidth Chart (ECharts) — shown when history data is available -->
+    <div v-if="netHistoryInRates.length > 2" class="glass-panel p-5 rounded-2xl bg-white dark:bg-slate-800 mb-6">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-200">{{ $t('dashboard.network') }}</h3>
+        <span class="text-xs text-slate-400">~5 min history</span>
+      </div>
+      <VChart :option="bandwidthChartOption" style="height: 160px;" :autoresize="true" />
     </div>
 
     <div v-if="detailSectionIds.length" class="grid grid-cols-1 lg:grid-cols-3 gap-6">

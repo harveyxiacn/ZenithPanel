@@ -724,6 +724,74 @@ const portNumber = computed(() => Number(panelPort.value))
 const isCFPort = computed(() => cloudflarePorts.includes(portNumber.value))
 const isCommonPort = computed(() => scannedPorts.includes(portNumber.value))
 
+// ---- Notifications ----
+const notifyConfig = ref({
+  notify_telegram_token: '',
+  notify_telegram_chat_id: '',
+  notify_webhook_url: '',
+  notify_enable_expiring_soon: 'false',
+  notify_enable_expired: 'false',
+  notify_enable_traffic_limit: 'false',
+  notify_enable_proxy_crashed: 'false',
+})
+const notifySaving = ref(false)
+const notifyTestLoading = ref<'telegram' | 'webhook' | null>(null)
+
+async function loadNotifyConfig() {
+  try {
+    const res = await fetch('/api/v1/admin/notify', {
+      headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` }
+    })
+    const data = await res.json()
+    if (data.code === 200 && data.data) {
+      Object.assign(notifyConfig.value, data.data)
+    }
+  } catch { /* silent */ }
+}
+
+async function saveNotifyConfig() {
+  notifySaving.value = true
+  try {
+    const res = await fetch('/api/v1/admin/notify', {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('token') || ''}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(notifyConfig.value),
+    })
+    const data = await res.json()
+    if (data.code === 200) toast.success(t('common.saved'))
+    else toast.error(data.msg || t('common.errorOccurred'))
+  } catch { toast.error(t('common.errorOccurred')) }
+  notifySaving.value = false
+}
+
+async function testNotify(channel: 'telegram' | 'webhook') {
+  notifyTestLoading.value = channel
+  try {
+    const payload: Record<string, string> = { channel }
+    if (channel === 'telegram') {
+      payload.token = notifyConfig.value.notify_telegram_token
+      payload.chat_id = notifyConfig.value.notify_telegram_chat_id
+    } else {
+      payload.url = notifyConfig.value.notify_webhook_url
+    }
+    const res = await fetch('/api/v1/admin/notify/test', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('token') || ''}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const data = await res.json()
+    if (data.code === 200) toast.success('Test notification sent')
+    else toast.error(data.msg || 'Test failed')
+  } catch { toast.error(t('common.errorOccurred')) }
+  notifyTestLoading.value = null
+}
+
 onMounted(() => {
   load2FAStatus()
   loadTLSStatus()
@@ -732,6 +800,7 @@ onMounted(() => {
   loadBBRStatus()
   loadSwapStatus()
   loadSysctlStatus()
+  loadNotifyConfig()
 })
 </script>
 
@@ -1157,6 +1226,78 @@ onMounted(() => {
               </button>
               <input ref="restoreInputRef" type="file" accept=".zip,application/zip" class="hidden" @change="onRestoreFileChosen" />
             </div>
+          </div>
+        </div>
+
+        <!-- Notification Settings -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-6 border-b border-slate-100 flex items-center">
+            <div class="w-9 h-9 rounded-xl bg-amber-500/10 flex items-center justify-center mr-3">
+              <BoltIcon class="h-5 w-5 text-amber-500" />
+            </div>
+            <div>
+              <h2 class="text-base font-semibold text-slate-800">Notifications</h2>
+              <p class="text-xs text-slate-500 mt-0.5">Telegram and Webhook alerts for expiring clients and traffic limits</p>
+            </div>
+          </div>
+          <div class="p-6 space-y-5">
+            <!-- Telegram -->
+            <div>
+              <h3 class="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2">
+                <span class="text-base">✈️</span> Telegram Bot
+              </h3>
+              <div class="grid grid-cols-2 gap-3 mb-2">
+                <div>
+                  <label class="text-xs font-medium text-slate-500">Bot Token</label>
+                  <input v-model="notifyConfig.notify_telegram_token" type="password" placeholder="123456:ABC-DEF..." class="input-field text-sm mt-1 w-full" />
+                </div>
+                <div>
+                  <label class="text-xs font-medium text-slate-500">Chat ID</label>
+                  <input v-model="notifyConfig.notify_telegram_chat_id" placeholder="-1001234567890" class="input-field text-sm mt-1 w-full" />
+                </div>
+              </div>
+              <button @click="testNotify('telegram')" :disabled="notifyTestLoading !== null || !notifyConfig.notify_telegram_token || !notifyConfig.notify_telegram_chat_id"
+                class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg disabled:opacity-50 transition">
+                {{ notifyTestLoading === 'telegram' ? 'Sending…' : 'Send Test' }}
+              </button>
+            </div>
+
+            <!-- Webhook -->
+            <div>
+              <h3 class="text-sm font-medium text-slate-700 mb-2 flex items-center gap-2">
+                <span class="text-base">🔗</span> Webhook URL
+              </h3>
+              <div class="flex gap-2">
+                <input v-model="notifyConfig.notify_webhook_url" placeholder="https://hooks.example.com/..." class="input-field text-sm flex-1" />
+                <button @click="testNotify('webhook')" :disabled="notifyTestLoading !== null || !notifyConfig.notify_webhook_url"
+                  class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg disabled:opacity-50 transition whitespace-nowrap">
+                  {{ notifyTestLoading === 'webhook' ? 'Sending…' : 'Test' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Event Toggles -->
+            <div>
+              <h3 class="text-sm font-medium text-slate-700 mb-3">Events</h3>
+              <div class="space-y-2">
+                <label v-for="item in [
+                  { key: 'notify_enable_expiring_soon', label: 'Client expiring soon (within 3 days)' },
+                  { key: 'notify_enable_expired', label: 'Client expired' },
+                  { key: 'notify_enable_traffic_limit', label: 'Traffic usage >90%' },
+                  { key: 'notify_enable_proxy_crashed', label: 'Proxy core crashed' },
+                ]" :key="item.key" class="flex items-center gap-3">
+                  <input type="checkbox" :checked="notifyConfig[item.key as keyof typeof notifyConfig] === 'true'"
+                    @change="(e: any) => notifyConfig[item.key as keyof typeof notifyConfig] = e.target.checked ? 'true' : 'false'"
+                    class="w-4 h-4 rounded accent-primary-600" />
+                  <span class="text-sm text-slate-700">{{ item.label }}</span>
+                </label>
+              </div>
+            </div>
+
+            <button @click="saveNotifyConfig" :disabled="notifySaving"
+              class="bg-primary-600 text-white text-sm px-5 py-2 rounded-lg hover:bg-primary-700 disabled:opacity-50 transition">
+              {{ notifySaving ? $t('common.saving') : $t('common.save') }}
+            </button>
           </div>
         </div>
 
