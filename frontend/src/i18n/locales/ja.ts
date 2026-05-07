@@ -201,7 +201,7 @@ export default {
     title: 'プロキシサービス',
     subtitle: 'Xray/Sing-box エンジン、ルーティングルール、ユーザー購読を設定。',
     applyConfig: '設定を適用',
-    testConnection: '接続テスト',
+    testConnection: 'サーバーネットワーク確認',
     status: {
       xrayRunning: 'Xray 稼働中',
       xrayStopped: 'Xray 停止中',

@@ -11,6 +11,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
@@ -97,7 +98,32 @@ func getContainerIDFromCgroup() (string, error) {
 	return "", fmt.Errorf("container ID not found in cgroup")
 }
 
-// CheckForUpdate pulls the latest image and compares its digest with the current container's image.
+// newUpdateInfo compares the running container's image ID against the registry
+// distribution descriptor without pulling any layers.
+func newUpdateInfo(currentImageID string, inspect registry.DistributionInspect) *UpdateInfo {
+	latestImageID := inspect.Descriptor.Digest.String()
+	return &UpdateInfo{
+		Available: currentImageID != latestImageID,
+		CurrentID: truncID(currentImageID),
+		LatestID:  truncID(latestImageID),
+	}
+}
+
+// buildHelperContainerConfig returns the container and host config for the
+// updater helper. Uses the panel image directly to avoid `apk add` at runtime.
+func buildHelperContainerConfig(image, swapScript string) (*container.Config, *container.HostConfig) {
+	return &container.Config{
+		Image:      image,
+		Entrypoint: []string{"sh", "-c"},
+		Cmd:        []string{swapScript},
+	}, &container.HostConfig{
+		Binds:      []string{"/var/run/docker.sock:/var/run/docker.sock"},
+		AutoRemove: true,
+	}
+}
+
+// CheckForUpdate inspects the registry digest without pulling layers and
+// compares it with the running container's image ID.
 func CheckForUpdate(ctx context.Context) (*UpdateInfo, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
@@ -114,27 +140,13 @@ func CheckForUpdate(ctx context.Context) (*UpdateInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inspect container: %w", err)
 	}
-	currentImageID := info.Image
 
-	// Pull latest image tag (downloads new layers if any)
-	reader, err := cli.ImagePull(ctx, DefaultImage, types.ImagePullOptions{})
+	distInspect, err := cli.DistributionInspect(ctx, DefaultImage, "")
 	if err != nil {
-		return nil, fmt.Errorf("pull image: %w", err)
-	}
-	io.Copy(io.Discard, reader)
-	reader.Close()
-
-	// Inspect pulled image to get its ID
-	imgInspect, _, err := cli.ImageInspectWithRaw(ctx, DefaultImage)
-	if err != nil {
-		return nil, fmt.Errorf("inspect image: %w", err)
+		return nil, fmt.Errorf("inspect registry image: %w", err)
 	}
 
-	return &UpdateInfo{
-		Available: currentImageID != imgInspect.ID,
-		CurrentID: truncID(currentImageID),
-		LatestID:  truncID(imgInspect.ID),
-	}, nil
+	return newUpdateInfo(info.Image, registry.DistributionInspect(distInspect)), nil
 }
 
 // PerformUpdate recreates the current container with the latest image.
@@ -216,36 +228,19 @@ func PerformUpdate(_ context.Context) error {
 	}
 	log.Printf("OTA: created new container %s", resp.ID[:12])
 
-	// 6. Spawn a helper container to orchestrate the swap.
-	// The helper stops the old container first (freeing ports), then starts the new one.
-	// This avoids port conflicts when using --network=host or mapped ports.
+	// 6. Spawn a helper container to orchestrate the swap using the panel image
+	// (already present locally). Avoids `apk add` at runtime and alpine dependency.
 	swapScript := fmt.Sprintf(
 		`sleep 2; docker stop -t 10 %s 2>/dev/null; docker start %s; docker rm %s 2>/dev/null; true`,
 		containerID, resp.ID, containerID,
 	)
-	helperCfg := &container.Config{
-		Image:      "alpine:latest",
-		Entrypoint: []string{"sh", "-c"},
-		Cmd:        []string{"apk add --no-cache docker-cli > /dev/null 2>&1 && " + swapScript},
-	}
-	helperHC := &container.HostConfig{
-		Binds:      []string{"/var/run/docker.sock:/var/run/docker.sock"},
-		AutoRemove: true,
-	}
+	helperCfg, helperHC := buildHelperContainerConfig(DefaultImage, swapScript)
 
-	// Try to use a small alpine image for the helper first; fall back to
-	// the panel image if alpine is not available locally.
 	helperResp, err := cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
 	if err != nil {
-		log.Printf("OTA: alpine helper failed (%v), falling back to panel image", err)
-		helperCfg.Image = DefaultImage
-		helperCfg.Cmd = []string{swapScript}
-		helperResp, err = cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
-		if err != nil {
-			cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-			cli.ContainerRename(ctx, containerID, containerName)
-			return fmt.Errorf("create updater helper: %w", err)
-		}
+		cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
+		cli.ContainerRename(ctx, containerID, containerName)
+		return fmt.Errorf("create updater helper: %w", err)
 	}
 	if err := cli.ContainerStart(ctx, helperResp.ID, types.ContainerStartOptions{}); err != nil {
 		cli.ContainerRemove(ctx, helperResp.ID, types.ContainerRemoveOptions{})
@@ -337,31 +332,17 @@ func RestartSelf(_ context.Context, newPort string) error {
 	}
 	log.Printf("Restart: created new container %s", resp.ID[:12])
 
-	// Helper container to swap
+	// Helper container to swap, using the panel image (already local, no apk needed)
 	swapScript := fmt.Sprintf(
 		`sleep 2; docker stop -t 10 %s 2>/dev/null; docker start %s; docker rm %s 2>/dev/null; true`,
 		containerID, resp.ID, containerID,
 	)
-	helperCfg := &container.Config{
-		Image:      "alpine:latest",
-		Entrypoint: []string{"sh", "-c"},
-		Cmd:        []string{"apk add --no-cache docker-cli > /dev/null 2>&1 && " + swapScript},
-	}
-	helperHC := &container.HostConfig{
-		Binds:      []string{"/var/run/docker.sock:/var/run/docker.sock"},
-		AutoRemove: true,
-	}
+	helperCfg, helperHC := buildHelperContainerConfig(newConfig.Image, swapScript)
 	helperResp, err := cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
 	if err != nil {
-		log.Printf("Restart: alpine helper failed (%v), falling back to panel image", err)
-		helperCfg.Image = newConfig.Image
-		helperCfg.Cmd = []string{swapScript}
-		helperResp, err = cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
-		if err != nil {
-			cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-			cli.ContainerRename(ctx, containerID, containerName)
-			return fmt.Errorf("create helper: %w", err)
-		}
+		cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
+		cli.ContainerRename(ctx, containerID, containerName)
+		return fmt.Errorf("create helper: %w", err)
 	}
 	if err := cli.ContainerStart(ctx, helperResp.ID, types.ContainerStartOptions{}); err != nil {
 		cli.ContainerRemove(ctx, helperResp.ID, types.ContainerRemoveOptions{})

@@ -208,7 +208,7 @@ export default {
     title: 'Proxy Services',
     subtitle: 'Configure Xray/Sing-box engine, routing rules, and user subscriptions.',
     applyConfig: 'Apply Configuration',
-    testConnection: 'Test Connection',
+    testConnection: 'Check Server Network',
     status: {
       xrayRunning: 'Xray Running',
       xrayStopped: 'Xray Stopped',
