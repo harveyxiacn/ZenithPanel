@@ -19,6 +19,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/docker"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/notify"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
 )
@@ -85,6 +86,15 @@ func main() {
 		log.Printf("Warning: Failed to load cron jobs: %v", err)
 	}
 	sched.Start()
+
+	// 5b. Start background notification checker (every 6 hours)
+	go func() {
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			notify.RunClientChecks(config.DB)
+		}
+	}()
 
 	// 6. Create a new Gin router.
 	// Release mode disables per-request debug printing; a custom logger skips

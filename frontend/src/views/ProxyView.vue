@@ -2,8 +2,8 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon, SignalIcon } from '@heroicons/vue/24/outline'
-import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig } from '@/api/proxy'
+import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon, SignalIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
+import { listInbounds, createInbound, updateInbound, deleteInbound, importThreeXUIInbounds, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig } from '@/api/proxy'
 import apiClient from '@/api/client'
 import QRCode from 'qrcode'
 import { useConfirm } from '@/composables/useConfirm'
@@ -647,6 +647,34 @@ async function doFetchWARP() {
   warpFetchLoading.value = false
 }
 
+// ---- 3x-ui Import ----
+const show3xuiImport = ref(false)
+const import3xuiJson = ref('')
+const import3xuiLoading = ref(false)
+const import3xuiResult = ref<{tag: string, success: boolean, error?: string}[] | null>(null)
+
+async function doImport3xui() {
+  if (!import3xuiJson.value.trim()) return
+  let payload: any
+  try {
+    payload = JSON.parse(import3xuiJson.value)
+  } catch {
+    toast.error('Invalid JSON')
+    return
+  }
+  import3xuiLoading.value = true
+  import3xuiResult.value = null
+  try {
+    const res = await importThreeXUIInbounds(Array.isArray(payload) ? payload : [payload]) as any
+    import3xuiResult.value = res.data?.results || []
+    await fetchInbounds()
+    toast.success(`Imported ${import3xuiResult.value?.filter(r => r.success).length || 0} inbound(s)`)
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || t('common.errorOccurred'))
+  }
+  import3xuiLoading.value = false
+}
+
 // ---- Routing Presets ----
 const routingPresets = [
   { id: 'block-ads', rule_tag: 'Block Ads', domain: 'geosite:category-ads-all', ip: '', outbound_tag: 'block' },
@@ -1225,12 +1253,43 @@ onMounted(() => {
         <div class="p-6 border-b border-slate-100 flex justify-between items-center">
           <h3 class="text-lg font-medium text-slate-800">{{ $t('proxy.inbounds.title') }}</h3>
           <div class="flex gap-2">
+            <button @click="show3xuiImport = !show3xuiImport" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg font-medium transition flex items-center">
+              <ArrowDownTrayIcon class="h-4 w-4 mr-1" /> Import 3x-ui
+            </button>
             <button @click="openQuickSetup()" class="text-sm bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg font-medium transition flex items-center">
               <SparklesIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.inbounds.quickSetup') }}
             </button>
             <button @click="openInboundForm()" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium transition flex items-center">
               <PlusIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.inbounds.addNode') }}
             </button>
+          </div>
+        </div>
+
+        <!-- 3x-ui Import Panel -->
+        <div v-if="show3xuiImport" class="p-5 border-b border-slate-100 bg-slate-50 dark:bg-slate-800/50">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <p class="text-sm font-medium text-slate-700 dark:text-slate-200">Import from 3x-ui</p>
+              <p class="text-xs text-slate-500 mt-0.5">Paste one or more inbound JSON objects (array or single object)</p>
+            </div>
+            <button @click="show3xuiImport = false; import3xuiResult = null" class="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+          </div>
+          <textarea v-model="import3xuiJson" rows="6" class="input-field text-xs w-full font-mono mb-3"
+            placeholder='[{"remark":"my-vless","protocol":"vless","port":443,"settings":{"clients":[...]}}]' />
+          <div class="flex items-center gap-3">
+            <button @click="doImport3xui" :disabled="import3xuiLoading || !import3xuiJson.trim()"
+              class="bg-primary-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-primary-700 disabled:opacity-50">
+              {{ import3xuiLoading ? 'Importing…' : 'Import' }}
+            </button>
+            <button @click="import3xuiJson = ''; import3xuiResult = null" class="text-sm text-slate-500 hover:text-slate-700">Clear</button>
+          </div>
+          <div v-if="import3xuiResult" class="mt-3 space-y-1">
+            <div v-for="r in import3xuiResult" :key="r.tag"
+              :class="r.success ? 'text-emerald-700 bg-emerald-50' : 'text-rose-700 bg-rose-50'"
+              class="text-xs px-3 py-1.5 rounded-lg">
+              <span class="font-mono font-medium">{{ r.tag }}</span>
+              <span class="ml-2">{{ r.success ? '✓ imported' : `✗ ${r.error}` }}</span>
+            </div>
           </div>
         </div>
 
