@@ -3,6 +3,66 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — 2026-05-07 (second batch)
+
+### Added — Phase A–J feature sprint
+
+#### CI & Delivery
+- **Node.js 20 → 24** in GitHub Actions and Dockerfile (EOL 2026-06-02 deadline)
+- **Install script rewrite** (`scripts/install.sh`) — auto-detects arch (amd64/arm64), fetches latest release from GitHub API, SHA256 verification, apt/yum/dnf support, offline fallback
+- **`.dockerignore` fix** — `!scripts/vps_check.sh` negation so the diagnostic script reaches the runtime image
+
+#### Security hardening (Phase B)
+- **File sandbox sibling-prefix fix** — replaced `strings.HasPrefix(abs, root)` with `filepath.Rel` in new `fs_sandbox.go`; fixes `/home2` bypass vulnerability; 6 regression tests
+- **JWT 401 deterministic** — new `session-recovery.ts` helper; `shouldLogoutOnUnauthorized()` prevents redirect loops on login/setup 401s; 3 TS unit tests (tsx)
+- **Server network check honest rename** — all responses include `scope: "server_public_network"`; injectable `networkCheckDo` transport for testability; i18n updated (4 locales)
+- **Diagnostics script deterministic discovery** — `resolveScriptPath()` searches 4 candidate paths; returns `ErrDiagnosticScriptUnavailable` → 503 when not found; 3 tests
+- **Updater hardening** — `CheckForUpdate` uses `DistributionInspect` (no image pull); helper container uses panel image instead of `alpine + apk add`; 3 tests
+
+#### Docker SDK completion (Phase C)
+- **9 new Docker Manager methods**: `ListImages`, `PullImage`, `RemoveImage`, `GetContainerLogs`, `GetContainerStats` (one-shot CPU/mem), `RunContainer`, `InspectContainer`, `ListVolumes`, `ListNetworks`
+- **9 new API routes** for the above
+- **Frontend Docker UI**: Containers/Images sub-tabs, container logs modal (xterm-style), stats inline row, Run Container form (ports/volumes/env)
+
+#### Sing-box parity (Phase D)
+- **TLS fingerprint → uTLS block**: `tlsSettings.fingerprint` now maps to `"utls": {"enabled": true, "fingerprint": "..."}` — enables browser-grade TLS fingerprinting
+- **singbox_test.go**: 5 new tests covering Reality dest split, HTTP/2 transport, fingerprint, no-fingerprint, JSON validity
+
+#### WARP / WireGuard Outbound (Phase E)
+- **`Outbound` model** — new DB table for custom egress (WireGuard, SOCKS5, HTTP)
+- **`FetchWARPConfig()`** — calls Cloudflare WARP API to obtain WireGuard keys
+- **`buildSingboxOutbound()`** — converts DB Outbound records to Sing-box outbound blocks
+- **CRUD API**: `GET/POST/PUT/DELETE /api/v1/outbounds` + `POST /api/v1/outbounds/warp/fetch`
+- **Outbounds tab** in ProxyView — Add form, WARP credential fetch helper, Outbound list
+
+#### 3x-ui Import UI
+- "Import 3x-ui" button in Inbounds tab header — inline JSON paste panel with per-inbound result display
+
+#### ECharts bandwidth chart (Phase D)
+- **`monitor/history.go`**: 60-point network I/O ring buffer; updated on every `/system/monitor` poll
+- **`GET /api/v1/system/network-history`**: returns timestamped in/out byte rates
+- **Dashboard ECharts chart**: download (green) + upload (indigo) line chart, auto-hides until ≥3 samples
+- **vite.config.ts**: `manualChunks` splits ECharts to separate 593KB chunk; main bundle stays 260KB
+
+#### Notification system (Phase I)
+- **`notify` package**: `Send()`/`SendTest()` via Telegram Bot API or webhook; 4 per-event enable flags
+- **`RunClientChecks()`**: scans clients for expiry ≤3 days and traffic >90%; called every 6h from background goroutine
+- **`GET/PUT /api/v1/admin/notify`**: read/write 7 notification settings
+- **`POST /api/v1/admin/notify/test`**: send test message
+- **SecurityView "Notifications" card**: Telegram token+chat-ID, webhook URL, event checkboxes, Save/Test
+
+#### Built-in web server & reverse proxy (Phase J)
+- **`Site` model** — DB table for virtual hosts (name/domain/type/upstream/root/redirect/tls)
+- **`WebServerManager`** — listens on :80/:443; SNI-based certificate routing; hot-reload without downtime; handlers: reverse proxy (`httputil.ReverseProxy`), static files (`http.FileServer`), HTTP redirect
+- **CRUD API**: `GET/POST/PUT/DELETE /api/v1/sites` + toggle enable + ACME cert issuance
+- **`SitesView.vue`**: site card list, create form with TLS config, enable/disable, cert issue button
+- **Sidebar "Sites" nav** (always visible, GlobeAltIcon)
+
+#### Client traffic quota progress bars
+- Colored progress bar (green/amber/red) for clients with `total > 0` in ProxyView client table
+
+---
+
 ## [Unreleased] — 2026-05-07
 
 ### Fixed — Protocol engine (root cause of non-VLESS protocols not working)
