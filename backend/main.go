@@ -22,6 +22,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/notify"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/webserver"
 )
 
 func main() {
@@ -86,6 +87,12 @@ func main() {
 		log.Printf("Warning: Failed to load cron jobs: %v", err)
 	}
 	sched.Start()
+
+	// 5a. Initialize built-in web server (Sites / reverse proxy)
+	webserver.Init(config.DB)
+	if err := webserver.Get().Start(); err != nil {
+		log.Printf("Warning: built-in web server failed to start: %v", err)
+	}
 
 	// 5b. Start background notification checker (every 6 hours)
 	go func() {
