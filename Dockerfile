@@ -1,5 +1,5 @@
 # Build stage for Frontend
-FROM node:20-alpine AS frontend-builder
+FROM node:24-alpine AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm install
@@ -54,6 +54,10 @@ RUN set -ex && \
 
 # Copy backend binary (frontend is already embedded via go:embed)
 COPY --from=backend-builder /zenithpanel /opt/zenithpanel/zenithpanel
+
+# Package vps_check.sh so diagnostics work in container deployments
+COPY scripts/vps_check.sh /opt/zenithpanel/scripts/vps_check.sh
+RUN chmod +x /opt/zenithpanel/scripts/vps_check.sh
 
 # Ensure the database and logs directories exist
 RUN mkdir -p /opt/zenithpanel/data /opt/zenithpanel/logs

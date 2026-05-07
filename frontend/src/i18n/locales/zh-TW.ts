@@ -201,7 +201,7 @@ export default {
     title: '代理服務',
     subtitle: '設定 Xray/Sing-box 引擎、路由規則和用戶訂閱。',
     applyConfig: '套用設定',
-    testConnection: '測試連線',
+    testConnection: '檢測伺服器網路',
     status: {
       xrayRunning: 'Xray 運行中',
       xrayStopped: 'Xray 未運行',

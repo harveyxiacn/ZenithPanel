@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image/png"
 	"io"
@@ -53,6 +54,12 @@ import (
 // fsSandboxRoot restricts file manager operations to /home to prevent
 // unauthorized access to system files, credentials, and configs.
 var fsSandboxRoot = "/home"
+
+// networkCheckDo is the HTTP transport used by the server network check endpoint.
+// Replaced in tests to avoid real outbound calls.
+var networkCheckDo = func(req *http.Request) (*http.Response, error) {
+	return http.DefaultClient.Do(req)
+}
 
 // ipRateLimiters provides per-IP rate limiting to prevent brute-force attacks.
 // Each IP gets its own limiter (max 5 req/sec for auth endpoints).
@@ -207,36 +214,6 @@ func startLimiterCleanup() {
 	}()
 }
 
-// isPathSafe ensures the resolved path stays within the sandbox root and is not a symlink.
-func isPathSafe(userPath string) (string, bool) {
-	cleaned := filepath.Clean(userPath)
-	abs, err := filepath.Abs(cleaned)
-	if err != nil {
-		return "", false
-	}
-	if !strings.HasPrefix(abs, fsSandboxRoot) {
-		return "", false
-	}
-	// Resolve symlinks to prevent sandbox escape via symlink chains.
-	// For paths that don't exist yet (write ops), resolve the parent instead.
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		parent := filepath.Dir(abs)
-		resolvedParent, err := filepath.EvalSymlinks(parent)
-		if err != nil {
-			return "", false
-		}
-		resolved = filepath.Join(resolvedParent, filepath.Base(abs))
-	}
-	if !strings.HasPrefix(resolved, fsSandboxRoot) {
-		return "", false
-	}
-	// Reject explicit symlink entries
-	if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return "", false
-	}
-	return abs, true
-}
 
 // dockerIDRe validates Docker container IDs (hex strings, 12-64 chars).
 var dockerIDRe = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
@@ -965,6 +942,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.GET("/diagnostics/network", func(c *gin.Context) {
 			output, err := diagnostic.RunNetworkDiagnostic()
 			if err != nil {
+				if errors.Is(err, diagnostic.ErrDiagnosticScriptUnavailable) {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Diagnostic script is unavailable in this deployment", "data": output})
+					return
+				}
 				log.Printf("Diagnostic error: %v", err)
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Diagnostic failed", "data": output})
 				return
@@ -1665,36 +1646,44 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				})
 			})
 
-			// Test outbound connectivity and show exit IP
+			// Check server public network — reports the VPS exit IP regardless of proxy state.
 			proxyGroup.POST("/test-connection", func(c *gin.Context) {
-				if !xm.Status() {
-					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": false, "error": "Xray is not running"}})
-					return
-				}
-
 				ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 				defer cancel()
 
 				req, err := http.NewRequestWithContext(ctx, "GET", "https://ipinfo.io/json", nil)
 				if err != nil {
-					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": false, "error": "Request build failed"}})
+					c.JSON(200, gin.H{"code": 200, "data": gin.H{
+						"success": false,
+						"scope":   "server_public_network",
+						"error":   "Request build failed",
+					}})
 					return
 				}
 				req.Header.Set("User-Agent", "ZenithPanel/1.0")
-				resp, err := http.DefaultClient.Do(req)
+				resp, err := networkCheckDo(req)
 				if err != nil {
-					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": false, "error": fmt.Sprintf("Connection failed: %v", err)}})
+					c.JSON(200, gin.H{"code": 200, "data": gin.H{
+						"success": false,
+						"scope":   "server_public_network",
+						"error":   fmt.Sprintf("Connection failed: %v", err),
+					}})
 					return
 				}
 				defer resp.Body.Close()
 
 				var result map[string]interface{}
 				if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-					c.JSON(200, gin.H{"code": 200, "data": gin.H{"success": false, "error": "Failed to parse response"}})
+					c.JSON(200, gin.H{"code": 200, "data": gin.H{
+						"success": false,
+						"scope":   "server_public_network",
+						"error":   "Failed to parse response",
+					}})
 					return
 				}
 				c.JSON(200, gin.H{"code": 200, "data": gin.H{
 					"success": true,
+					"scope":   "server_public_network",
 					"ip":      result["ip"],
 					"country": result["country"],
 					"org":     result["org"],
