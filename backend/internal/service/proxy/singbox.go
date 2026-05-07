@@ -28,9 +28,11 @@ func NewSingboxManager() *SingboxManager {
 func (s *SingboxManager) GenerateConfig() (string, error) {
 	var inbounds []model.Inbound
 	var rules []model.RoutingRule
+	var customOutbounds []model.Outbound
 
 	config.DB.Where("enable = ?", true).Find(&inbounds)
 	config.DB.Where("enable = ?", true).Find(&rules)
+	config.DB.Where("enable = ?", true).Find(&customOutbounds)
 	rules = UniqueRoutingRules(rules)
 
 	clientsByInbound := fetchClientsByInbound(inbounds)
@@ -56,6 +58,20 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 		}
 	}
 
+	// System outbounds always present
+	outbounds := []interface{}{
+		map[string]interface{}{"type": "direct", "tag": "direct"},
+		map[string]interface{}{"type": "block", "tag": "block"},
+		map[string]interface{}{"type": "dns", "tag": "dns-out"},
+	}
+	// Append user-defined custom outbounds (e.g. WireGuard/WARP)
+	for _, ob := range customOutbounds {
+		entry := buildSingboxOutbound(ob)
+		if entry != nil {
+			outbounds = append(outbounds, entry)
+		}
+	}
+
 	singboxConfig := map[string]interface{}{
 		"log": map[string]interface{}{
 			"level": "warn",
@@ -78,21 +94,8 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 			"strategy": "prefer_ipv4",
 			"final":    "dns-remote",
 		},
-		"inbounds": []interface{}{},
-		"outbounds": []interface{}{
-			map[string]interface{}{
-				"type": "direct",
-				"tag":  "direct",
-			},
-			map[string]interface{}{
-				"type": "block",
-				"tag":  "block",
-			},
-			map[string]interface{}{
-				"type": "dns",
-				"tag":  "dns-out",
-			},
-		},
+		"inbounds":  []interface{}{},
+		"outbounds": outbounds,
 		"route": map[string]interface{}{
 			"rules":                 routeRules,
 			"final":                 "direct",
@@ -510,6 +513,90 @@ func buildSingboxRoutingRule(r model.RoutingRule) map[string]interface{} {
 		return nil
 	}
 	return ruleMap
+}
+
+// buildSingboxOutbound converts a DB Outbound record to the sing-box JSON format.
+// Returns nil for unknown/unsupported protocols (skipped silently).
+func buildSingboxOutbound(ob model.Outbound) map[string]interface{} {
+	switch ob.Protocol {
+	case "wireguard":
+		entry := map[string]interface{}{
+			"type": "wireguard",
+			"tag":  ob.Tag,
+		}
+		if ob.Config != "" {
+			var cfg map[string]interface{}
+			if err := json.Unmarshal([]byte(ob.Config), &cfg); err == nil {
+				// WARPConfig fields → sing-box WireGuard fields
+				if pk, ok := cfg["private_key"].(string); ok && pk != "" {
+					entry["private_key"] = pk
+				}
+				endpoint := "engage.cloudflareclient.com"
+				port := 2408
+				if ep, ok := cfg["endpoint"].(string); ok && ep != "" {
+					endpoint = ep
+				}
+				if p, ok := cfg["endpoint_port"].(float64); ok && p > 0 {
+					port = int(p)
+				}
+				entry["server"] = endpoint
+				entry["server_port"] = port
+				if pubKey, ok := cfg["public_key"].(string); ok && pubKey != "" {
+					entry["peer_public_key"] = pubKey
+				}
+				if addr, ok := cfg["address"].(string); ok && addr != "" {
+					entry["local_address"] = []string{addr}
+				}
+				if rh, ok := cfg["reserved_hex"].(string); ok && rh != "" {
+					entry["reserved"] = rh
+				}
+			}
+		}
+		return entry
+
+	case "socks5":
+		entry := map[string]interface{}{
+			"type": "socks",
+			"tag":  ob.Tag,
+		}
+		if ob.Config != "" {
+			var cfg map[string]interface{}
+			if err := json.Unmarshal([]byte(ob.Config), &cfg); err == nil {
+				if server, ok := cfg["server"].(string); ok {
+					entry["server"] = server
+				}
+				if port, ok := cfg["port"].(float64); ok {
+					entry["server_port"] = int(port)
+				}
+				if user, ok := cfg["username"].(string); ok && user != "" {
+					entry["username"] = user
+				}
+				if pw, ok := cfg["password"].(string); ok && pw != "" {
+					entry["password"] = pw
+				}
+			}
+		}
+		return entry
+
+	case "http":
+		entry := map[string]interface{}{
+			"type": "http",
+			"tag":  ob.Tag,
+		}
+		if ob.Config != "" {
+			var cfg map[string]interface{}
+			if err := json.Unmarshal([]byte(ob.Config), &cfg); err == nil {
+				if server, ok := cfg["server"].(string); ok {
+					entry["server"] = server
+				}
+				if port, ok := cfg["port"].(float64); ok {
+					entry["server_port"] = int(port)
+				}
+			}
+		}
+		return entry
+	}
+	return nil
 }
 
 func (s *SingboxManager) Start() error {

@@ -54,3 +54,18 @@ type RoutingRule struct {
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 }
+
+// Outbound represents a user-defined egress configuration.
+// System outbounds (direct, block, dns-out) are generated at config time and
+// are NOT stored in this table. Only custom outbounds (WARP, SOCKS5, etc.) live here.
+type Outbound struct {
+	ID          uint           `gorm:"primaryKey" json:"id"`
+	Tag         string         `gorm:"uniqueIndex;not null" json:"tag"`  // e.g. "warp", "proxy1"
+	Protocol    string         `gorm:"not null" json:"protocol"`         // "wireguard"|"socks5"|"http"
+	Config      string         `gorm:"type:text" json:"config"`          // Protocol-specific JSON blob
+	Description string         `json:"description"`
+	Enable      bool           `gorm:"default:true" json:"enable"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+}

@@ -1527,6 +1527,131 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		})
 
 		// ======================================
+		// Outbound Management (WARP, SOCKS5, HTTP)
+		// ======================================
+		authGroup.GET("/outbounds", func(c *gin.Context) {
+			var outbounds []model.Outbound
+			if err := config.DB.Find(&outbounds).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to list outbounds"})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": outbounds})
+		})
+
+		authGroup.POST("/outbounds", func(c *gin.Context) {
+			var payload struct {
+				Tag         string `json:"tag"`
+				Protocol    string `json:"protocol"`
+				Config      string `json:"config"`
+				Description string `json:"description"`
+				Enable      *bool  `json:"enable"`
+			}
+			if err := c.ShouldBindJSON(&payload); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if payload.Tag == "" || payload.Protocol == "" {
+				c.JSON(400, gin.H{"code": 400, "msg": "tag and protocol are required"})
+				return
+			}
+			enable := true
+			if payload.Enable != nil {
+				enable = *payload.Enable
+			}
+			ob := model.Outbound{
+				Tag:         payload.Tag,
+				Protocol:    payload.Protocol,
+				Config:      payload.Config,
+				Description: payload.Description,
+				Enable:      enable,
+			}
+			if err := config.DB.Create(&ob).Error; err != nil {
+				if strings.Contains(err.Error(), "UNIQUE") {
+					c.JSON(409, gin.H{"code": 409, "msg": "Outbound tag already exists"})
+					return
+				}
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create outbound"})
+				return
+			}
+			recordAudit(c, "outbound.create", ob.Tag)
+			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": ob})
+		})
+
+		authGroup.PUT("/outbounds/:id", func(c *gin.Context) {
+			id, ok := parseUintID(c)
+			if !ok {
+				return
+			}
+			var ob model.Outbound
+			if err := config.DB.First(&ob, "id = ?", id).Error; err != nil {
+				c.JSON(404, gin.H{"code": 404, "msg": "Outbound not found"})
+				return
+			}
+			var payload struct {
+				Tag         string `json:"tag"`
+				Protocol    string `json:"protocol"`
+				Config      string `json:"config"`
+				Description string `json:"description"`
+				Enable      *bool  `json:"enable"`
+			}
+			if err := c.ShouldBindJSON(&payload); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if payload.Tag != "" {
+				ob.Tag = payload.Tag
+			}
+			if payload.Protocol != "" {
+				ob.Protocol = payload.Protocol
+			}
+			if payload.Config != "" {
+				ob.Config = payload.Config
+			}
+			ob.Description = payload.Description
+			if payload.Enable != nil {
+				ob.Enable = *payload.Enable
+			}
+			if err := config.DB.Save(&ob).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update outbound"})
+				return
+			}
+			recordAudit(c, "outbound.update", ob.Tag)
+			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": ob})
+		})
+
+		authGroup.DELETE("/outbounds/:id", func(c *gin.Context) {
+			id, ok := parseUintID(c)
+			if !ok {
+				return
+			}
+			if err := config.DB.Delete(&model.Outbound{}, "id = ?", id).Error; err != nil {
+				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete outbound"})
+				return
+			}
+			recordAudit(c, "outbound.delete", fmt.Sprintf("id=%d", id))
+			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
+		})
+
+		// Fetch WARP WireGuard credentials from Cloudflare
+		authGroup.POST("/outbounds/warp/fetch", func(c *gin.Context) {
+			var payload struct {
+				AccountID string `json:"account_id"`
+				Token     string `json:"token"`
+			}
+			if err := c.ShouldBindJSON(&payload); err != nil || payload.AccountID == "" || payload.Token == "" {
+				c.JSON(400, gin.H{"code": 400, "msg": "account_id and token are required"})
+				return
+			}
+			warpCfg, err := proxy.FetchWARPConfig(payload.AccountID, payload.Token)
+			if err != nil {
+				log.Printf("WARP fetch error: %v", err)
+				c.JSON(500, gin.H{"code": 500, "msg": fmt.Sprintf("WARP API error: %v", err)})
+				return
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": warpCfg})
+		})
+
+		// ======================================
 		// Firewall Management
 		// ======================================
 		authGroup.GET("/firewall/rules", func(c *gin.Context) {
