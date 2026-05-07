@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon, SignalIcon } from '@heroicons/vue/24/outline'
-import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, testProxyConnection } from '@/api/proxy'
+import { listInbounds, createInbound, updateInbound, deleteInbound, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig } from '@/api/proxy'
 import apiClient from '@/api/client'
 import QRCode from 'qrcode'
 import { useConfirm } from '@/composables/useConfirm'
@@ -53,6 +53,7 @@ const tabs = computed(() => [
   { id: 'inbounds', name: t('proxy.tabs.inbounds') },
   { id: 'routing', name: t('proxy.tabs.routing') },
   { id: 'users', name: t('proxy.tabs.users') },
+  { id: 'outbounds', name: 'Outbounds' },
 ])
 
 // ---- Inbounds ----
@@ -118,10 +119,10 @@ async function runConnectionTest() {
   testLoading.value = true
   testResult.value = null
   try {
-    const res: any = await testProxyConnection()
+    const res: any = await checkServerPublicNetwork()
     testResult.value = res.data
   } catch {
-    testResult.value = { success: false, error: 'Request failed' }
+    testResult.value = { success: false, scope: 'server_public_network', error: 'Request failed' }
   } finally {
     testLoading.value = false
   }
@@ -584,6 +585,68 @@ async function removeRoutingRule(id: number) {
   } catch { toast.error(t('common.errorOccurred')) }
 }
 
+// ---- Outbounds ----
+const outbounds = ref<any[]>([])
+const outboundLoading = ref(false)
+const showOutboundForm = ref(false)
+const outboundForm = ref({ tag: '', protocol: 'wireguard', description: '', config: '', enable: true })
+const warpFetchLoading = ref(false)
+const warpAccountId = ref('')
+const warpToken = ref('')
+
+async function fetchOutbounds() {
+  outboundLoading.value = true
+  try {
+    const res = await listOutbounds() as any
+    if (res.code === 200) outbounds.value = res.data || []
+  } catch { toast.error(t('common.errorOccurred')) }
+  outboundLoading.value = false
+}
+
+async function saveOutbound() {
+  try {
+    await createOutbound({ ...outboundForm.value })
+    showOutboundForm.value = false
+    outboundForm.value = { tag: '', protocol: 'wireguard', description: '', config: '', enable: true }
+    await fetchOutbounds()
+    toast.success(t('common.created'))
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || t('common.errorOccurred'))
+  }
+}
+
+async function deleteOutboundById(id: number) {
+  const ok = await confirmDialog({
+    title: t('common.confirm'),
+    message: 'Delete this outbound?',
+    confirmText: t('common.delete'),
+    variant: 'danger',
+  })
+  if (!ok) return
+  try {
+    await deleteOutbound(id)
+    await fetchOutbounds()
+    toast.success(t('common.deleted'))
+  } catch { toast.error(t('common.errorOccurred')) }
+}
+
+async function doFetchWARP() {
+  if (!warpAccountId.value || !warpToken.value) {
+    toast.error('Account ID and token are required')
+    return
+  }
+  warpFetchLoading.value = true
+  try {
+    const res = await fetchWARPConfig(warpAccountId.value, warpToken.value) as any
+    if (res.code === 200 && res.data) {
+      outboundForm.value.config = JSON.stringify(res.data, null, 2)
+      if (!outboundForm.value.tag) outboundForm.value.tag = 'warp'
+      toast.success('WARP config fetched')
+    }
+  } catch { toast.error('Failed to fetch WARP config') }
+  warpFetchLoading.value = false
+}
+
 // ---- Routing Presets ----
 const routingPresets = [
   { id: 'block-ads', rule_tag: 'Block Ads', domain: 'geosite:category-ads-all', ip: '', outbound_tag: 'block' },
@@ -1025,6 +1088,7 @@ onMounted(() => {
   fetchInbounds()
   fetchClients()
   fetchRoutingRules()
+  fetchOutbounds()
   loadProxyStatus()
 })
 </script>
@@ -1593,6 +1657,95 @@ onMounted(() => {
         </table>
       </div>
 
+      <!-- Outbounds -->
+      <div v-else-if="activeTab === 'outbounds'" class="flex flex-col h-full">
+        <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center">
+          <div>
+            <h3 class="text-lg font-medium text-slate-800 dark:text-slate-100">Outbounds</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Custom egress configurations (WARP, SOCKS5, HTTP proxy)</p>
+          </div>
+          <button @click="showOutboundForm = !showOutboundForm"
+            class="text-sm bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg font-medium transition flex items-center">
+            <PlusIcon class="h-4 w-4 mr-1" /> Add
+          </button>
+        </div>
+
+        <div v-if="showOutboundForm" class="p-6 bg-slate-50 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-700 space-y-4">
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Tag *</label>
+              <input v-model="outboundForm.tag" placeholder="warp" class="input-field text-sm mt-1 w-full" />
+            </div>
+            <div>
+              <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Protocol</label>
+              <select v-model="outboundForm.protocol" class="input-field text-sm mt-1 w-full">
+                <option value="wireguard">WireGuard</option>
+                <option value="socks5">SOCKS5</option>
+                <option value="http">HTTP Proxy</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Description</label>
+            <input v-model="outboundForm.description" placeholder="WARP free tier" class="input-field text-sm mt-1 w-full" />
+          </div>
+          <div v-if="outboundForm.protocol === 'wireguard'" class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg p-3">
+            <p class="text-xs font-medium text-blue-700 dark:text-blue-300 mb-2">Fetch WARP credentials from Cloudflare</p>
+            <div class="flex gap-2">
+              <input v-model="warpAccountId" placeholder="Account ID" class="input-field text-xs flex-1" />
+              <input v-model="warpToken" placeholder="Token" type="password" class="input-field text-xs flex-1" />
+              <button @click="doFetchWARP" :disabled="warpFetchLoading"
+                class="bg-blue-600 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap">
+                {{ warpFetchLoading ? 'Fetching…' : 'Fetch' }}
+              </button>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Config JSON</label>
+            <textarea v-model="outboundForm.config" rows="6" class="input-field text-xs mt-1 w-full font-mono"
+              placeholder='{"private_key":"","public_key":"","endpoint":"engage.cloudflareclient.com","endpoint_port":2408}' />
+          </div>
+          <div class="flex justify-end gap-2">
+            <button @click="showOutboundForm = false" class="text-sm px-4 py-2 border rounded-lg text-slate-600">Cancel</button>
+            <button @click="saveOutbound" class="text-sm bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700">Add</button>
+          </div>
+        </div>
+
+        <div class="flex-1 overflow-auto p-6">
+          <div v-if="outboundLoading" class="text-sm text-slate-400 text-center py-12">Loading…</div>
+          <table v-else class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead>
+              <tr>
+                <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">Tag</th>
+                <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">Protocol</th>
+                <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">Description</th>
+                <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">Status</th>
+                <th class="py-3 text-right text-xs font-medium text-slate-500 uppercase">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+              <tr v-for="ob in outbounds" :key="ob.id" class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                <td class="py-3 text-sm font-mono font-medium text-slate-800 dark:text-slate-100">{{ ob.tag }}</td>
+                <td class="py-3 text-sm text-slate-500">{{ ob.protocol }}</td>
+                <td class="py-3 text-sm text-slate-500 dark:text-slate-400">{{ ob.description || '—' }}</td>
+                <td class="py-3">
+                  <span :class="ob.enable ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'"
+                    class="text-xs px-2 py-0.5 rounded-full font-medium">
+                    {{ ob.enable ? 'Enabled' : 'Disabled' }}
+                  </span>
+                </td>
+                <td class="py-3 text-right">
+                  <button @click="deleteOutboundById(ob.id)" class="text-rose-600 hover:text-rose-800 text-xs">{{ $t('common.delete') }}</button>
+                </td>
+              </tr>
+              <tr v-if="outbounds.length === 0">
+                <td colspan="5" class="py-8 text-center text-sm text-slate-400">No outbounds configured. System outbounds (direct, block) are built-in.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
 
     <!-- Quick Setup Wizard Modal -->
@@ -1998,6 +2151,7 @@ onMounted(() => {
           </div>
         </div>
       </div>
+
     </div>
 
   </div>

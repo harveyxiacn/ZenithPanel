@@ -54,6 +54,11 @@ func InitDB(dbPath string) {
 		log.Printf("Warning: failed to migrate Smart Deploy tables: %v", err)
 	}
 
+	// Outbound table (Phase E). Non-fatal for backwards compat with older DBs.
+	if err := database.AutoMigrate(&model.Outbound{}); err != nil {
+		log.Printf("Warning: failed to migrate Outbound table: %v", err)
+	}
+
 	DB = database
 	log.Println("Database initialized and migrated successfully")
 }

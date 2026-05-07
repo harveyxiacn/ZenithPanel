@@ -69,6 +69,28 @@ export function getProxyStatus() {
   return apiClient.get('/v1/proxy/status')
 }
 
-export function testProxyConnection() {
+export function checkServerPublicNetwork() {
   return apiClient.post('/v1/proxy/test-connection')
+}
+
+// ─── Outbounds ───────────────────────────────────────────────────────────────
+
+export function listOutbounds() {
+  return apiClient.get('/v1/outbounds')
+}
+
+export function createOutbound(data: any) {
+  return apiClient.post('/v1/outbounds', data)
+}
+
+export function updateOutbound(id: number, data: any) {
+  return apiClient.put(`/v1/outbounds/${id}`, data)
+}
+
+export function deleteOutbound(id: number) {
+  return apiClient.delete(`/v1/outbounds/${id}`)
+}
+
+export function fetchWARPConfig(accountId: string, token: string) {
+  return apiClient.post('/v1/outbounds/warp/fetch', { account_id: accountId, token })
 }
