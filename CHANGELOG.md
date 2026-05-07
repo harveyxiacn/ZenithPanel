@@ -3,7 +3,82 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [Unreleased] — 2026-05-07
+
+### Fixed — Protocol engine (root cause of non-VLESS protocols not working)
+
+- **Engine mutex on apply** — `POST /proxy/apply?engine=xray` now stops Sing-box
+  before starting Xray, and vice versa. Previously both engines could bind the
+  same inbound ports simultaneously, causing the second engine to fail silently
+  with "address already in use". This was the primary reason VMess / Trojan /
+  Shadowsocks appeared broken when users switched engines without manually stopping
+  the other one.
+
+- **Sing-box binary in Docker** — the runtime image now downloads and installs the
+  latest `sing-box` release alongside Xray. Without this binary, Hysteria2 and
+  TUIC inbounds were always silently skipped (Xray does not support them) and
+  sing-box could never start. Verified with `sing-box version` at build time.
+
+- **Trojan TLS validation** — `validateInbound` now rejects Trojan inbounds that
+  lack `"security": "tls"` or `"security": "reality"` in their stream JSON before
+  writing to the database. `buildSingboxInbound` also returns a clear error
+  (`"trojan inbound %q requires TLS or Reality security"`) so a misconfigured
+  Trojan inbound can no longer silently crash the entire Sing-box process on start.
+
+- **Dead code removal** — removed the unreachable `case "hysteria2":` branch in
+  `buildXrayInbound` (`xray.go`). Xray correctly skips non-supported protocols
+  via the `xraySupportedProtocols` guard; the extra case was never executed and
+  only caused confusion.
+
+### Added — Protocol features
+
+- **Shadowsocks AEAD-2022 multi-user** — when the inbound method is
+  `2022-blake3-aes-128-gcm`, `2022-blake3-aes-256-gcm`, or
+  `2022-blake3-chacha20-poly1305`, both Xray and Sing-box config generation now
+  inject a per-client `users` array (Sing-box) / `clients` array (Xray) so each
+  client gets an individual password (their UUID) and traffic can be tracked
+  per-user. Classic methods retain the single shared-password behaviour.
+
+- **Subscription `expire` field** — `subscription-userinfo` response header now
+  includes `; expire=<unix_timestamp>` when the client record has `expiry_time`
+  set. Clash Meta, v2rayN, and compatible clients will display the expiry date in
+  their subscription overview.
+
+- **`xray_skipped_protocols` in status API** — `GET /proxy/status` now includes
+  `xray_skipped_protocols: [...]` listing any inbounds Xray skipped on its last
+  start (e.g. Hysteria2, TUIC). Callers can surface this to users without parsing
+  log output.
+
+- **ACME / Let's Encrypt integration** — `IssueCertificate` now runs a real
+  ACME HTTP-01 challenge via `go-acme/lego/v4` (the package was already an
+  indirect dependency; it is now a direct one). On success the cert and key are
+  written to `data/certs/<domain>.{crt,key}`. Requires port 80 to be reachable.
+  Smart Deploy's `cert_mode=acme` path now triggers the real flow instead of
+  falling back to a self-signed certificate silently.
+
+### UI / UX
+
+- **Engine radio selector** — the "Apply Config" header area in Proxy Nodes now
+  shows an Xray / Sing-box toggle. Selecting an engine stops the other one and
+  applies the chosen engine's config. When any inbound uses a Sing-box-only
+  protocol (Hysteria2, TUIC) the selector auto-selects Sing-box on page load.
+
+- **Sing-box status badge** — a second engine status badge appears next to the
+  existing Xray badge so users can see at a glance which engine is running.
+
+- **Sing-box-only protocol badge** — inbounds using Hysteria2 or TUIC now show an
+  amber `Sing-box only` badge in the inbound table.
+
+- **Skipped-protocol warning** — if Xray is active and has skipped any protocols,
+  a `⚠ N 协议被跳过` warning badge appears in the page header with a tooltip
+  listing the affected inbounds.
+
+- **Traffic sparkline** — the Network card on the Dashboard now renders a 5-minute
+  (60-sample) SVG sparkline showing real-time download (emerald) and upload (sky,
+  dashed) byte rates, built from the existing polling loop without adding any
+  new dependencies.
+
+## [Previously Unreleased]
 
 ### Added — features
 - **TUIC v5 protocol** — end-to-end support via Sing-box. Inbound generation

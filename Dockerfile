@@ -38,6 +38,16 @@ RUN set -ex && \
     rm -f /tmp/xray.zip && \
     xray version
 
+# Download latest Sing-box binary (required for Hysteria2, TUIC, and alternative engine)
+RUN set -ex && \
+    SINGBOX_VER=$(wget -qO- "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4) && \
+    SINGBOX_VER_STRIP="${SINGBOX_VER#v}" && \
+    wget -O /tmp/singbox.tar.gz "https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VER}/sing-box-${SINGBOX_VER_STRIP}-linux-amd64.tar.gz" && \
+    tar -xz -C /tmp -f /tmp/singbox.tar.gz && \
+    install -m 755 /tmp/sing-box-${SINGBOX_VER_STRIP}-linux-amd64/sing-box /usr/local/bin/sing-box && \
+    rm -rf /tmp/singbox.tar.gz /tmp/sing-box-* && \
+    sing-box version
+
 # Copy backend binary (frontend is already embedded via go:embed)
 COPY --from=backend-builder /zenithpanel /opt/zenithpanel/zenithpanel
 
