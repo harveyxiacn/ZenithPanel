@@ -39,12 +39,16 @@ RUN set -ex && \
     xray version
 
 # Download latest Sing-box binary (required for Hysteria2, TUIC, and alternative engine)
+# Fall back to a known-good version if the GitHub API is rate-limited (exit code 127
+# from `install` on Alpine busybox was the original failure; now use cp + chmod).
 RUN set -ex && \
     SINGBOX_VER=$(wget -qO- "https://api.github.com/repos/SagerNet/sing-box/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4) && \
+    SINGBOX_VER="${SINGBOX_VER:-v1.11.0}" && \
     SINGBOX_VER_STRIP="${SINGBOX_VER#v}" && \
     wget -O /tmp/singbox.tar.gz "https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VER}/sing-box-${SINGBOX_VER_STRIP}-linux-amd64.tar.gz" && \
-    tar -xz -C /tmp -f /tmp/singbox.tar.gz && \
-    install -m 755 /tmp/sing-box-${SINGBOX_VER_STRIP}-linux-amd64/sing-box /usr/local/bin/sing-box && \
+    tar -xzf /tmp/singbox.tar.gz -C /tmp && \
+    cp /tmp/sing-box-${SINGBOX_VER_STRIP}-linux-amd64/sing-box /usr/local/bin/sing-box && \
+    chmod 755 /usr/local/bin/sing-box && \
     rm -rf /tmp/singbox.tar.gz /tmp/sing-box-* && \
     sing-box version
 
