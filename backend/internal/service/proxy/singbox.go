@@ -323,6 +323,13 @@ func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interf
 			if alpn, ok := tlsSettings["alpn"].([]interface{}); ok {
 				tls["alpn"] = alpn
 			}
+			// TLS fingerprint → uTLS block for browser-grade fingerprinting
+			if fp, ok := tlsSettings["fingerprint"].(string); ok && fp != "" {
+				tls["utls"] = map[string]interface{}{
+					"enabled":     true,
+					"fingerprint": fp,
+				}
+			}
 		}
 		entry["tls"] = tls
 	} else if security == "reality" {
