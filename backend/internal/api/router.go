@@ -872,6 +872,177 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container removed"})
 		})
 
+		// Container logs
+		authGroup.GET("/docker/containers/:id/logs", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			id := c.Param("id")
+			if !isValidContainerID(id) {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
+				return
+			}
+			tail := c.DefaultQuery("tail", "100")
+			output, err := dm.GetContainerLogs(c.Request.Context(), id, tail)
+			if err != nil {
+				log.Printf("Docker logs error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to get logs"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": output})
+		})
+
+		// Container resource stats (one-shot)
+		authGroup.GET("/docker/containers/:id/stats", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			id := c.Param("id")
+			if !isValidContainerID(id) {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
+				return
+			}
+			stats, err := dm.GetContainerStats(c.Request.Context(), id)
+			if err != nil {
+				log.Printf("Docker stats error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to get stats"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": stats})
+		})
+
+		// Container inspect
+		authGroup.GET("/docker/containers/:id/inspect", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			id := c.Param("id")
+			if !isValidContainerID(id) {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
+				return
+			}
+			info, err := dm.InspectContainer(c.Request.Context(), id)
+			if err != nil {
+				log.Printf("Docker inspect error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to inspect container"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": info})
+		})
+
+		// Create and start a new container
+		authGroup.POST("/docker/containers/run", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			var req docker.RunContainerRequest
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid request"})
+				return
+			}
+			if req.Image == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "image is required"})
+				return
+			}
+			id, err := dm.RunContainer(c.Request.Context(), req)
+			if err != nil {
+				log.Printf("Docker run error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container started", "data": gin.H{"id": id}})
+		})
+
+		// Image list
+		authGroup.GET("/docker/images", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			images, err := dm.ListImages(c.Request.Context())
+			if err != nil {
+				log.Printf("Docker image list error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to list images"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": images})
+		})
+
+		// Pull image (synchronous; returns after pull completes)
+		authGroup.POST("/docker/images/pull", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			var body struct {
+				Image string `json:"image"`
+			}
+			if err := c.ShouldBindJSON(&body); err != nil || body.Image == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "image field required"})
+				return
+			}
+			rc, err := dm.PullImage(c.Request.Context(), body.Image)
+			if err != nil {
+				log.Printf("Docker pull error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			io.Copy(io.Discard, rc)
+			rc.Close()
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Image pulled"})
+		})
+
+		// Remove image
+		authGroup.DELETE("/docker/images/:id", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			id := c.Param("id")
+			force := c.Query("force") == "true"
+			deleted, err := dm.RemoveImage(c.Request.Context(), id, force)
+			if err != nil {
+				log.Printf("Docker image remove error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Image removed", "data": deleted})
+		})
+
+		// Volume list
+		authGroup.GET("/docker/volumes", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			vols, err := dm.ListVolumes(c.Request.Context())
+			if err != nil {
+				log.Printf("Docker volume list error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to list volumes"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": vols})
+		})
+
+		// Network list
+		authGroup.GET("/docker/networks", func(c *gin.Context) {
+			if dm == nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
+				return
+			}
+			nets, err := dm.ListNetworks(c.Request.Context())
+			if err != nil {
+				log.Printf("Docker network list error: %v", err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to list networks"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": nets})
+		})
+
 		// Terminal WebSocket
 		authGroup.GET("/terminal", terminal.HandleTerminalWebSocket)
 

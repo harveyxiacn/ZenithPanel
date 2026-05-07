@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CommandLineIcon, FolderIcon, WrenchIcon, ShieldCheckIcon, ChevronRightIcon, DocumentIcon, ArrowUpIcon, PlusIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { useAuthStore } from '@/store/auth'
-import { listContainers, startContainer, stopContainer, restartContainer, removeContainer } from '@/api/docker'
+import { listContainers, startContainer, stopContainer, restartContainer, removeContainer, listImages, pullImage, removeImage, getContainerLogs, getContainerStats, runContainer, type RunContainerRequest } from '@/api/docker'
 import { listDirectory, readFile, writeFile } from '@/api/fs'
 import { listFirewallRules, addFirewallRule, deleteFirewallRule } from '@/api/firewall'
 import { useToast } from '../composables/useToast'
@@ -140,9 +140,32 @@ async function saveFile() {
 }
 
 // ---- Docker ----
+const dockerSubTab = ref<'containers' | 'images'>('containers')
 const containers = ref<any[]>([])
+const images = ref<any[]>([])
 const dockerLoading = ref(false)
 let dockerPollTimer: ReturnType<typeof setInterval> | null = null
+
+// Logs modal
+const logsModalOpen = ref(false)
+const logsContainerName = ref('')
+const logsContent = ref('')
+const logsLoading = ref(false)
+
+// Stats inline
+const containerStats = ref<Record<string, any>>({})
+
+// Run container modal
+const runModalOpen = ref(false)
+const runLoading = ref(false)
+const runForm = ref<RunContainerRequest & { portsRaw: string; volumesRaw: string; envRaw: string }>({
+  image: '', name: '', restart_policy: 'unless-stopped', network_mode: 'bridge',
+  portsRaw: '', volumesRaw: '', envRaw: '', cmd: []
+})
+
+// Pull image
+const pullImageRef = ref('')
+const pullLoading = ref(false)
 
 async function fetchContainers() {
   try {
@@ -150,6 +173,13 @@ async function fetchContainers() {
     if (res.code === 200) containers.value = res.data || []
   } catch { toast.error(t('common.errorOccurred')) }
   dockerLoading.value = false
+}
+
+async function fetchImages() {
+  try {
+    const res = await listImages() as any
+    if (res.code === 200) images.value = res.data || []
+  } catch { toast.error(t('common.errorOccurred')) }
 }
 
 async function dockerAction(action: string, id: string) {
@@ -170,10 +200,88 @@ async function dockerAction(action: string, id: string) {
   } catch { toast.error(t('common.errorOccurred')) }
 }
 
+async function openLogs(id: string, name: string) {
+  logsContainerName.value = name
+  logsModalOpen.value = true
+  logsLoading.value = true
+  logsContent.value = ''
+  try {
+    const res = await getContainerLogs(id, 200) as any
+    logsContent.value = res.data || ''
+  } catch { logsContent.value = 'Failed to load logs.' }
+  logsLoading.value = false
+}
+
+async function toggleStats(id: string) {
+  if (containerStats.value[id]) {
+    delete containerStats.value[id]
+    return
+  }
+  try {
+    const res = await getContainerStats(id) as any
+    if (res.code === 200) containerStats.value = { ...containerStats.value, [id]: res.data }
+  } catch { toast.error(t('common.errorOccurred')) }
+}
+
+async function doRunContainer() {
+  runLoading.value = true
+  try {
+    const req: RunContainerRequest = {
+      image: runForm.value.image,
+      name: runForm.value.name || undefined,
+      restart_policy: runForm.value.restart_policy,
+      network_mode: runForm.value.network_mode,
+      ports: runForm.value.portsRaw ? runForm.value.portsRaw.split('\n').map(s => s.trim()).filter(Boolean) : undefined,
+      volumes: runForm.value.volumesRaw ? runForm.value.volumesRaw.split('\n').map(s => s.trim()).filter(Boolean) : undefined,
+      env: runForm.value.envRaw ? runForm.value.envRaw.split('\n').map(s => s.trim()).filter(Boolean) : undefined,
+    }
+    await runContainer(req)
+    toast.success('Container started')
+    runModalOpen.value = false
+    await fetchContainers()
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || t('common.errorOccurred'))
+  }
+  runLoading.value = false
+}
+
+async function doPullImage() {
+  if (!pullImageRef.value.trim()) return
+  pullLoading.value = true
+  try {
+    await pullImage(pullImageRef.value.trim())
+    toast.success('Image pulled')
+    pullImageRef.value = ''
+    await fetchImages()
+  } catch { toast.error(t('common.errorOccurred')) }
+  pullLoading.value = false
+}
+
+async function doRemoveImage(id: string) {
+  const ok = await confirmDialog({
+    title: t('common.confirm'),
+    message: 'Remove this image?',
+    confirmText: t('common.delete'),
+    variant: 'danger',
+  })
+  if (!ok) return
+  try {
+    await removeImage(id)
+    await fetchImages()
+    toast.success(t('common.deleted'))
+  } catch { toast.error(t('common.errorOccurred')) }
+}
+
 function containerStatus(state: string) {
-  if (state === 'running') return { text: t('servers.docker.running'), class: 'bg-emerald-100 text-emerald-800' }
-  if (state === 'exited') return { text: t('servers.docker.exited'), class: 'bg-rose-100 text-rose-800' }
-  return { text: state, class: 'bg-amber-100 text-amber-800' }
+  if (state === 'running') return { text: t('servers.docker.running'), class: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' }
+  if (state === 'exited') return { text: t('servers.docker.exited'), class: 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200' }
+  return { text: state, class: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200' }
+}
+
+function formatImageSize(size: number) {
+  if (!size) return '—'
+  const mb = size / 1024 / 1024
+  return mb > 1000 ? (mb / 1024).toFixed(1) + ' GB' : mb.toFixed(0) + ' MB'
 }
 
 // ---- Firewall ----
@@ -221,6 +329,7 @@ onMounted(() => {
   if (activeTab.value === 'terminal') nextTick(() => connectTerminal())
   dockerLoading.value = true
   fetchContainers()
+  fetchImages()
   dockerPollTimer = setInterval(fetchContainers, 10000)
 })
 
@@ -345,45 +454,116 @@ watch(activeTab, (tab) => {
         </div>
       </div>
 
-      <!-- Docker Containers -->
+      <!-- Docker Containers & Images -->
       <div v-else-if="activeTab === 'docker'" class="p-6">
-        <div class="flex justify-between items-center mb-6">
-          <h3 class="text-lg font-medium text-slate-800">{{ $t('servers.docker.title') }}</h3>
-          <button @click="fetchContainers" class="text-sm text-slate-500 hover:text-slate-700 px-3 py-1 border rounded-lg">{{ $t('common.refresh') }}</button>
+        <!-- Sub-tabs -->
+        <div class="flex items-center justify-between mb-4">
+          <div class="flex gap-2">
+            <button @click="dockerSubTab = 'containers'"
+              :class="dockerSubTab === 'containers' ? 'bg-primary-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+              class="px-4 py-1.5 rounded-lg text-sm font-medium transition">
+              Containers
+            </button>
+            <button @click="dockerSubTab = 'images'; fetchImages()"
+              :class="dockerSubTab === 'images' ? 'bg-primary-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'"
+              class="px-4 py-1.5 rounded-lg text-sm font-medium transition">
+              Images
+            </button>
+          </div>
+          <div class="flex gap-2">
+            <button v-if="dockerSubTab === 'containers'" @click="runModalOpen = true"
+              class="text-sm bg-primary-600 text-white px-3 py-1.5 rounded-lg hover:bg-primary-700 flex items-center gap-1">
+              <PlusIcon class="h-4 w-4" /> Run
+            </button>
+            <button @click="fetchContainers(); fetchImages()"
+              class="text-sm text-slate-500 hover:text-slate-700 px-3 py-1 border rounded-lg">
+              {{ $t('common.refresh') }}
+            </button>
+          </div>
         </div>
 
-        <div v-if="dockerLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('servers.docker.loadingContainers') }}</div>
+        <!-- Containers sub-tab -->
+        <template v-if="dockerSubTab === 'containers'">
+          <div v-if="dockerLoading" class="text-sm text-slate-400 text-center py-12">{{ $t('servers.docker.loadingContainers') }}</div>
+          <table v-else class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead>
+              <tr>
+                <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('servers.docker.container') }}</th>
+                <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('servers.docker.image') }}</th>
+                <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('servers.docker.status') }}</th>
+                <th class="py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('common.actions') }}</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+              <template v-for="c in containers" :key="c.Id">
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                  <td class="py-3 text-sm font-medium text-slate-900 dark:text-slate-100">{{ (c.Names || [])[0]?.replace(/^\//, '') || c.Id?.slice(0, 12) }}</td>
+                  <td class="py-3 text-sm text-slate-500 dark:text-slate-400 max-w-[200px] truncate">{{ c.Image }}</td>
+                  <td class="py-3">
+                    <span :class="[containerStatus(c.State).class, 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full']">
+                      {{ containerStatus(c.State).text }}
+                    </span>
+                  </td>
+                  <td class="py-3 text-right text-sm space-x-1">
+                    <button @click="toggleStats(c.Id)" class="text-slate-500 hover:text-slate-700 text-xs border px-2 py-0.5 rounded">
+                      {{ containerStats[c.Id] ? '▲' : 'Stats' }}
+                    </button>
+                    <button @click="openLogs(c.Id, (c.Names || [])[0]?.replace(/^\//, '') || c.Id?.slice(0, 12))" class="text-sky-600 hover:text-sky-800 text-xs">Logs</button>
+                    <button v-if="c.State !== 'running'" @click="dockerAction('start', c.Id)" class="text-emerald-600 hover:text-emerald-800 text-xs">{{ $t('servers.docker.start') }}</button>
+                    <button v-if="c.State === 'running'" @click="dockerAction('stop', c.Id)" class="text-amber-600 hover:text-amber-800 text-xs">{{ $t('servers.docker.stop') }}</button>
+                    <button v-if="c.State === 'running'" @click="dockerAction('restart', c.Id)" class="text-indigo-600 hover:text-indigo-800 text-xs">{{ $t('servers.docker.restart') }}</button>
+                    <button @click="dockerAction('remove', c.Id)" class="text-rose-600 hover:text-rose-800 text-xs">{{ $t('servers.docker.remove') }}</button>
+                  </td>
+                </tr>
+                <!-- Stats inline row -->
+                <tr v-if="containerStats[c.Id]" :key="c.Id + '-stats'" class="bg-slate-50 dark:bg-slate-800/30">
+                  <td colspan="4" class="px-4 py-2 text-xs text-slate-500 flex gap-6">
+                    <span>CPU: <strong>{{ containerStats[c.Id].cpu_percent?.toFixed(1) }}%</strong></span>
+                    <span>Memory: <strong>{{ containerStats[c.Id].memory_usage_mb?.toFixed(0) }} MB</strong> / {{ containerStats[c.Id].memory_limit_mb?.toFixed(0) }} MB</span>
+                  </td>
+                </tr>
+              </template>
+              <tr v-if="containers.length === 0">
+                <td colspan="4" class="py-8 text-center text-sm text-slate-400">{{ $t('servers.docker.noContainers') }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </template>
 
-        <table v-else class="min-w-full divide-y divide-slate-200">
-          <thead>
-            <tr>
-              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('servers.docker.container') }}</th>
-              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('servers.docker.image') }}</th>
-              <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('servers.docker.status') }}</th>
-              <th class="py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">{{ $t('common.actions') }}</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-200">
-            <tr v-for="c in containers" :key="c.Id" class="hover:bg-slate-50">
-              <td class="py-4 whitespace-nowrap text-sm font-medium text-slate-900">{{ (c.Names || [])[0]?.replace(/^\//, '') || c.Id?.slice(0, 12) }}</td>
-              <td class="py-4 whitespace-nowrap text-sm text-slate-500">{{ c.Image }}</td>
-              <td class="py-4 whitespace-nowrap">
-                <span :class="[containerStatus(c.State).class, 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full']">
-                  {{ containerStatus(c.State).text }}
-                </span>
-              </td>
-              <td class="py-4 whitespace-nowrap text-right text-sm space-x-2">
-                <button v-if="c.State !== 'running'" @click="dockerAction('start', c.Id)" class="text-emerald-600 hover:text-emerald-800">{{ $t('servers.docker.start') }}</button>
-                <button v-if="c.State === 'running'" @click="dockerAction('stop', c.Id)" class="text-amber-600 hover:text-amber-800">{{ $t('servers.docker.stop') }}</button>
-                <button v-if="c.State === 'running'" @click="dockerAction('restart', c.Id)" class="text-sky-600 hover:text-sky-800">{{ $t('servers.docker.restart') }}</button>
-                <button @click="dockerAction('remove', c.Id)" class="text-rose-600 hover:text-rose-800">{{ $t('servers.docker.remove') }}</button>
-              </td>
-            </tr>
-            <tr v-if="containers.length === 0">
-              <td colspan="4" class="py-8 text-center text-sm text-slate-400">{{ $t('servers.docker.noContainers') }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <!-- Images sub-tab -->
+        <template v-else-if="dockerSubTab === 'images'">
+          <div class="flex gap-2 mb-4">
+            <input v-model="pullImageRef" placeholder="nginx:latest" class="input-field text-sm flex-1" @keyup.enter="doPullImage" />
+            <button @click="doPullImage" :disabled="pullLoading" class="bg-primary-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-primary-700 disabled:opacity-50">
+              {{ pullLoading ? 'Pulling…' : 'Pull' }}
+            </button>
+          </div>
+          <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <thead>
+              <tr>
+                <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">Repository</th>
+                <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">Tag</th>
+                <th class="py-3 text-left text-xs font-medium text-slate-500 uppercase">Size</th>
+                <th class="py-3 text-right text-xs font-medium text-slate-500 uppercase">{{ $t('common.actions') }}</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+              <tr v-for="img in images" :key="img.Id" class="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                <td class="py-3 text-sm text-slate-800 dark:text-slate-200 max-w-[240px] truncate">
+                  {{ (img.RepoTags || ['&lt;none&gt;'])[0]?.split(':')[0] }}
+                </td>
+                <td class="py-3 text-sm text-slate-500 dark:text-slate-400">{{ (img.RepoTags || ['&lt;none&gt;:none'])[0]?.split(':')[1] }}</td>
+                <td class="py-3 text-sm text-slate-500 dark:text-slate-400">{{ formatImageSize(img.Size) }}</td>
+                <td class="py-3 text-right">
+                  <button @click="doRemoveImage(img.Id)" class="text-rose-600 hover:text-rose-800 text-xs">{{ $t('servers.docker.remove') }}</button>
+                </td>
+              </tr>
+              <tr v-if="images.length === 0">
+                <td colspan="4" class="py-8 text-center text-sm text-slate-400">No images</td>
+              </tr>
+            </tbody>
+          </table>
+        </template>
       </div>
 
       <!-- Firewall -->
@@ -450,6 +630,81 @@ watch(activeTab, (tab) => {
 
     </div>
   </div>
+
+  <!-- Logs modal -->
+  <Teleport to="body">
+    <div v-if="logsModalOpen" class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+      <div class="bg-white dark:bg-slate-900 rounded-xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col">
+        <div class="flex items-center justify-between px-5 py-3 border-b border-slate-200 dark:border-slate-700">
+          <span class="font-medium text-slate-800 dark:text-slate-100 text-sm">Logs: {{ logsContainerName }}</span>
+          <button @click="logsModalOpen = false" class="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+        </div>
+        <div class="flex-1 overflow-auto p-4 bg-slate-950 rounded-b-xl">
+          <div v-if="logsLoading" class="text-slate-400 text-sm text-center py-8">Loading…</div>
+          <pre v-else class="text-xs text-green-300 font-mono whitespace-pre-wrap break-all">{{ logsContent }}</pre>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
+  <!-- Run container modal -->
+  <Teleport to="body">
+    <div v-if="runModalOpen" class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+      <div class="bg-white dark:bg-slate-900 rounded-xl shadow-2xl w-full max-w-lg">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-700">
+          <span class="font-semibold text-slate-800 dark:text-slate-100">Run Container</span>
+          <button @click="runModalOpen = false" class="text-slate-400 hover:text-slate-600 text-lg">✕</button>
+        </div>
+        <div class="p-5 space-y-3">
+          <div>
+            <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Image *</label>
+            <input v-model="runForm.image" placeholder="nginx:latest" class="input-field text-sm mt-1 w-full" />
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Container Name</label>
+            <input v-model="runForm.name" placeholder="my-nginx" class="input-field text-sm mt-1 w-full" />
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Restart Policy</label>
+              <select v-model="runForm.restart_policy" class="input-field text-sm mt-1 w-full">
+                <option value="no">no</option>
+                <option value="always">always</option>
+                <option value="unless-stopped">unless-stopped</option>
+                <option value="on-failure">on-failure</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Network</label>
+              <select v-model="runForm.network_mode" class="input-field text-sm mt-1 w-full">
+                <option value="bridge">bridge</option>
+                <option value="host">host</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Port Mappings (one per line: 8080:80/tcp)</label>
+            <textarea v-model="runForm.portsRaw" rows="2" class="input-field text-sm mt-1 w-full font-mono" />
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Volumes (one per line: /host:/container)</label>
+            <textarea v-model="runForm.volumesRaw" rows="2" class="input-field text-sm mt-1 w-full font-mono" />
+          </div>
+          <div>
+            <label class="text-xs font-medium text-slate-600 dark:text-slate-400">Environment Variables (one per line: KEY=VALUE)</label>
+            <textarea v-model="runForm.envRaw" rows="2" class="input-field text-sm mt-1 w-full font-mono" />
+          </div>
+        </div>
+        <div class="px-5 py-4 border-t border-slate-200 dark:border-slate-700 flex justify-end gap-3">
+          <button @click="runModalOpen = false" class="text-sm text-slate-600 hover:text-slate-800 px-4 py-2 border rounded-lg">Cancel</button>
+          <button @click="doRunContainer" :disabled="runLoading || !runForm.image"
+            class="text-sm bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 disabled:opacity-50">
+            {{ runLoading ? 'Starting…' : 'Run' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <script lang="ts">
