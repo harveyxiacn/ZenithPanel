@@ -25,8 +25,9 @@ backend/tmp/
 backend/*.exe
 backend/*.test
 
-# Scripts
+# Scripts (exclude all except vps_check.sh which is packaged into the runtime image)
 scripts/
+!scripts/vps_check.sh
 
 # CI/CD
 .github/
