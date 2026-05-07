@@ -1546,6 +1546,26 @@ onMounted(() => {
               <td class="px-6 py-4 text-sm text-slate-500">
                 <div>↑ {{ formatTraffic(user.up_load) }} / ↓ {{ formatTraffic(user.down_load) }}</div>
                 <div class="text-xs text-slate-400">{{ $t('proxy.clients.trafficLimit') }}: {{ user.total ? formatTraffic(user.total) : $t('proxy.clients.unlimited') }}</div>
+                <template v-if="user.total > 0">
+                  <div class="mt-1 h-1.5 w-32 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                    <div
+                      class="h-full rounded-full transition-all"
+                      :class="{
+                        'bg-green-500': (user.up_load + user.down_load) / user.total < 0.7,
+                        'bg-amber-400': (user.up_load + user.down_load) / user.total >= 0.7 && (user.up_load + user.down_load) / user.total < 0.9,
+                        'bg-red-500': (user.up_load + user.down_load) / user.total >= 0.9
+                      }"
+                      :style="{ width: Math.min(((user.up_load + user.down_load) / user.total) * 100, 100) + '%' }"
+                    ></div>
+                  </div>
+                  <div class="text-xs mt-0.5"
+                    :class="{
+                      'text-green-600 dark:text-green-400': (user.up_load + user.down_load) / user.total < 0.7,
+                      'text-amber-600 dark:text-amber-400': (user.up_load + user.down_load) / user.total >= 0.7 && (user.up_load + user.down_load) / user.total < 0.9,
+                      'text-red-600 dark:text-red-400': (user.up_load + user.down_load) / user.total >= 0.9
+                    }"
+                  >{{ Math.min(Math.round(((user.up_load + user.down_load) / user.total) * 100), 100) }}%</div>
+                </template>
               </td>
               <td class="px-6 py-4">
                 <span :class="[user.enable ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-800', 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full']">
