@@ -399,6 +399,9 @@ func GenerateSubscription(c *gin.Context) {
 
 	userInfo := fmt.Sprintf("upload=%d; download=%d; total=%d",
 		client.UpLoad, client.DownLoad, client.Total)
+	if client.ExpiryTime > 0 {
+		userInfo += fmt.Sprintf("; expire=%d", client.ExpiryTime)
+	}
 
 	var body, contentType string
 	if format == "clash" {

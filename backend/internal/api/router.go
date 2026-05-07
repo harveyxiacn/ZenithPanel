@@ -352,6 +352,28 @@ func validateInbound(target model.Inbound) string {
 	if strings.TrimSpace(target.ServerAddress) == "" && !inboundHasDerivedPublicHost(target.Stream) {
 		return "Fill 'Public Host / IP' or a stream host (TLS serverName, WebSocket Host, HTTP/2 host, or HTTPUpgrade host) — clients need this to reach the proxy."
 	}
+	// Trojan requires TLS or Reality — validate early so Sing-box doesn't crash on start.
+	if target.Protocol == "trojan" {
+		if msg := validateTrojanTLS(target.Stream); msg != "" {
+			return msg
+		}
+	}
+	return ""
+}
+
+// validateTrojanTLS checks that a Trojan inbound has TLS or Reality stream security.
+func validateTrojanTLS(streamJSON string) string {
+	if streamJSON == "" || streamJSON == "{}" {
+		return "Trojan inbound requires TLS or Reality stream security (stream is not configured)"
+	}
+	var stream map[string]interface{}
+	if err := json.Unmarshal([]byte(streamJSON), &stream); err != nil {
+		return "Trojan inbound has invalid stream JSON"
+	}
+	sec, _ := stream["security"].(string)
+	if sec != "tls" && sec != "reality" {
+		return fmt.Sprintf("Trojan inbound requires TLS or Reality security, got %q", sec)
+	}
 	return ""
 }
 
@@ -1506,6 +1528,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					if e := xm.LastError(); e != "" {
 						data["xray_last_error"] = e
 					}
+				} else {
+					if skipped := xm.SkippedProtocols(); len(skipped) > 0 {
+						data["xray_skipped_protocols"] = skipped
+					}
 				}
 				if !sm.Status() {
 					if e := sm.LastError(); e != "" {
@@ -1524,6 +1550,12 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 				switch engine {
 				case "", "xray":
+					// Stop Sing-box first to free any ports it holds before Xray binds them.
+					if sm.Status() {
+						if err := sm.Stop(); err != nil {
+							log.Printf("Sing-box stop (before Xray start): %v", err)
+						}
+					}
 					if err := xm.Restart(); err != nil {
 						log.Printf("Xray apply error: %v", err)
 						c.JSON(http.StatusInternalServerError, gin.H{
@@ -1538,11 +1570,18 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 							len(skipped), strings.Join(skipped, ", "))
 					}
 					c.JSON(http.StatusOK, gin.H{
-						"code": 200,
-						"msg":  msg,
+						"code":              200,
+						"msg":               msg,
+						"skipped_protocols": xm.SkippedProtocols(),
 					})
 					recordAudit(c, "proxy.apply", engine)
 				case "singbox", "sing-box":
+					// Stop Xray first to free any ports it holds before Sing-box binds them.
+					if xm.Status() {
+						if err := xm.Stop(); err != nil {
+							log.Printf("Xray stop (before Sing-box start): %v", err)
+						}
+					}
 					if err := sm.Restart(); err != nil {
 						log.Printf("Sing-box apply error: %v", err)
 						c.JSON(http.StatusInternalServerError, gin.H{

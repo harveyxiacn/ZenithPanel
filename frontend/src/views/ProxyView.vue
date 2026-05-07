@@ -27,7 +27,13 @@ const proxyStatus = ref({
   enabled_inbounds: 0,
   enabled_clients: 0,
   enabled_rules: 0,
+  xray_skipped_protocols: [] as string[],
 })
+
+// Track which engine the user wants to apply. Defaults to singbox when the
+// inbound list contains Hysteria2/TUIC (Xray-only engines skip those).
+const singboxOnlyProtocols = new Set(['hysteria2', 'tuic'])
+const selectedEngine = ref<'xray' | 'singbox'>('xray')
 
 // Sync sidebar highlight: switching tabs updates the route so the
 // left nav correctly highlights "Proxy Nodes" vs "Users & Subs".
@@ -126,10 +132,10 @@ async function applyConfig() {
   applyMessage.value = ''
   applyMessageTone.value = ''
   try {
-    const res = await applyProxyConfig('xray') as any
-    setApplyFeedback(res?.msg || 'Xray configuration applied successfully', 'success')
+    const res = await applyProxyConfig(selectedEngine.value) as any
+    setApplyFeedback(res?.msg || `${selectedEngine.value === 'singbox' ? 'Sing-box' : 'Xray'} configuration applied successfully`, 'success')
   } catch (e: any) {
-    const message = e?.response?.data?.msg || e?.message || 'Failed to apply Xray configuration'
+    const message = e?.response?.data?.msg || e?.message || 'Failed to apply configuration'
     setApplyFeedback(message, 'error')
     toast.error(message)
   }
@@ -147,9 +153,24 @@ async function loadProxyStatus() {
         enabled_inbounds: Number(res.data.enabled_inbounds || 0),
         enabled_clients: Number(res.data.enabled_clients || 0),
         enabled_rules: Number(res.data.enabled_rules || 0),
+        xray_skipped_protocols: Array.isArray(res.data.xray_skipped_protocols) ? res.data.xray_skipped_protocols : [],
       }
+      // Sync the radio selector to whichever engine is actually running.
+      // This ensures the selector reflects reality after a page refresh.
+      if (res.data.singbox_running) selectedEngine.value = 'singbox'
+      else if (res.data.xray_running) selectedEngine.value = 'xray'
     }
   } catch { toast.error(t('common.errorOccurred')) }
+}
+
+// Auto-recommend Sing-box when inbounds contain Hysteria2/TUIC and neither engine
+// is currently running (so we don't override an already-running engine choice).
+function autoSelectEngine() {
+  const neitherRunning = !proxyStatus.value.xray_running && !proxyStatus.value.singbox_running
+  if (neitherRunning) {
+    const hasSingboxOnly = inbounds.value.some((ib: any) => singboxOnlyProtocols.has(ib.protocol))
+    if (hasSingboxOnly) selectedEngine.value = 'singbox'
+  }
 }
 
 function parseJsonToVisual(settingsStr: string, streamStr: string) {
@@ -275,7 +296,10 @@ async function fetchInbounds() {
   inboundsLoading.value = true
   try {
     const res = await listInbounds() as any
-    if (res.code === 200) inbounds.value = res.data || []
+    if (res.code === 200) {
+      inbounds.value = res.data || []
+      autoSelectEngine()
+    }
   } catch { toast.error(t('common.errorOccurred')) }
   inboundsLoading.value = false
 }
@@ -1013,11 +1037,19 @@ onMounted(() => {
         <h1 class="text-3xl font-bold text-slate-800 tracking-tight">{{ $t('proxy.title') }}</h1>
         <p class="text-slate-500 mt-1">{{ $t('proxy.subtitle') }}</p>
         <div class="mt-3 flex flex-wrap gap-2 text-xs">
+          <!-- Xray engine status badge -->
           <span :class="[
             'inline-flex items-center rounded-full px-2.5 py-1 font-medium',
             proxyStatus.xray_running ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
           ]">
             {{ proxyStatus.xray_running ? $t('proxy.status.xrayRunning') : $t('proxy.status.xrayStopped') }}
+          </span>
+          <!-- Sing-box engine status badge -->
+          <span :class="[
+            'inline-flex items-center rounded-full px-2.5 py-1 font-medium',
+            proxyStatus.singbox_running ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-500'
+          ]">
+            {{ proxyStatus.singbox_running ? 'Sing-box ●' : 'Sing-box ○' }}
           </span>
           <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-600">
             {{ $t('proxy.status.nodes', { n: proxyStatus.enabled_inbounds }) }}
@@ -1028,10 +1060,44 @@ onMounted(() => {
           <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-600">
             {{ $t('proxy.status.rules', { n: proxyStatus.enabled_rules }) }}
           </span>
+          <!-- Skipped protocol warning -->
+          <span
+            v-if="proxyStatus.xray_skipped_protocols.length > 0"
+            class="inline-flex items-center rounded-full bg-amber-100 text-amber-700 px-2.5 py-1 font-medium"
+            :title="`Xray 跳过了这些协议（需切换至 Sing-box 引擎）：${proxyStatus.xray_skipped_protocols.join(', ')}`"
+          >
+            ⚠ {{ proxyStatus.xray_skipped_protocols.length }} 协议被跳过
+          </span>
         </div>
       </div>
       <div class="flex items-start gap-3">
         <div class="flex flex-col items-end gap-2">
+          <!-- Engine selector -->
+          <div class="flex rounded-xl overflow-hidden border border-slate-200 dark:border-slate-600 text-xs font-medium">
+            <button
+              @click="selectedEngine = 'xray'"
+              :class="[
+                'px-3 py-2 transition-colors',
+                selectedEngine === 'xray'
+                  ? 'bg-emerald-500 text-white'
+                  : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
+              ]"
+            >Xray</button>
+            <button
+              @click="selectedEngine = 'singbox'"
+              :class="[
+                'px-3 py-2 border-l border-slate-200 dark:border-slate-600 transition-colors',
+                selectedEngine === 'singbox'
+                  ? 'bg-sky-500 text-white'
+                  : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
+              ]"
+            >Sing-box</button>
+          </div>
+          <!-- Sing-box-only hint when Xray is selected but config has Hy2/TUIC -->
+          <p
+            v-if="selectedEngine === 'xray' && inbounds.some((ib: any) => singboxOnlyProtocols.has(ib.protocol))"
+            class="text-amber-600 text-xs text-right max-w-[200px]"
+          >⚠ 配置中含有 Hysteria2/TUIC，建议切换至 Sing-box</p>
           <button
             @click="runConnectionTest"
             :disabled="testLoading"
@@ -1319,6 +1385,12 @@ onMounted(() => {
                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                   {{ (node.protocol || '').toUpperCase() }}
                 </span>
+                <!-- Engine badge: orange for Sing-box-only, grey for universal -->
+                <span
+                  v-if="singboxOnlyProtocols.has(node.protocol)"
+                  class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700"
+                  title="此协议仅 Sing-box 支持，使用 Sing-box 引擎运行"
+                >Sing-box only</span>
               </td>
               <td class="px-6 py-4 text-sm text-slate-500">{{ node.port }}</td>
               <td class="px-6 py-4 text-sm text-slate-500">{{ parseTransport(node.stream) }}</td>

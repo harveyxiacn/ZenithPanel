@@ -174,13 +174,25 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		entry["users"] = users
 
 	case "shadowsocks":
-		// Shadowsocks uses method + password from settings
+		// Shadowsocks uses method + password from settings.
+		// AEAD-2022 methods support per-user multi-user via a "users" array in sing-box.
 		if settingsRaw != nil {
-			if method, ok := settingsRaw["method"].(string); ok {
+			method, _ := settingsRaw["method"].(string)
+			if method != "" {
 				entry["method"] = method
 			}
 			if password, ok := settingsRaw["password"].(string); ok {
 				entry["password"] = password
+			}
+			if strings.HasPrefix(method, "2022-blake3") && len(clients) > 0 {
+				users := make([]map[string]interface{}, 0, len(clients))
+				for _, c := range clients {
+					users = append(users, map[string]interface{}{
+						"name":     c.Email,
+						"password": c.UUID,
+					})
+				}
+				entry["users"] = users
 			}
 		}
 
@@ -259,7 +271,18 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		if err := json.Unmarshal([]byte(in.Stream), &stream); err != nil {
 			return nil, fmt.Errorf("parse stream: %w", err)
 		}
+		// Trojan requires TLS in sing-box; reject early rather than letting sing-box
+		// refuse to start (which would take the entire engine down).
+		if in.Protocol == "trojan" {
+			sec, _ := stream["security"].(string)
+			if sec != "tls" && sec != "reality" {
+				return nil, fmt.Errorf("trojan inbound %q requires TLS or Reality security (got %q) — "+
+					"set stream security to 'tls' or 'reality'", in.Tag, sec)
+			}
+		}
 		applyStreamToSingbox(entry, stream)
+	} else if in.Protocol == "trojan" {
+		return nil, fmt.Errorf("trojan inbound %q requires TLS or Reality stream settings", in.Tag)
 	}
 
 	return entry, nil

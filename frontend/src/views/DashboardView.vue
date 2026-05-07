@@ -174,6 +174,22 @@ const dashboardActions = computed(() => {
 const primaryDashboardAction = computed(() => dashboardActions.value[0] ?? null)
 const secondaryDashboardActions = computed(() => dashboardActions.value.slice(1))
 
+// Rolling 60-sample (5-min) history for the traffic sparkline
+const SPARKLINE_MAX = 60
+const netInHistory = ref<number[]>([])
+const netOutHistory = ref<number[]>([])
+
+function sparklinePath(data: number[], width = 120, height = 32): string {
+  if (data.length < 2) return ''
+  const max = Math.max(...data, 1)
+  const step = width / (data.length - 1)
+  return data.map((v, i) => {
+    const x = i * step
+    const y = height - (v / max) * height
+    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+}
+
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let lastNetIn = 0
 let lastNetOut = 0
@@ -201,6 +217,9 @@ async function fetchStats() {
         if (elapsed > 0) {
           netIn.value = Math.max(0, Math.round((rawIn - lastNetIn) / elapsed))
           netOut.value = Math.max(0, Math.round((rawOut - lastNetOut) / elapsed))
+          // Append to sparkline history (keep last SPARKLINE_MAX points)
+          netInHistory.value = [...netInHistory.value.slice(-(SPARKLINE_MAX - 1)), netIn.value]
+          netOutHistory.value = [...netOutHistory.value.slice(-(SPARKLINE_MAX - 1)), netOut.value]
         }
       }
       lastNetIn = rawIn
@@ -353,6 +372,37 @@ onUnmounted(() => {
             <p v-if="card.detail" class="text-xs text-slate-400 dark:text-slate-500">{{ card.detail }}</p>
           </div>
         </div>
+        <!-- Traffic sparkline — only shown on the network card -->
+        <template v-if="card.id === 'network' && netInHistory.length > 1">
+          <div class="mt-3 relative overflow-hidden rounded-lg" style="height:36px">
+            <svg viewBox="0 0 120 32" preserveAspectRatio="none" class="w-full h-full" aria-hidden="true">
+              <!-- Download (in) — emerald fill -->
+              <path
+                :d="sparklinePath(netInHistory) + ' L120,32 L0,32 Z'"
+                fill="rgba(16,185,129,0.15)"
+              />
+              <path
+                :d="sparklinePath(netInHistory)"
+                fill="none"
+                stroke="rgba(16,185,129,0.8)"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+              <!-- Upload (out) — sky -->
+              <path
+                :d="sparklinePath(netOutHistory)"
+                fill="none"
+                stroke="rgba(14,165,233,0.7)"
+                stroke-width="1"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-dasharray="3 2"
+              />
+            </svg>
+            <p class="absolute bottom-0.5 right-1 text-[9px] text-slate-400 leading-none">5 min</p>
+          </div>
+        </template>
       </div>
     </div>
 

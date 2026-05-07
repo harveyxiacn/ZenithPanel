@@ -181,19 +181,19 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]inte
 		}
 
 	case "shadowsocks":
-		// Shadowsocks uses a single password, clients share it or use AEAD 2022 multi-user
-		// Keep existing settings (method, password) as-is
-
-	case "hysteria2":
-		if len(clients) > 0 {
-			clientList := []map[string]interface{}{}
-			for _, c := range clients {
-				clientList = append(clientList, map[string]interface{}{
-					"password": c.UUID,
-					"email":    c.Email,
-				})
+		// AEAD-2022 methods support per-user multi-user mode in Xray.
+		// Classic methods use a single shared password; keep settings as-is.
+		if method, ok := settings["method"].(string); ok && strings.HasPrefix(method, "2022-blake3") {
+			if len(clients) > 0 {
+				clientList := []map[string]interface{}{}
+				for _, c := range clients {
+					clientList = append(clientList, map[string]interface{}{
+						"password": c.UUID,
+						"email":    c.Email,
+					})
+				}
+				settings["clients"] = clientList
 			}
-			settings["clients"] = clientList
 		}
 	}
 
