@@ -118,6 +118,21 @@ onMounted(() => {
           />
           {{ item.name }}
         </router-link>
+
+        <!-- Sites — always visible regardless of usage profile -->
+        <router-link
+          to="/sites"
+          @click="handleNavClick"
+          class="flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-300 group"
+          :class="[$route.path.startsWith('/sites') ? 'bg-primary-600/10 text-primary-400' : 'text-slate-400 hover:bg-slate-800 hover:text-white']"
+        >
+          <GlobeAltIcon
+            class="mr-3 h-5 w-5 transition-transform duration-300 group-hover:scale-110"
+            :class="[$route.path.startsWith('/sites') ? 'text-primary-400' : 'text-slate-500 group-hover:text-white']"
+            aria-hidden="true"
+          />
+          Sites
+        </router-link>
       </div>
 
       <div class="p-4 border-t border-slate-800 space-y-1">

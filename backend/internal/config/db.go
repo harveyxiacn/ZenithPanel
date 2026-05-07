@@ -59,6 +59,11 @@ func InitDB(dbPath string) {
 		log.Printf("Warning: failed to migrate Outbound table: %v", err)
 	}
 
+	// Site table (Phase J). Non-fatal for backwards compat with older DBs.
+	if err := database.AutoMigrate(&model.Site{}); err != nil {
+		log.Printf("Warning: failed to migrate Site table: %v", err)
+	}
+
 	DB = database
 	log.Println("Database initialized and migrated successfully")
 }
