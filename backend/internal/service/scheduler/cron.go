@@ -1,9 +1,11 @@
 package scheduler
 
 import (
+	"context"
 	"log"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
@@ -45,11 +47,9 @@ func (s *Scheduler) LoadFromDB() error {
 	}
 	for _, job := range jobs {
 		cmd := job.Command
+		timeout := job.Timeout
 		entryID, err := s.cron.AddFunc(job.Schedule, func() {
-			out, err := exec.Command("bash", "-c", cmd).CombinedOutput()
-			if err != nil {
-				log.Printf("Cron job error: %v, output: %s", err, string(out))
-			}
+			runCronCommand(cmd, timeout)
 		})
 		if err != nil {
 			log.Printf("Failed to load cron job %d (%s): %v", job.ID, job.Name, err)
@@ -85,11 +85,9 @@ func (s *Scheduler) AddJob(job model.CronJob) (uint, error) {
 
 	if job.Enable {
 		cmd := job.Command
+		timeout := job.Timeout
 		entryID, err := s.cron.AddFunc(job.Schedule, func() {
-			out, err := exec.Command("bash", "-c", cmd).CombinedOutput()
-			if err != nil {
-				log.Printf("Cron job error: %v, output: %s", err, string(out))
-			}
+			runCronCommand(cmd, timeout)
 		})
 		if err != nil {
 			// Validate already ran; this would be an unexpected scheduler failure.
@@ -122,4 +120,21 @@ func (s *Scheduler) ListJobs() ([]model.CronJob, error) {
 		return nil, err
 	}
 	return jobs, nil
+}
+
+// runCronCommand executes a bash command with an optional timeout (seconds).
+// A timeout of 0 means no limit.
+func runCronCommand(cmd string, timeoutSec int) {
+	var execCmd *exec.Cmd
+	if timeoutSec > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+		defer cancel()
+		execCmd = exec.CommandContext(ctx, "bash", "-c", cmd)
+	} else {
+		execCmd = exec.Command("bash", "-c", cmd)
+	}
+	out, err := execCmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Cron job error: %v, output: %s", err, string(out))
+	}
 }

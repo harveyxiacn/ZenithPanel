@@ -94,3 +94,27 @@ export function deleteOutbound(id: number) {
 export function fetchWARPConfig(accountId: string, token: string) {
   return apiClient.post('/v1/outbounds/warp/fetch', { account_id: accountId, token })
 }
+
+// ─── Bulk Client Operations ──────────────────────────────────────────────────
+
+export function bulkClientAction(action: string, ids: number[]) {
+  return apiClient.post('/v1/clients/bulk', { action, ids })
+}
+
+// ─── Clash API (real-time connections) ───────────────────────────────────────
+
+export function getActiveConnections() {
+  return apiClient.get('/v1/proxy/connections')
+}
+
+export function getClashApiStatus() {
+  return apiClient.get('/v1/proxy/clash-api/status')
+}
+
+export function enableClashApi() {
+  return apiClient.post('/v1/proxy/clash-api/enable')
+}
+
+export function disableClashApi() {
+  return apiClient.post('/v1/proxy/clash-api/disable')
+}

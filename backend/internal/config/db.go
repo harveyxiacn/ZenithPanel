@@ -64,6 +64,11 @@ func InitDB(dbPath string) {
 		log.Printf("Warning: failed to migrate Site table: %v", err)
 	}
 
+	// NetworkMetric table for persistent hourly history. Non-fatal.
+	if err := database.AutoMigrate(&model.NetworkMetric{}); err != nil {
+		log.Printf("Warning: failed to migrate NetworkMetric table: %v", err)
+	}
+
 	DB = database
 	log.Println("Database initialized and migrated successfully")
 }

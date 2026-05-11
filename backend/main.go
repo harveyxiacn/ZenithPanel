@@ -19,9 +19,11 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/docker"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/monitor"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/notify"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/webserver"
 )
 
@@ -100,6 +102,60 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			notify.RunClientChecks(config.DB)
+			notify.RunCertCheck(config.DB)
+		}
+	}()
+
+	// 5c. Daily traffic reset goroutine (runs just after midnight local time).
+	// Resets up_load/down_load for clients whose reset_day matches today.
+	go func() {
+		for {
+			now := time.Now()
+			next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 1, 0, 0, now.Location())
+			time.Sleep(time.Until(next))
+			if affected := proxy.RunDailyTrafficReset(config.DB); affected > 0 {
+				sub.InvalidateSubCache()
+			}
+		}
+	}()
+
+	// 5d. Hourly network-history persistence goroutine. Snapshots the current
+	// network sample into the NetworkMetric table so the dashboard graph
+	// survives panel restarts. Older-than-30-days rows are pruned in-place.
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			monitor.PersistHourlySnapshot(config.DB)
+		}
+	}()
+
+	// 5e. Telegram bot lifecycle: watches the enable flag every 30s and
+	// starts/stops the long-polling goroutine accordingly. Splitting the
+	// lifecycle from the bot itself keeps the panel responsive to settings
+	// changes without requiring a restart.
+	go func() {
+		var current *notify.BotPoller
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		// Run an initial check immediately so the bot starts without a 30s delay.
+		check := func() {
+			enabled := config.GetSetting("notify_telegram_bot_enabled") == "true"
+			token := config.GetSetting("notify_telegram_token")
+			chatID := config.GetSetting("notify_telegram_chat_id")
+			if enabled && token != "" && chatID != "" {
+				if current == nil {
+					current = notify.NewBotPoller(token, chatID, config.DB, sub.InvalidateSubCache)
+					current.Start()
+				}
+			} else if current != nil {
+				current.Stop()
+				current = nil
+			}
+		}
+		check()
+		for range ticker.C {
+			check()
 		}
 	}()
 

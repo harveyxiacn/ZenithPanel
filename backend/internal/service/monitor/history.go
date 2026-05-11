@@ -3,6 +3,9 @@ package monitor
 import (
 	"sync"
 	"time"
+
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
+	"gorm.io/gorm"
 )
 
 // NetworkSample holds a single point-in-time network I/O reading.
@@ -55,6 +58,34 @@ func RecordNetworkSample(netIn, netOut uint64) {
 	if ringHead == 0 {
 		ringFull = true
 	}
+}
+
+// PersistHourlySnapshot writes the most recent in-memory sample to the
+// NetworkMetric table for long-term history, then prunes entries older than
+// 30 days to keep the table bounded. Safe to call hourly.
+func PersistHourlySnapshot(db *gorm.DB) {
+	samples := GetNetworkHistory()
+	if len(samples) == 0 {
+		return
+	}
+	last := samples[len(samples)-1]
+	db.Create(&model.NetworkMetric{
+		Timestamp: time.Now().Unix(),
+		InRate:    last.InRate,
+		OutRate:   last.OutRate,
+		InBytes:   last.InBytes,
+		OutBytes:  last.OutBytes,
+	})
+	cutoff := time.Now().AddDate(0, 0, -30).Unix()
+	db.Where("timestamp < ?", cutoff).Delete(&model.NetworkMetric{})
+}
+
+// GetPersistedHistory returns NetworkMetric rows newer than `since`, ordered
+// by timestamp ascending. Used by the extended history API for week/month views.
+func GetPersistedHistory(db *gorm.DB, since int64) []model.NetworkMetric {
+	var metrics []model.NetworkMetric
+	db.Where("timestamp >= ?", since).Order("timestamp asc").Find(&metrics)
+	return metrics
 }
 
 // GetNetworkHistory returns the ring buffer contents in chronological order.

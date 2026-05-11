@@ -45,6 +45,8 @@ func preMigrateClientColumns(database *gorm.DB) {
 		{"expiry_time", "ALTER TABLE clients ADD COLUMN expiry_time integer DEFAULT 0"},
 		{"remark", "ALTER TABLE clients ADD COLUMN remark text DEFAULT ''"},
 		{"updated_at", "ALTER TABLE clients ADD COLUMN updated_at datetime"},
+		{"speed_limit", "ALTER TABLE clients ADD COLUMN speed_limit integer DEFAULT 0"},
+		{"reset_day", "ALTER TABLE clients ADD COLUMN reset_day integer DEFAULT 0"},
 	}
 
 	for _, col := range columns {

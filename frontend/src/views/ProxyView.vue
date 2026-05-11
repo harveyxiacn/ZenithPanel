@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon, SignalIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
-import { listInbounds, createInbound, updateInbound, deleteInbound, importThreeXUIInbounds, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig } from '@/api/proxy'
+import { listInbounds, createInbound, updateInbound, deleteInbound, importThreeXUIInbounds, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig, bulkClientAction, getActiveConnections, getClashApiStatus, enableClashApi, disableClashApi } from '@/api/proxy'
 import apiClient from '@/api/client'
 import QRCode from 'qrcode'
 import { useConfirm } from '@/composables/useConfirm'
@@ -54,6 +54,7 @@ const tabs = computed(() => [
   { id: 'routing', name: t('proxy.tabs.routing') },
   { id: 'users', name: t('proxy.tabs.users') },
   { id: 'outbounds', name: 'Outbounds' },
+  { id: 'connections', name: 'Live Connections' },
 ])
 
 // ---- Inbounds ----
@@ -381,7 +382,9 @@ async function removeInbound(id: number) {
 const clients = ref<any[]>([])
 const clientsLoading = ref(false)
 const showClientForm = ref(false)
-const clientForm = ref({ email: '', inbound_id: 0, total: 0, enable: true })
+const selectedClientIds = ref<number[]>([])
+const bulkBusy = ref(false)
+const clientForm = ref<any>({ email: '', inbound_id: 0, total: 0, enable: true, speed_limit_mbps: 0, reset_day: 0 })
 const copiedUuid = ref('')
 
 async function fetchClients() {
@@ -395,9 +398,19 @@ async function fetchClients() {
 
 async function saveClient() {
   try {
-    await createClient(clientForm.value)
+    const f = clientForm.value
+    const payload: any = {
+      email: f.email,
+      inbound_id: f.inbound_id,
+      total: f.total,
+      enable: f.enable,
+      reset_day: f.reset_day ?? 0,
+      // Convert MB/s → bytes/sec for the backend (1 MB/s = 1,048,576 B/s)
+      speed_limit: Math.max(0, Math.round((f.speed_limit_mbps || 0) * 1024 * 1024)),
+    }
+    await createClient(payload)
     showClientForm.value = false
-    clientForm.value = { email: '', inbound_id: 0, total: 0, enable: true }
+    clientForm.value = { email: '', inbound_id: 0, total: 0, enable: true, speed_limit_mbps: 0, reset_day: 0 }
     await fetchClients()
     await loadProxyStatus()
     toast.success(t('common.created'))
@@ -422,9 +435,93 @@ async function removeClient(id: number) {
   } catch { toast.error(t('common.errorOccurred')) }
 }
 
+async function runBulkAction(action: string) {
+  if (selectedClientIds.value.length === 0 || bulkBusy.value) return
+  if (action === 'delete') {
+    const ok = await confirmDialog({
+      title: t('common.confirm'),
+      message: `Delete ${selectedClientIds.value.length} client(s)? This cannot be undone.`,
+      confirmText: t('common.delete'),
+      variant: 'danger',
+    })
+    if (!ok) return
+  }
+  bulkBusy.value = true
+  try {
+    const res: any = await bulkClientAction(action, [...selectedClientIds.value])
+    const affected = res?.data?.affected ?? 0
+    toast.success(`${affected} client(s) updated`)
+    selectedClientIds.value = []
+    await fetchClients()
+    await loadProxyStatus()
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || e?.message || t('common.errorOccurred'))
+  } finally {
+    bulkBusy.value = false
+  }
+}
+
+function toggleClientSelected(id: number) {
+  const i = selectedClientIds.value.indexOf(id)
+  if (i >= 0) selectedClientIds.value.splice(i, 1)
+  else selectedClientIds.value.push(id)
+}
+
+function toggleSelectAllClients() {
+  if (selectedClientIds.value.length === clients.value.length) {
+    selectedClientIds.value = []
+  } else {
+    selectedClientIds.value = clients.value.map((c: any) => c.id)
+  }
+}
+
+// ---- Live Connections (Sing-box Clash API) ----
+const connections = ref<any[]>([])
+const connectionsLoading = ref(false)
+const clashApiEnabled = ref(false)
+let connectionsPoll: any = null
+
+async function refreshClashApiStatus() {
+  try {
+    const res: any = await getClashApiStatus()
+    clashApiEnabled.value = !!res?.data?.enabled
+  } catch {}
+}
+
+async function fetchConnections() {
+  connectionsLoading.value = true
+  try {
+    const res: any = await getActiveConnections()
+    const data = res?.data
+    connections.value = Array.isArray(data?.connections) ? data.connections : []
+  } catch (e: any) {
+    connections.value = []
+    if (e?.response?.status !== 503) {
+      toast.error(e?.response?.data?.msg || 'Failed to fetch connections')
+    }
+  } finally {
+    connectionsLoading.value = false
+  }
+}
+
+async function toggleClashApi() {
+  try {
+    if (clashApiEnabled.value) {
+      await disableClashApi()
+      toast.success('Clash API disabled — re-apply Sing-box config to take effect')
+    } else {
+      await enableClashApi()
+      toast.success('Clash API enabled — re-apply Sing-box config to take effect')
+    }
+    await refreshClashApiStatus()
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || t('common.errorOccurred'))
+  }
+}
+
 function addClientForInbound(inboundId: number) {
   switchTab('users')
-  clientForm.value = { email: '', inbound_id: inboundId, total: 0, enable: true }
+  clientForm.value = { email: '', inbound_id: inboundId, total: 0, enable: true, speed_limit_mbps: 0, reset_day: 0 }
   showClientForm.value = true
 }
 
@@ -683,6 +780,11 @@ const routingPresets = [
   { id: 'block-quic', rule_tag: 'Block QUIC', domain: '', ip: '', port: '443', outbound_tag: 'block' },
   { id: 'ir-direct', rule_tag: 'Iran Direct', domain: 'geosite:category-ir', ip: 'geoip:ir', outbound_tag: 'direct' },
   { id: 'ru-direct', rule_tag: 'Russia Direct', domain: 'geosite:category-ru', ip: 'geoip:ru', outbound_tag: 'direct' },
+  { id: 'ai-direct', rule_tag: 'AI Services Direct', domain: 'openai.com,anthropic.com,claude.ai,gemini.google.com,grok.com,x.ai', ip: '', outbound_tag: 'direct' },
+  { id: 'streaming-direct', rule_tag: 'Streaming Direct', domain: 'netflix.com,hulu.com,disneyplus.com,primevideo.com,spotify.com,youtube.com', ip: '', outbound_tag: 'direct' },
+  { id: 'social-direct', rule_tag: 'Social Media Direct', domain: 'tiktok.com,twitter.com,x.com,instagram.com,facebook.com,reddit.com', ip: '', outbound_tag: 'direct' },
+  { id: 'ecommerce-direct', rule_tag: 'E-Commerce Direct', domain: 'amazon.com,ebay.com,shopify.com,aliexpress.com,walmart.com', ip: '', outbound_tag: 'direct' },
+  { id: 'cn-block', rule_tag: 'Block China Traffic', domain: 'geosite:cn', ip: 'geoip:cn', outbound_tag: 'block' },
 ]
 
 function normalizeRoutingCsv(raw: string | undefined) {
@@ -1118,6 +1220,23 @@ onMounted(() => {
   fetchRoutingRules()
   fetchOutbounds()
   loadProxyStatus()
+  refreshClashApiStatus()
+})
+
+// Start/stop the live-connection poll when the user switches into/out of the tab.
+watch(activeTab, (newTab) => {
+  if (newTab === 'connections') {
+    refreshClashApiStatus()
+    fetchConnections()
+    if (!connectionsPoll) {
+      connectionsPoll = setInterval(() => {
+        if (clashApiEnabled.value) fetchConnections()
+      }, 5000)
+    }
+  } else if (connectionsPoll) {
+    clearInterval(connectionsPoll)
+    connectionsPoll = null
+  }
 })
 </script>
 
@@ -1643,6 +1762,28 @@ onMounted(() => {
             <input v-model.number="clientForm.total" type="number" :placeholder="$t('proxy.clients.trafficLimit')" class="input-field text-sm" />
             <button @click="saveClient" class="bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700">{{ $t('common.add') }}</button>
           </div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div>
+              <label class="text-xs text-slate-500 block mb-1">Speed Limit (MB/s, 0 = unlimited)</label>
+              <input v-model.number="clientForm.speed_limit_mbps" type="number" min="0" step="0.5" class="input-field text-sm w-full" />
+            </div>
+            <div>
+              <label class="text-xs text-slate-500 block mb-1">Monthly Reset Day (1-28, 0 = off)</label>
+              <input v-model.number="clientForm.reset_day" type="number" min="0" max="28" class="input-field text-sm w-full" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Bulk action toolbar -->
+        <div v-if="selectedClientIds.length > 0" class="px-6 py-3 bg-primary-50 border-b border-primary-100 flex items-center justify-between">
+          <span class="text-sm font-medium text-primary-700">{{ selectedClientIds.length }} selected</span>
+          <div class="flex gap-2">
+            <button @click="runBulkAction('enable')" class="text-xs bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 rounded">Enable</button>
+            <button @click="runBulkAction('disable')" class="text-xs bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 rounded">Disable</button>
+            <button @click="runBulkAction('reset_traffic')" class="text-xs bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 rounded">Reset Traffic</button>
+            <button @click="runBulkAction('delete')" class="text-xs bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 px-3 py-1.5 rounded">Delete</button>
+            <button @click="selectedClientIds = []" class="text-xs text-slate-500 hover:text-slate-700 px-2">Clear</button>
+          </div>
         </div>
 
         <div v-if="clientsLoading" class="px-6 py-12"><SkeletonTable :rows="3" :cols="5" /></div>
@@ -1650,15 +1791,29 @@ onMounted(() => {
         <table v-else class="min-w-full divide-y divide-slate-200">
           <thead class="bg-slate-50">
             <tr>
+              <th class="px-3 py-3 w-10">
+                <input type="checkbox"
+                  :checked="clients.length > 0 && selectedClientIds.length === clients.length"
+                  :indeterminate.prop="selectedClientIds.length > 0 && selectedClientIds.length < clients.length"
+                  @change="toggleSelectAllClients"
+                  class="h-4 w-4 rounded border-slate-300" />
+              </th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.email') }}</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.inbounds.tag') }}</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.traffic') }}</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Speed</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.status') }}</th>
               <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody class="bg-white divide-y divide-slate-200">
             <tr v-for="user in clients" :key="user.id" class="hover:bg-slate-50">
+              <td class="px-3 py-4">
+                <input type="checkbox"
+                  :checked="selectedClientIds.includes(user.id)"
+                  @change="toggleClientSelected(user.id)"
+                  class="h-4 w-4 rounded border-slate-300" />
+              </td>
               <td class="px-6 py-4 text-sm font-medium text-slate-900">
                 <div>{{ user.email }}</div>
                 <div class="text-xs text-slate-400 font-mono">{{ (user.uuid || '').slice(0, 8) }}...</div>
@@ -1689,6 +1844,10 @@ onMounted(() => {
                     }"
                   >{{ Math.min(Math.round(((user.up_load + user.down_load) / user.total) * 100), 100) }}%</div>
                 </template>
+              </td>
+              <td class="px-6 py-4 text-sm text-slate-500">
+                <div>{{ user.speed_limit > 0 ? ((user.speed_limit / (1024 * 1024)).toFixed(1) + ' MB/s') : '∞' }}</div>
+                <div v-if="user.reset_day > 0" class="text-xs text-slate-400">Resets day {{ user.reset_day }}</div>
               </td>
               <td class="px-6 py-4">
                 <span :class="[user.enable ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-800', 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full']">
@@ -1799,6 +1958,60 @@ onMounted(() => {
               </tr>
               <tr v-if="outbounds.length === 0">
                 <td colspan="5" class="py-8 text-center text-sm text-slate-400">No outbounds configured. System outbounds (direct, block) are built-in.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Live Connections (Sing-box Clash API) -->
+      <div v-else-if="activeTab === 'connections'" class="flex flex-col h-full">
+        <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center">
+          <div>
+            <h3 class="text-lg font-medium text-slate-800 dark:text-slate-100">Live Connections</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Real-time view of active proxy sessions (Sing-box only)</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <span :class="clashApiEnabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'" class="text-xs px-2 py-1 rounded-full font-medium">
+              Clash API: {{ clashApiEnabled ? 'Enabled' : 'Disabled' }}
+            </span>
+            <button @click="toggleClashApi" class="text-xs px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50">
+              {{ clashApiEnabled ? 'Disable' : 'Enable' }}
+            </button>
+            <button @click="fetchConnections" :disabled="connectionsLoading || !clashApiEnabled"
+              class="text-xs bg-primary-600 text-white px-3 py-1.5 rounded-lg hover:bg-primary-700 disabled:opacity-50">
+              <ArrowPathIcon class="h-3.5 w-3.5 inline" /> Refresh
+            </button>
+          </div>
+        </div>
+
+        <div class="flex-1 overflow-auto p-6">
+          <div v-if="!clashApiEnabled" class="text-center py-12 text-sm text-slate-500">
+            <p>Clash API is disabled. Enable it and re-apply Sing-box config to see live connections.</p>
+          </div>
+          <div v-else-if="connectionsLoading" class="text-sm text-slate-400 text-center py-12">Loading connections…</div>
+          <div v-else-if="connections.length === 0" class="text-sm text-slate-400 text-center py-12">
+            No active connections.
+          </div>
+          <table v-else class="min-w-full divide-y divide-slate-200">
+            <thead class="bg-slate-50">
+              <tr>
+                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Network</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Source</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Destination</th>
+                <th class="px-4 py-2 text-right text-xs font-medium text-slate-500 uppercase">↓ Down</th>
+                <th class="px-4 py-2 text-right text-xs font-medium text-slate-500 uppercase">↑ Up</th>
+                <th class="px-4 py-2 text-left text-xs font-medium text-slate-500 uppercase">Started</th>
+              </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-slate-200">
+              <tr v-for="conn in connections" :key="conn.id" class="hover:bg-slate-50">
+                <td class="px-4 py-2 text-xs font-mono">{{ conn?.metadata?.network || '—' }}</td>
+                <td class="px-4 py-2 text-xs font-mono text-slate-600">{{ conn?.metadata?.sourceIP }}:{{ conn?.metadata?.sourcePort }}</td>
+                <td class="px-4 py-2 text-xs font-mono text-slate-600">{{ conn?.metadata?.host || conn?.metadata?.destinationIP }}:{{ conn?.metadata?.destinationPort }}</td>
+                <td class="px-4 py-2 text-xs text-right text-slate-500">{{ formatTraffic(conn?.download || 0) }}</td>
+                <td class="px-4 py-2 text-xs text-right text-slate-500">{{ formatTraffic(conn?.upload || 0) }}</td>
+                <td class="px-4 py-2 text-xs text-slate-500">{{ conn?.start ? new Date(conn.start).toLocaleTimeString() : '—' }}</td>
               </tr>
             </tbody>
           </table>
