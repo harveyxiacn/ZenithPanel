@@ -64,7 +64,10 @@ func TestSingboxH2TransportMapping(t *testing.T) {
 		Stream: `{
 			"network": "h2",
 			"security": "tls",
-			"tlsSettings": {"serverName": "h2.test"},
+			"tlsSettings": {
+				"serverName": "h2.test",
+				"certificates": [{"certificateFile": "/tmp/c.pem", "keyFile": "/tmp/k.pem"}]
+			},
 			"httpSettings": {
 				"path": "/proxy",
 				"host": ["h2.test"]
@@ -102,7 +105,8 @@ func TestSingboxTLSFingerprintToUTLS(t *testing.T) {
 			"security": "tls",
 			"tlsSettings": {
 				"serverName": "fp.test",
-				"fingerprint": "chrome"
+				"fingerprint": "chrome",
+				"certificates": [{"certificateFile": "/tmp/c.pem", "keyFile": "/tmp/k.pem"}]
 			}
 		}`,
 	}
@@ -139,7 +143,10 @@ func TestSingboxNoUTLSWhenNoFingerprint(t *testing.T) {
 		Stream: `{
 			"network": "tcp",
 			"security": "tls",
-			"tlsSettings": {"serverName": "no-fp.test"}
+			"tlsSettings": {
+				"serverName": "no-fp.test",
+				"certificates": [{"certificateFile": "/tmp/c.pem", "keyFile": "/tmp/k.pem"}]
+			}
 		}`,
 	}
 	clients := []model.Client{{Email: "d@test", UUID: "uuid-d"}}
@@ -227,6 +234,55 @@ func TestSingboxHysteria2WithCertAccepted(t *testing.T) {
 	}
 	if tls["certificate_path"] != "/etc/ssl/cert.pem" {
 		t.Errorf("expected certificate_path to be set, got %v", tls["certificate_path"])
+	}
+}
+
+// TestSingboxVLESSWithTLSButNoCertRejected catches the case the user actually
+// hit in production: an inbound the visual form let through with security=tls
+// but cert/key paths blank. Sing-box itself would fail at runtime with the
+// cryptic "missing certificate" error; we should reject up-front for every
+// engine-supported protocol, not just hy2/tuic.
+func TestSingboxVLESSWithTLSButNoCertRejected(t *testing.T) {
+	in := model.Inbound{
+		Tag:      "vless-tls-empty",
+		Protocol: "vless",
+		Port:     443,
+		Stream: `{
+			"network": "tcp",
+			"security": "tls",
+			"tlsSettings": {"serverName": "example.com"}
+		}`,
+	}
+	_, err := buildSingboxInbound(in, []model.Client{{Email: "u@x", UUID: "id"}})
+	if err == nil {
+		t.Fatalf("expected error for VLESS+TLS without cert, got nil")
+	}
+	if !strings.Contains(err.Error(), "no certificate") && !strings.Contains(err.Error(), "missing") {
+		t.Errorf("expected error to mention missing certificate, got: %v", err)
+	}
+}
+
+// TestSingboxVLESSRealityAccepted ensures the generic TLS-credential check
+// doesn't false-positive on Reality streams, which sing-box treats as
+// certificate-less because they borrow the dest's chain.
+func TestSingboxVLESSRealityAccepted(t *testing.T) {
+	in := model.Inbound{
+		Tag:      "vless-reality-ok",
+		Protocol: "vless",
+		Port:     443,
+		Stream: `{
+			"network": "tcp",
+			"security": "reality",
+			"realitySettings": {
+				"dest": "microsoft.com:443",
+				"serverNames": ["microsoft.com"],
+				"privateKey": "k",
+				"shortIds": ["abc"]
+			}
+		}`,
+	}
+	if _, err := buildSingboxInbound(in, []model.Client{{Email: "u@x", UUID: "id"}}); err != nil {
+		t.Errorf("VLESS+Reality should pass credential check, got: %v", err)
 	}
 }
 

@@ -350,26 +350,82 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		return nil, fmt.Errorf("trojan inbound %q requires TLS or Reality stream settings", in.Tag)
 	}
 
-	// Hysteria2 and TUIC are QUIC-based and mandate TLS with a certificate.
-	// Validate against the resolved entry so both Xray-style and sing-box-native
-	// stream formats are covered. Without this, sing-box refuses to start with
-	// the cryptic "initialize inbound[0]: missing certificate" error.
+	// Hysteria2 and TUIC are QUIC-based and *must* have TLS enabled — they
+	// have no cleartext mode. Reject up-front when the resolved entry lacks
+	// any TLS block.
 	if in.Protocol == "hysteria2" || in.Protocol == "tuic" {
 		tls, _ := entry["tls"].(map[string]interface{})
 		if tls == nil || tls["enabled"] != true {
 			return nil, fmt.Errorf("%s inbound %q requires TLS — open the inbound editor, set Security to TLS, then provide certificate and key files",
 				in.Protocol, in.Tag)
 		}
-		certPath, _ := tls["certificate_path"].(string)
-		keyPath, _ := tls["key_path"].(string)
-		_, hasACME := tls["acme"].(map[string]interface{})
-		if (certPath == "" || keyPath == "") && !hasACME {
-			return nil, fmt.Errorf("%s inbound %q has TLS enabled but is missing certificate_path/key_path — fill in the cert and key files in the inbound editor",
-				in.Protocol, in.Tag)
+	}
+
+	// Generic TLS-credential check: any inbound that ended up with TLS enabled
+	// must carry credentials in one of the accepted forms (cert+key files,
+	// inline PEM, Reality, or ACME). Sing-box otherwise fails to start with
+	// the cryptic "initialize inbound[0]: missing certificate" error. This is
+	// engine-protocol-agnostic on purpose — VLESS/VMess/Shadowsocks with
+	// security=tls would also trip it without certs.
+	if tls, ok := entry["tls"].(map[string]interface{}); ok {
+		if enabled, _ := tls["enabled"].(bool); enabled {
+			if err := validateSingboxTLSCredentials(tls, in.Protocol, in.Tag); err != nil {
+				return nil, err
+			}
 		}
 	}
 
 	return entry, nil
+}
+
+// validateSingboxTLSCredentials returns an error when the supplied TLS block
+// is enabled but lacks the credentials sing-box needs to actually serve TLS.
+// Acceptable shapes (any one is enough):
+//
+//   - Reality: tls.reality is present (uses dest server's chain)
+//   - ACME: tls.acme is present (sing-box obtains the cert at runtime)
+//   - Files: certificate_path + key_path both non-empty
+//   - Inline: certificate + key both non-empty
+func validateSingboxTLSCredentials(tls map[string]interface{}, protocol, tag string) error {
+	if _, ok := tls["reality"].(map[string]interface{}); ok {
+		return nil
+	}
+	if _, ok := tls["acme"].(map[string]interface{}); ok {
+		return nil
+	}
+	certPath, _ := tls["certificate_path"].(string)
+	keyPath, _ := tls["key_path"].(string)
+	if certPath != "" && keyPath != "" {
+		return nil
+	}
+	certInline, _ := tls["certificate"].(string)
+	keyInline, _ := tls["key"].(string)
+	if certInline != "" && keyInline != "" {
+		return nil
+	}
+	// Sing-box also accepts inline cert/key as arrays of lines.
+	if hasNonEmptyStrings(tls["certificate"]) && hasNonEmptyStrings(tls["key"]) {
+		return nil
+	}
+	return fmt.Errorf("%s inbound %q has TLS enabled but no certificate — fill in certificate_path + key_path in the inbound editor (or pick Reality / set up ACME)",
+		protocol, tag)
+}
+
+// hasNonEmptyStrings returns true when v is a non-empty []interface{} whose
+// every element is a non-empty string. Sing-box accepts inline PEM material
+// as either a single string or an array of strings.
+func hasNonEmptyStrings(v interface{}) bool {
+	arr, ok := v.([]interface{})
+	if !ok || len(arr) == 0 {
+		return false
+	}
+	for _, item := range arr {
+		s, ok := item.(string)
+		if !ok || s == "" {
+			return false
+		}
+	}
+	return true
 }
 
 // resolveDNSServers returns the primary and secondary DNS addresses to embed
