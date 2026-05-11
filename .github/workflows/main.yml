@@ -110,6 +110,14 @@ jobs:
         uses: docker/metadata-action@v6.0.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Override default tag list so :latest tracks the default branch.
+          # Without this, latest only updates on git tag pushes (v*.*.*), which
+          # left users on :latest pulling stale images between releases.
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=ref,event=pr,prefix=pr-
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
         id: build-and-push
