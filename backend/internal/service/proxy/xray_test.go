@@ -19,7 +19,7 @@ func TestBuildSingboxInboundForwardsHysteria2Obfs(t *testing.T) {
 			"masquerade": "https://www.bing.com",
 			"ignore_client_bandwidth": true
 		}`,
-		Stream: `{"network":"udp","security":"tls","tlsSettings":{"serverName":"hy.test"}}`,
+		Stream: `{"network":"udp","security":"tls","tlsSettings":{"serverName":"hy.test","certificates":[{"certificateFile":"/tmp/c.pem","keyFile":"/tmp/k.pem"}]}}`,
 	}
 	clients := []model.Client{{Email: "a@x", UUID: "uuid-1"}}
 	entry, err := buildSingboxInbound(in, clients)
