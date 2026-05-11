@@ -24,6 +24,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/traffic"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/webserver"
 )
 
@@ -184,8 +185,15 @@ func main() {
 		},
 	}))
 
+	// 6a. Traffic monitor — samples Clash API connections and OS sockets in a
+	// background goroutine so the /traffic/live endpoint is just a memory read.
+	trafficCtx, cancelTraffic := context.WithCancel(context.Background())
+	defer cancelTraffic()
+	tm := traffic.NewMonitor(sm)
+	tm.Start(trafficCtx)
+
 	// 7. Setup API routes
-	api.SetupRoutes(r, dm, xm, sm, sched)
+	api.SetupRoutes(r, dm, xm, sm, sched, tm)
 
 	// Resolve listen port (random on first run, persisted in DB)
 	port := config.EnsurePort()

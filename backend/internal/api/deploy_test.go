@@ -55,7 +55,7 @@ func setupDeployTestRouter(t *testing.T) (*gin.Engine, string, *gorm.DB) {
 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	SetupRoutes(r, nil, nil, nil, nil)
+	SetupRoutes(r, nil, nil, nil, nil, nil)
 	return r, token, db
 }
 

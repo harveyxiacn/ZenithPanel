@@ -206,7 +206,7 @@ func setupRouterValidationTestServer(t *testing.T, setupComplete bool) (*gin.Eng
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	SetupRoutes(router, nil, nil, nil, nil)
+	SetupRoutes(router, nil, nil, nil, nil, nil)
 	return router, token
 }
 
