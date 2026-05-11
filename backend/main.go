@@ -192,6 +192,13 @@ func main() {
 	tm := traffic.NewMonitor(sm)
 	tm.Start(trafficCtx)
 
+	// 6b. Traffic accountant — every 30 s, drain sing-box byte deltas (already
+	// captured for the live-rate view) and query Xray's StatsService over the
+	// internal API inbound; add both into Client.UpLoad/DownLoad so the
+	// per-user cumulative columns reflect actually-flowed bytes across engines.
+	tacct := traffic.NewAccountant(config.DB, xm, sm, tm.ProxyAggregator())
+	tacct.Start(trafficCtx)
+
 	// 7. Setup API routes
 	api.SetupRoutes(r, dm, xm, sm, sched, tm)
 

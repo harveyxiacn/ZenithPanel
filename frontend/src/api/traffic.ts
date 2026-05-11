@@ -8,6 +8,9 @@ export interface ProxyUserSample {
   upload_total: number
   download_total: number
   top_targets: string[] | null
+  engine?: string
+  protocol?: string
+  inbound_tag?: string
 }
 
 export interface NICSample {
