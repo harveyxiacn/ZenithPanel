@@ -42,21 +42,42 @@ type clashConnectionsResponse struct {
 
 // proxyAggregator turns sequential Clash API snapshots into per-user upload/
 // download *rates*. Clash gives cumulative bytes per connection — we cache the
-// previous values and diff.
+// previous values and diff. The same per-tick deltas also feed pendingFlush,
+// which the accountant drains every 30 s into Client.UpLoad/DownLoad so the
+// cumulative-traffic column reflects what's actually flowed.
 type proxyAggregator struct {
-	mu       sync.Mutex
-	lastAt   time.Time
-	lastConn map[string]clashConn // by connection id
-	httpc    *http.Client
+	mu           sync.Mutex
+	lastAt       time.Time
+	lastConn     map[string]clashConn // by connection id
+	pendingFlush map[string]pendingDelta
+	httpc        *http.Client
+}
+
+// pendingDelta accumulates bytes per user since the last DB flush. Held inside
+// proxyAggregator so we don't pay an extra Clash API roundtrip just to account.
+type pendingDelta struct {
+	up   uint64
+	down uint64
 }
 
 func newProxyAggregator() *proxyAggregator {
 	return &proxyAggregator{
-		lastConn: map[string]clashConn{},
+		lastConn:     map[string]clashConn{},
+		pendingFlush: map[string]pendingDelta{},
 		// Short timeout: the Clash API is local; if it hangs longer than this
 		// the panel UI should see an error and we should not block the loop.
 		httpc: &http.Client{Timeout: 2 * time.Second},
 	}
+}
+
+// drainPending returns the per-user byte deltas accumulated since the last
+// call, clearing internal state. Designed for the 30 s DB flush.
+func (a *proxyAggregator) drainPending() map[string]pendingDelta {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := a.pendingFlush
+	a.pendingFlush = map[string]pendingDelta{}
+	return out
 }
 
 // sample polls the Clash API once and returns per-user samples. If sing-box
@@ -73,6 +94,9 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager) ([]ProxyUserSample, e
 			Email:         email,
 			UploadTotal:   tot.up,
 			DownloadTotal: tot.down,
+			Engine:        tot.engine,
+			Protocol:      tot.protocol,
+			InboundTag:    tot.inboundTag,
 		}
 	}
 
@@ -94,6 +118,7 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager) ([]ProxyUserSample, e
 		dt = 0
 	}
 
+	a.mu.Lock()
 	for user, conns := range connsByUser {
 		us, ok := users[user]
 		if !ok {
@@ -127,8 +152,19 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager) ([]ProxyUserSample, e
 		if dt > 0 {
 			us.UploadRateBps = uint64(float64(deltaUp) / dt)
 			us.DownloadRateBps = uint64(float64(deltaDown) / dt)
+			// Accumulate raw byte deltas (not rates) for the next DB flush.
+			// "(anonymous)" users are recorded too but won't match a Client
+			// row on flush, so they're effectively dropped — acceptable since
+			// connections without metadata.user can't be attributed anyway.
+			if deltaUp > 0 || deltaDown > 0 {
+				pd := a.pendingFlush[user]
+				pd.up += deltaUp
+				pd.down += deltaDown
+				a.pendingFlush[user] = pd
+			}
 		}
 	}
+	a.mu.Unlock()
 
 	return flatten(users), nil
 }
@@ -210,22 +246,54 @@ func (a *proxyAggregator) fetchConnections(sm *proxy.SingboxManager) (map[string
 }
 
 type clientTotals struct {
-	up   int64
-	down int64
+	up         int64
+	down       int64
+	engine     string
+	protocol   string
+	inboundTag string
 }
 
-// loadClientTotals snapshots cumulative bytes for every enabled client so the
-// per-user row shows lifetime usage alongside live rate. We swallow errors —
-// missing totals just mean "show 0" rather than break the page.
+// xrayEngineProtocols are the protocols Xray can serve. Anything else
+// (hysteria2, tuic, wireguard …) is owned by sing-box.
+var xrayEngineProtocols = map[string]bool{
+	"vless":       true,
+	"vmess":       true,
+	"trojan":      true,
+	"shadowsocks": true,
+}
+
+func engineForProtocol(p string) string {
+	if xrayEngineProtocols[p] {
+		return "xray"
+	}
+	return "singbox"
+}
+
+// loadClientTotals snapshots cumulative bytes for every enabled client and
+// joins them with their owning Inbound so the row carries engine + protocol +
+// inbound_tag. Missing inbound rows just leave those fields blank — the table
+// still renders, with the filter chips treating the user as "unknown."
 func loadClientTotals() map[string]clientTotals {
 	out := map[string]clientTotals{}
 	if config.DB == nil {
 		return out
 	}
+	var inbounds []model.Inbound
+	config.DB.Find(&inbounds)
+	inboundByID := make(map[uint]model.Inbound, len(inbounds))
+	for _, in := range inbounds {
+		inboundByID[in.ID] = in
+	}
 	var clients []model.Client
 	config.DB.Where("enable = ?", true).Find(&clients)
 	for _, c := range clients {
-		out[c.Email] = clientTotals{up: c.UpLoad, down: c.DownLoad}
+		t := clientTotals{up: c.UpLoad, down: c.DownLoad}
+		if in, ok := inboundByID[c.InboundID]; ok {
+			t.protocol = in.Protocol
+			t.inboundTag = in.Tag
+			t.engine = engineForProtocol(in.Protocol)
+		}
+		out[c.Email] = t
 	}
 	return out
 }

@@ -70,11 +70,39 @@ function fmtRate(bps: number): string {
   return fmtBytes(bps) + '/s'
 }
 
-const proxyUsers = computed<ProxyUserSample[]>(() => snapshot.value?.proxy_users || [])
+const proxyUsersRaw = computed<ProxyUserSample[]>(() => snapshot.value?.proxy_users || [])
+
+// Filters for the proxy-users table. "All" means no constraint; otherwise
+// match the engine / protocol fields the backend attached from the owning
+// Inbound. Users with unknown engine (no Client row match) are filtered out
+// when a specific engine is selected.
+const engineFilter = ref<'all' | 'xray' | 'singbox'>('all')
+const protocolFilter = ref<string>('all')
+
+// Build the protocol option list from currently-visible users so we don't
+// surface protocols the user has no inbound for.
+const availableProtocols = computed<string[]>(() => {
+  const set = new Set<string>()
+  for (const u of proxyUsersRaw.value) {
+    if (u.protocol) set.add(u.protocol)
+  }
+  return Array.from(set).sort()
+})
+
+const proxyUsers = computed<ProxyUserSample[]>(() => {
+  return proxyUsersRaw.value.filter((u) => {
+    if (engineFilter.value !== 'all' && u.engine !== engineFilter.value) return false
+    if (protocolFilter.value !== 'all' && u.protocol !== protocolFilter.value) return false
+    return true
+  })
+})
+
 const nics = computed<NICSample[]>(() => snapshot.value?.nics || [])
 const processes = computed<ProcessSample[]>(() => snapshot.value?.processes || [])
 
-// Total rate banner numbers per tab
+// Total rate banner numbers per tab. Use the filtered list so summary cards
+// reflect what's actually displayed (e.g. switching to "xray only" recomputes
+// the totals across xray users alone).
 const totalProxyUp = computed(() => proxyUsers.value.reduce((s, u) => s + u.upload_rate_bps, 0))
 const totalProxyDown = computed(() => proxyUsers.value.reduce((s, u) => s + u.download_rate_bps, 0))
 const totalProxyConns = computed(() => proxyUsers.value.reduce((s, u) => s + u.active_conns, 0))
@@ -177,12 +205,33 @@ const sparkOutPath = computed(() => {
         </div>
       </div>
 
+      <!-- Filters -->
+      <div class="flex flex-wrap items-center gap-3 text-sm">
+        <label class="flex items-center gap-2">
+          <span class="text-xs text-slate-500 uppercase tracking-wide">引擎</span>
+          <select v-model="engineFilter" class="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-sm">
+            <option value="all">全部</option>
+            <option value="xray">Xray</option>
+            <option value="singbox">Sing-box</option>
+          </select>
+        </label>
+        <label class="flex items-center gap-2">
+          <span class="text-xs text-slate-500 uppercase tracking-wide">协议</span>
+          <select v-model="protocolFilter" class="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1 text-sm">
+            <option value="all">全部</option>
+            <option v-for="p in availableProtocols" :key="p" :value="p">{{ p }}</option>
+          </select>
+        </label>
+        <span class="text-xs text-slate-400 ml-auto">显示 {{ proxyUsers.length }} / {{ proxyUsersRaw.length }} 个用户</span>
+      </div>
+
       <!-- Per-user table -->
       <div class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 overflow-hidden">
         <table class="w-full text-sm">
           <thead class="bg-slate-50 dark:bg-slate-900/40 text-slate-500 text-xs uppercase tracking-wide">
             <tr>
-              <th class="text-left px-4 py-3">用户 (Email)</th>
+              <th class="text-left px-4 py-3">用户</th>
+              <th class="text-left px-4 py-3">引擎 / 协议</th>
               <th class="text-right px-4 py-3">上行</th>
               <th class="text-right px-4 py-3">下行</th>
               <th class="text-right px-4 py-3">连接数</th>
@@ -193,12 +242,23 @@ const sparkOutPath = computed(() => {
           </thead>
           <tbody>
             <tr v-if="proxyUsers.length === 0">
-              <td colspan="7" class="text-center text-slate-400 py-8">
-                {{ lastErrors.proxy ? '代理或 Clash API 未启用 — 见上方提示' : '暂无活跃用户' }}
+              <td colspan="8" class="text-center text-slate-400 py-8">
+                <template v-if="proxyUsersRaw.length > 0">当前筛选下没有匹配的用户</template>
+                <template v-else-if="lastErrors.proxy">代理或 Clash API 未启用 — 见上方提示</template>
+                <template v-else>暂无活跃用户</template>
               </td>
             </tr>
             <tr v-for="u in proxyUsers" :key="u.email" class="border-t border-slate-100 dark:border-slate-700/50">
-              <td class="px-4 py-3 font-medium text-slate-800 dark:text-slate-100 truncate max-w-[16rem]">{{ u.email }}</td>
+              <td class="px-4 py-3 font-medium text-slate-800 dark:text-slate-100 truncate max-w-[16rem]" :title="u.email">{{ u.email }}</td>
+              <td class="px-4 py-3 text-xs">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span v-if="u.engine === 'xray'" class="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">Xray</span>
+                  <span v-else-if="u.engine === 'singbox'" class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">Sing-box</span>
+                  <span v-else class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400">未知</span>
+                  <span v-if="u.protocol" class="text-slate-500 font-mono">{{ u.protocol }}</span>
+                  <span v-if="u.inbound_tag" class="text-slate-400 font-mono text-[10px]" :title="u.inbound_tag">{{ u.inbound_tag }}</span>
+                </div>
+              </td>
               <td class="px-4 py-3 text-right text-emerald-600 dark:text-emerald-400 tabular-nums">{{ fmtRate(u.upload_rate_bps) }}</td>
               <td class="px-4 py-3 text-right text-sky-600 dark:text-sky-400 tabular-nums">{{ fmtRate(u.download_rate_bps) }}</td>
               <td class="px-4 py-3 text-right tabular-nums">{{ u.active_conns }}</td>

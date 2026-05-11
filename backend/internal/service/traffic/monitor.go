@@ -15,8 +15,10 @@ import (
 )
 
 // ProxyUserSample reports live and cumulative traffic for one proxy client.
-// Rates are computed from the delta between two Clash API polls; totals come
-// from the Client table (kept in sync by the existing traffic-accounting code).
+// Rates are computed from the delta between two Clash API polls (sing-box
+// only); totals come from the Client table, populated by the traffic
+// accountant for both Xray and Sing-box. Engine/Protocol/InboundTag are
+// joined from the owning Inbound so the UI can filter by engine or protocol.
 type ProxyUserSample struct {
 	Email           string   `json:"email"`
 	UploadRateBps   uint64   `json:"upload_rate_bps"`
@@ -25,6 +27,11 @@ type ProxyUserSample struct {
 	UploadTotal     int64    `json:"upload_total"`
 	DownloadTotal   int64    `json:"download_total"`
 	TopTargets      []string `json:"top_targets"`
+	// Engine is "xray" or "singbox" depending on which engine supports the
+	// owning inbound's protocol. Empty if the email doesn't match any client.
+	Engine     string `json:"engine,omitempty"`
+	Protocol   string `json:"protocol,omitempty"`
+	InboundTag string `json:"inbound_tag,omitempty"`
 }
 
 // NICSample reports the network rate for a single OS network interface, plus
@@ -162,6 +169,13 @@ func (m *Monitor) tick(force bool) {
 		m.history = append(m.history[:0:0], m.history[drop:]...)
 	}
 	m.mu.Unlock()
+}
+
+// ProxyAggregator exposes the internal Clash-API delta accumulator so the
+// traffic accountant can drain pending per-user byte deltas on its own clock
+// without double-polling Clash.
+func (m *Monitor) ProxyAggregator() *proxyAggregator {
+	return m.proxyAgg
 }
 
 // Latest returns a copy of the most recent snapshot. Safe to call concurrently.

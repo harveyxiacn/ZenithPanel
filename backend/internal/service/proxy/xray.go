@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
@@ -41,6 +42,19 @@ func (x *XrayManager) SkippedProtocols() []string {
 	return x.skippedProtos
 }
 
+// XrayStatsAPIPort returns the loopback port Xray exposes its StatsService on.
+// The traffic accountant exec-polls this via "xray api statsquery" to populate
+// per-client UpLoad/DownLoad. Configurable via xray_stats_port setting so we
+// don't collide with whatever else might already bind 10085.
+func XrayStatsAPIPort() int {
+	if raw := config.GetSetting("xray_stats_port"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n < 65536 {
+			return n
+		}
+	}
+	return 10085
+}
+
 func (x *XrayManager) GenerateConfig() (string, error) {
 	var inbounds []model.Inbound
 	var rules []model.RoutingRule
@@ -58,9 +72,26 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 	// Strip the "udp://" prefix Sing-box uses for plain DNS so Xray parses correctly.
 	xrayPrimary = strings.TrimPrefix(xrayPrimary, "udp://")
 	xraySecondary = strings.TrimPrefix(xraySecondary, "udp://")
+	statsPort := XrayStatsAPIPort()
 	xrayConfig := map[string]interface{}{
 		"log": map[string]interface{}{
 			"loglevel": "warning",
+		},
+		// Enable per-user uplink/downlink counters. The traffic accountant
+		// reads these via the api inbound below; without this block Xray
+		// emits no stats and the panel's UpLoad/DownLoad columns stay zero.
+		"stats": map[string]interface{}{},
+		"policy": map[string]interface{}{
+			"levels": map[string]interface{}{
+				"0": map[string]interface{}{
+					"statsUserUplink":   true,
+					"statsUserDownlink": true,
+				},
+			},
+		},
+		"api": map[string]interface{}{
+			"tag":      "api",
+			"services": []string{"StatsService", "HandlerService"},
 		},
 		"dns": map[string]interface{}{
 			"servers": []interface{}{
@@ -69,7 +100,20 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 				"localhost",
 			},
 		},
-		"inbounds": []interface{}{},
+		"inbounds": []interface{}{
+			// Loopback-only API inbound for stats polling. dokodemo-door
+			// followType "api" is Xray's recommended way to expose StatsService
+			// to in-host consumers.
+			map[string]interface{}{
+				"tag":      "api",
+				"listen":   "127.0.0.1",
+				"port":     statsPort,
+				"protocol": "dokodemo-door",
+				"settings": map[string]interface{}{
+					"address": "127.0.0.1",
+				},
+			},
+		},
 		"outbounds": []interface{}{
 			map[string]interface{}{
 				"protocol": "freedom",
@@ -85,7 +129,15 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 		},
 		"routing": map[string]interface{}{
 			"domainStrategy": "IPIfNonMatch",
-			"rules":          []interface{}{},
+			"rules": []interface{}{
+				// Pin the api inbound to the api outbound so stats traffic
+				// never leaks through user-defined routing rules.
+				map[string]interface{}{
+					"type":        "field",
+					"inboundTag":  []string{"api"},
+					"outboundTag": "api",
+				},
+			},
 		},
 	}
 
