@@ -282,6 +282,8 @@ type clientPayload struct {
 	TrafficLimit     *int64  `json:"traffic_limit"`
 	ExpiryTime       *int64  `json:"expiry_time"`
 	ExpiryTimeLegacy *int64  `json:"expiryTime"`
+	SpeedLimit       *int64  `json:"speed_limit"`
+	ResetDay         *int    `json:"reset_day"`
 	Remark           *string `json:"remark"`
 }
 
@@ -336,6 +338,11 @@ func validateInbound(target model.Inbound) string {
 	}
 	if listen := strings.TrimSpace(target.Listen); listen != "" && net.ParseIP(listen) == nil {
 		return "Listen must be blank or a valid IP address"
+	}
+	// Port conflict check — exclude self (target.ID == 0 on create, non-zero on update)
+	var conflict model.Inbound
+	if res := config.DB.Where("port = ? AND id != ? AND deleted_at IS NULL", target.Port, target.ID).First(&conflict); res.Error == nil {
+		return fmt.Sprintf("Port %d is already used by inbound '%s'", target.Port, conflict.Tag)
 	}
 	if strings.TrimSpace(target.ServerAddress) == "" && !inboundHasDerivedPublicHost(target.Stream) {
 		return "Fill 'Public Host / IP' or a stream host (TLS serverName, WebSocket Host, HTTP/2 host, or HTTPUpgrade host) — clients need this to reach the proxy."
@@ -449,6 +456,19 @@ func applyClientPayload(target *model.Client, payload clientPayload) {
 	case payload.ExpiryTimeLegacy != nil:
 		target.ExpiryTime = *payload.ExpiryTimeLegacy
 	}
+	if payload.SpeedLimit != nil {
+		target.SpeedLimit = *payload.SpeedLimit
+	}
+	if payload.ResetDay != nil {
+		day := *payload.ResetDay
+		if day < 0 {
+			day = 0
+		}
+		if day > 28 {
+			day = 28
+		}
+		target.ResetDay = day
+	}
 	if payload.Remark != nil {
 		target.Remark = strings.TrimSpace(*payload.Remark)
 	}
@@ -536,6 +556,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20)
 		c.Next()
 	})
+
+	// IP Whitelist — applied before setup guard so non-whitelisted IPs see 404
+	r.Use(middleware.IPWhitelistMiddleware())
 
 	// Apply Setup Guard Globally
 	r.Use(middleware.SetupGuardMiddleware())
@@ -694,6 +717,47 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "pong"})
 		})
 
+		// Health check — unauthenticated, suitable for external monitors (UptimeRobot, Grafana)
+		apiGroup.GET("/health", func(c *gin.Context) {
+			proxyStatus := "stopped"
+			if xm.Status() || sm.Status() {
+				proxyStatus = "running"
+			}
+
+			dbStatus := "ok"
+			if sqlDB, err := config.DB.DB(); err != nil || sqlDB.Ping() != nil {
+				dbStatus = "error"
+			}
+
+			health := gin.H{
+				"status": "ok",
+				"proxy":  proxyStatus,
+				"db":     dbStatus,
+			}
+
+			if stats, err := monitor.GetSystemStats(); err == nil {
+				health["uptime_seconds"] = stats.UptimeSeconds
+				health["disk_free_gb"] = float64(stats.DiskTotal-stats.DiskUsed) / (1024 * 1024 * 1024)
+			}
+
+			// Include cert expiry if TLS is configured
+			certPath := config.GetSetting("tls_cert_path")
+			keyPath := config.GetSetting("tls_key_path")
+			if certPath != "" && keyPath != "" {
+				if expiry, err := cert.ValidatePair(certPath, keyPath); err == nil {
+					health["cert_expires_in_days"] = int(time.Until(expiry).Hours() / 24)
+				}
+			}
+
+			statusCode := http.StatusOK
+			if dbStatus == "error" {
+				health["status"] = "degraded"
+				statusCode = http.StatusServiceUnavailable
+			}
+
+			c.JSON(statusCode, health)
+		})
+
 		apiGroup.POST("/login", func(c *gin.Context) {
 			// IP lockout check (5 consecutive failures = 15 min lockout)
 			if locked, remaining := checkIPLockout(c.ClientIP()); locked {
@@ -797,6 +861,18 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 		authGroup.GET("/system/network-history", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": monitor.GetNetworkHistory()})
+		})
+
+		// Extended network history (persisted hourly snapshots). Default window: 7 days.
+		authGroup.GET("/system/network-history/extended", func(c *gin.Context) {
+			since := time.Now().AddDate(0, 0, -7).Unix()
+			if q := strings.TrimSpace(c.Query("since")); q != "" {
+				if v, err := strconv.ParseInt(q, 10, 64); err == nil && v > 0 {
+					since = v
+				}
+			}
+			data := monitor.GetPersistedHistory(config.DB, since)
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": data})
 		})
 
 		// ======================================
@@ -1453,6 +1529,61 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			recordAudit(c, "client.delete", fmt.Sprintf("id=%d", id))
 		})
 
+		// Bulk client operations: delete, enable, disable, reset_traffic by IDs
+		authGroup.POST("/clients/bulk", func(c *gin.Context) {
+			var req struct {
+				Action string `json:"action"`
+				IDs    []uint `json:"ids"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if len(req.IDs) == 0 {
+				c.JSON(400, gin.H{"code": 400, "msg": "ids must not be empty"})
+				return
+			}
+
+			var affected int64
+			switch req.Action {
+			case "delete":
+				res := config.DB.Delete(&model.Client{}, "id IN ?", req.IDs)
+				if res.Error != nil {
+					c.JSON(500, gin.H{"code": 500, "msg": "Bulk delete failed"})
+					return
+				}
+				affected = res.RowsAffected
+			case "enable":
+				res := config.DB.Model(&model.Client{}).Where("id IN ?", req.IDs).Update("enable", true)
+				if res.Error != nil {
+					c.JSON(500, gin.H{"code": 500, "msg": "Bulk enable failed"})
+					return
+				}
+				affected = res.RowsAffected
+			case "disable":
+				res := config.DB.Model(&model.Client{}).Where("id IN ?", req.IDs).Update("enable", false)
+				if res.Error != nil {
+					c.JSON(500, gin.H{"code": 500, "msg": "Bulk disable failed"})
+					return
+				}
+				affected = res.RowsAffected
+			case "reset_traffic":
+				res := config.DB.Model(&model.Client{}).Where("id IN ?", req.IDs).Updates(map[string]interface{}{"up_load": 0, "down_load": 0})
+				if res.Error != nil {
+					c.JSON(500, gin.H{"code": 500, "msg": "Bulk reset failed"})
+					return
+				}
+				affected = res.RowsAffected
+			default:
+				c.JSON(400, gin.H{"code": 400, "msg": "action must be one of: delete, enable, disable, reset_traffic"})
+				return
+			}
+
+			sub.InvalidateSubCache()
+			recordAudit(c, "client.bulk_"+req.Action, fmt.Sprintf("affected=%d", affected))
+			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": gin.H{"affected": affected}})
+		})
+
 		// ======================================
 		// Routing Rule CRUD
 		// ======================================
@@ -1702,14 +1833,12 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		})
 
 		authGroup.DELETE("/firewall/rules", func(c *gin.Context) {
-			var req struct {
-				Num string `json:"num"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil {
+			var rule firewall.Rule
+			if err := c.ShouldBindJSON(&rule); err != nil {
 				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
 				return
 			}
-			if err := firewall.DeleteRule(req.Num); err != nil {
+			if err := firewall.DeleteRule(rule); err != nil {
 				log.Printf("Firewall delete error: %v", err)
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete firewall rule"})
 				return
@@ -1915,6 +2044,52 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					return
 				}
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": cfg})
+			})
+
+			// Clash API toggle + connections proxy (Sing-box experimental.clash_api)
+			proxyGroup.POST("/clash-api/enable", func(c *gin.Context) {
+				config.SetSetting("singbox_clash_api_enabled", "true")
+				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Clash API enabled. Re-apply Sing-box config to take effect."})
+			})
+
+			proxyGroup.POST("/clash-api/disable", func(c *gin.Context) {
+				config.SetSetting("singbox_clash_api_enabled", "false")
+				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Clash API disabled. Re-apply Sing-box config to take effect."})
+			})
+
+			proxyGroup.GET("/clash-api/status", func(c *gin.Context) {
+				enabled := config.GetSetting("singbox_clash_api_enabled") == "true"
+				c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"enabled": enabled}})
+			})
+
+			// Live connections — proxies Sing-box's Clash API /connections endpoint.
+			proxyGroup.GET("/connections", func(c *gin.Context) {
+				if !sm.Status() {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Sing-box is not running"})
+					return
+				}
+				if config.GetSetting("singbox_clash_api_enabled") != "true" {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Clash API not enabled — enable it and re-apply Sing-box config"})
+					return
+				}
+				port := config.GetSetting("singbox_clash_api_port")
+				if port == "" {
+					port = "9090"
+				}
+				client := &http.Client{Timeout: 3 * time.Second}
+				resp, err := client.Get("http://127.0.0.1:" + port + "/connections")
+				if err != nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Failed to reach Clash API: " + err.Error()})
+					return
+				}
+				defer resp.Body.Close()
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 5<<20)) // 5 MiB cap
+				var data interface{}
+				if err := json.Unmarshal(body, &data); err != nil {
+					c.JSON(http.StatusBadGateway, gin.H{"code": 502, "msg": "Invalid response from Clash API"})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 200, "data": data})
 			})
 
 			// TLS Certificates Management
@@ -2275,10 +2450,13 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			panelPath := config.GetSetting("panel_path")
 			port := config.GetSetting("port")
 			usageProfile := normalizeUsageProfile(config.GetSetting("usage_profile"))
+			ipWhitelist := config.GetSetting("panel_ip_whitelist")
 			c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
 				"panel_path":    panelPath,
 				"port":          port,
 				"usage_profile": usageProfile,
+				"ip_whitelist":  ipWhitelist,
+				"your_ip":       c.ClientIP(),
 			}})
 		})
 
@@ -2287,6 +2465,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				PanelPath    *string `json:"panel_path"`
 				Port         *string `json:"port"`
 				UsageProfile *string `json:"usage_profile"`
+				IPWhitelist  *string `json:"ip_whitelist"`
 			}
 			if err := c.ShouldBindJSON(&req); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid request"})
@@ -2309,6 +2488,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			if req.UsageProfile != nil {
 				config.SetSetting("usage_profile", normalizeUsageProfile(*req.UsageProfile))
+				changed = true
+			}
+			if req.IPWhitelist != nil {
+				config.SetSetting("panel_ip_whitelist", strings.TrimSpace(*req.IPWhitelist))
 				changed = true
 			}
 			msg := "Settings saved."
@@ -2446,6 +2629,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			"notify_enable_expired",
 			"notify_enable_traffic_limit",
 			"notify_enable_proxy_crashed",
+			"notify_enable_cert_expiry",
+			"notify_telegram_bot_enabled",
 		}
 
 		authGroup.GET("/admin/notify", func(c *gin.Context) {
@@ -2454,6 +2639,46 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				result[k] = config.GetSetting(k)
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": result})
+		})
+
+		// DNS Settings — controls how Sing-box/Xray resolve domains for outbound traffic.
+		authGroup.GET("/admin/dns", func(c *gin.Context) {
+			mode := config.GetSetting("dns_mode")
+			if mode == "" {
+				mode = "plain"
+			}
+			c.JSON(200, gin.H{"code": 200, "data": gin.H{
+				"dns_mode":      mode,
+				"dns_primary":   config.GetSetting("dns_primary"),
+				"dns_secondary": config.GetSetting("dns_secondary"),
+			}})
+		})
+
+		authGroup.PUT("/admin/dns", func(c *gin.Context) {
+			var req struct {
+				DNSMode      *string `json:"dns_mode"`
+				DNSPrimary   *string `json:"dns_primary"`
+				DNSSecondary *string `json:"dns_secondary"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			if req.DNSMode != nil {
+				mode := strings.ToLower(strings.TrimSpace(*req.DNSMode))
+				if mode != "" && mode != "plain" && mode != "doh" {
+					c.JSON(400, gin.H{"code": 400, "msg": "dns_mode must be 'plain' or 'doh'"})
+					return
+				}
+				config.SetSetting("dns_mode", mode)
+			}
+			if req.DNSPrimary != nil {
+				config.SetSetting("dns_primary", strings.TrimSpace(*req.DNSPrimary))
+			}
+			if req.DNSSecondary != nil {
+				config.SetSetting("dns_secondary", strings.TrimSpace(*req.DNSSecondary))
+			}
+			c.JSON(200, gin.H{"code": 200, "msg": "Saved. Re-apply proxy config to take effect."})
 		})
 
 		authGroup.PUT("/admin/notify", func(c *gin.Context) {

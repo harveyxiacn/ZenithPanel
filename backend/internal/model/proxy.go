@@ -33,8 +33,10 @@ type Client struct {
 	Enable     bool           `gorm:"default:true" json:"enable"`
 	UpLoad     int64          `gorm:"default:0" json:"up_load"`     // Bytes uploaded
 	DownLoad   int64          `gorm:"default:0" json:"down_load"`   // Bytes downloaded
-	Total      int64          `gorm:"default:0" json:"total"`       // Traffic limit (0 = unlimited)
-	ExpiryTime int64          `gorm:"default:0" json:"expiry_time"` // Unix timestamp (0 = never expires)
+	Total      int64          `gorm:"default:0" json:"total"`        // Traffic limit (0 = unlimited)
+	ExpiryTime int64          `gorm:"default:0" json:"expiry_time"`  // Unix timestamp (0 = never expires)
+	SpeedLimit int64          `gorm:"default:0" json:"speed_limit"`  // bytes/sec outbound cap (0 = unlimited)
+	ResetDay   int            `gorm:"default:0" json:"reset_day"`    // day-of-month for monthly traffic reset (0 = off)
 	Remark     string         `json:"remark"`
 	CreatedAt  time.Time      `json:"created_at"`
 	UpdatedAt  time.Time      `json:"updated_at"`

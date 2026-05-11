@@ -58,6 +58,44 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 		}
 	}
 
+	// Per-client bandwidth caps: emit a route rule for each client with SpeedLimit > 0.
+	// Sing-box v1.11 supports override_download_bandwidth / override_upload_bandwidth on
+	// route rules matching inbound + inbound_user.
+	inboundTagByID := make(map[uint]string, len(inbounds))
+	for _, in := range inbounds {
+		inboundTagByID[in.ID] = in.Tag
+	}
+	for _, clientList := range clientsByInbound {
+		for _, c := range clientList {
+			if c.SpeedLimit <= 0 || !c.Enable {
+				continue
+			}
+			tag, ok := inboundTagByID[c.InboundID]
+			if !ok {
+				continue
+			}
+			// Convert bytes/sec → Mbps (1 MB/s = 8 Mbps), minimum 1 mbps
+			mbps := (c.SpeedLimit * 8) / (1024 * 1024)
+			if mbps < 1 {
+				mbps = 1
+			}
+			routeRules = append(routeRules, map[string]interface{}{
+				"type": "logical",
+				"mode": "and",
+				"rules": []interface{}{
+					map[string]interface{}{
+						"inbound":      []string{tag},
+						"inbound_user": []string{c.Email},
+					},
+				},
+				"action":                      "route",
+				"outbound":                    "direct",
+				"override_download_bandwidth": fmt.Sprintf("%d mbps", mbps),
+				"override_upload_bandwidth":   fmt.Sprintf("%d mbps", mbps),
+			})
+		}
+	}
+
 	// System outbounds always present
 	outbounds := []interface{}{
 		map[string]interface{}{"type": "direct", "tag": "direct"},
@@ -72,27 +110,19 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 		}
 	}
 
+	primary, secondary := resolveDNSServers()
 	singboxConfig := map[string]interface{}{
 		"log": map[string]interface{}{
 			"level": "warn",
 		},
 		"dns": map[string]interface{}{
 			"servers": []interface{}{
-				map[string]interface{}{
-					"tag":     "dns-remote",
-					"address": "udp://8.8.8.8",
-				},
-				map[string]interface{}{
-					"tag":     "dns-google",
-					"address": "udp://1.1.1.1",
-				},
-				map[string]interface{}{
-					"tag":     "dns-local",
-					"address": "local",
-				},
+				map[string]interface{}{"tag": "dns-primary", "address": primary},
+				map[string]interface{}{"tag": "dns-secondary", "address": secondary},
+				map[string]interface{}{"tag": "dns-local", "address": "local"},
 			},
 			"strategy": "prefer_ipv4",
-			"final":    "dns-remote",
+			"final":    "dns-primary",
 		},
 		"inbounds":  []interface{}{},
 		"outbounds": outbounds,
@@ -109,6 +139,20 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 			return "", fmt.Errorf("build singbox inbound %q: %w", in.Tag, err)
 		}
 		singboxConfig["inbounds"] = append(singboxConfig["inbounds"].([]interface{}), inboundEntry)
+	}
+
+	// Enable Clash API for real-time connection inspection if toggled in settings.
+	if config.GetSetting("singbox_clash_api_enabled") == "true" {
+		port := config.GetSetting("singbox_clash_api_port")
+		if port == "" {
+			port = "9090"
+		}
+		singboxConfig["experimental"] = map[string]interface{}{
+			"clash_api": map[string]interface{}{
+				"external_controller": "127.0.0.1:" + port,
+				"secret":              "",
+			},
+		}
 	}
 
 	return PrettifyJSON(singboxConfig)
@@ -284,11 +328,53 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 			}
 		}
 		applyStreamToSingbox(entry, stream)
+
+		// Optional connection multiplexing (smux/yamux/h2mux). Sing-box treats
+		// multiplex as a sibling of transport, so it lives directly on the inbound.
+		if mux, ok := stream["multiplex"].(map[string]interface{}); ok {
+			if enabled, _ := mux["enabled"].(bool); enabled {
+				proto := "smux"
+				if p, ok := mux["protocol"].(string); ok && p != "" {
+					proto = p
+				}
+				entry["multiplex"] = map[string]interface{}{
+					"enabled":         true,
+					"protocol":        proto,
+					"max_connections": 4,
+					"min_streams":     4,
+				}
+			}
+		}
 	} else if in.Protocol == "trojan" {
 		return nil, fmt.Errorf("trojan inbound %q requires TLS or Reality stream settings", in.Tag)
 	}
 
 	return entry, nil
+}
+
+// resolveDNSServers returns the primary and secondary DNS addresses to embed
+// in the Sing-box DNS block. Supports plain (default) and DoH modes via the
+// `dns_mode` setting, with per-server overrides via `dns_primary`/`dns_secondary`.
+func resolveDNSServers() (string, string) {
+	mode := strings.ToLower(strings.TrimSpace(config.GetSetting("dns_mode")))
+	primary := strings.TrimSpace(config.GetSetting("dns_primary"))
+	secondary := strings.TrimSpace(config.GetSetting("dns_secondary"))
+
+	if primary == "" {
+		if mode == "doh" {
+			primary = "https://cloudflare-dns.com/dns-query"
+		} else {
+			primary = "udp://8.8.8.8"
+		}
+	}
+	if secondary == "" {
+		if mode == "doh" {
+			secondary = "https://dns.google/dns-query"
+		} else {
+			secondary = "udp://1.1.1.1"
+		}
+	}
+	return primary, secondary
 }
 
 // applyStreamToSingbox extracts TLS and transport config from Xray-style stream

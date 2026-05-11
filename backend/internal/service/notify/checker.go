@@ -6,7 +6,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/cert"
 	"gorm.io/gorm"
 )
 
@@ -27,6 +29,7 @@ func loadConfig(db *gorm.DB) Config {
 		EnableExpired:      parseBool(get("notify_enable_expired")),
 		EnableTrafficLimit: parseBool(get("notify_enable_traffic_limit")),
 		EnableProxyCrashed: parseBool(get("notify_enable_proxy_crashed")),
+		EnableCertExpiry:   parseBool(get("notify_enable_cert_expiry")),
 	}
 }
 
@@ -76,5 +79,37 @@ func RunClientChecks(db *gorm.DB) {
 				})
 			}
 		}
+	}
+}
+
+// RunCertCheck fires a cert-expiry notification if the panel TLS certificate
+// will expire within 14 days. Safe to call on every notify ticker cycle.
+func RunCertCheck(db *gorm.DB) {
+	cfg := loadConfig(db)
+	if !cfg.EnableCertExpiry {
+		return
+	}
+	if cfg.TelegramToken == "" && cfg.WebhookURL == "" {
+		return
+	}
+
+	certPath := config.GetSetting("tls_cert_path")
+	keyPath := config.GetSetting("tls_key_path")
+	if certPath == "" || keyPath == "" {
+		return // TLS not configured
+	}
+
+	expiry, err := cert.ValidatePair(certPath, keyPath)
+	if err != nil {
+		log.Printf("notify: cert check failed to read cert: %v", err)
+		return
+	}
+
+	daysLeft := int(time.Until(expiry).Hours() / 24)
+	if daysLeft <= 14 {
+		Send(cfg, Event{
+			Type:    EventCertExpiringSoon,
+			Message: fmt.Sprintf("TLS certificate expires in *%d day(s)* (%s). Renew soon to avoid connection failures.", daysLeft, expiry.Format("2006-01-02")),
+		})
 	}
 }

@@ -4,12 +4,21 @@ export interface AccessConfigData {
   panel_path?: string
   port?: string
   usage_profile?: string
+  ip_whitelist?: string
+  your_ip?: string
 }
 
 export interface AccessConfigUpdatePayload {
   panel_path?: string
   port?: string
   usage_profile?: string
+  ip_whitelist?: string
+}
+
+export interface DNSSettings {
+  dns_mode?: string
+  dns_primary?: string
+  dns_secondary?: string
 }
 
 export function getSystemMonitor() {
@@ -18,6 +27,24 @@ export function getSystemMonitor() {
 
 export function getNetworkHistory() {
   return apiClient.get('/v1/system/network-history')
+}
+
+export function getExtendedNetworkHistory(since?: number) {
+  return apiClient.get('/v1/system/network-history/extended', { params: since ? { since } : {} })
+}
+
+// DNS Configuration (controls Sing-box / Xray DNS — DoH or plain UDP)
+export function getDNSSettings() {
+  return apiClient.get('/v1/admin/dns')
+}
+
+export function updateDNSSettings(data: DNSSettings) {
+  return apiClient.put('/v1/admin/dns', data)
+}
+
+// Health (unauthenticated, suitable for external monitors)
+export function getHealth() {
+  return apiClient.get('/v1/health')
 }
 
 export function getNetworkDiagnostics() {

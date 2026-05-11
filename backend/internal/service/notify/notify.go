@@ -29,6 +29,7 @@ const (
 	EventClientExpired       EventType = "client_expired"
 	EventTrafficLimitReached EventType = "traffic_limit_reached" // >90%
 	EventProxyCoreCrashed    EventType = "proxy_core_crashed"
+	EventCertExpiringSoon    EventType = "cert_expiring_soon"
 )
 
 // Event is a notification payload.
@@ -48,6 +49,7 @@ type Config struct {
 	EnableExpired       bool
 	EnableTrafficLimit  bool
 	EnableProxyCrashed  bool
+	EnableCertExpiry    bool
 }
 
 // Send dispatches an event according to the supplied config. Errors are logged
@@ -103,6 +105,8 @@ func isEnabled(cfg Config, t EventType) bool {
 		return cfg.EnableTrafficLimit
 	case EventProxyCoreCrashed:
 		return cfg.EnableProxyCrashed
+	case EventCertExpiringSoon:
+		return cfg.EnableCertExpiry
 	}
 	return true // unknown event types always sent
 }
@@ -113,6 +117,7 @@ func formatTelegramMessage(ev Event) string {
 		EventClientExpired:       "🔴",
 		EventTrafficLimitReached: "📊",
 		EventProxyCoreCrashed:    "💥",
+		EventCertExpiringSoon:    "🔐",
 	}
 	e := emoji[ev.Type]
 	if e == "" {

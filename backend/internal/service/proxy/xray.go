@@ -53,14 +53,19 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 	// then group by inbound_id. Avoids issuing one query per inbound inside the loop.
 	clientsByInbound := fetchClientsByInbound(inbounds)
 
+	xrayPrimary, xraySecondary := resolveDNSServers()
+	// Xray's DNS expects bare server addresses (IPs, FQDNs, or https:// URLs for DoH).
+	// Strip the "udp://" prefix Sing-box uses for plain DNS so Xray parses correctly.
+	xrayPrimary = strings.TrimPrefix(xrayPrimary, "udp://")
+	xraySecondary = strings.TrimPrefix(xraySecondary, "udp://")
 	xrayConfig := map[string]interface{}{
 		"log": map[string]interface{}{
 			"loglevel": "warning",
 		},
 		"dns": map[string]interface{}{
 			"servers": []interface{}{
-				"8.8.8.8",
-				"1.1.1.1",
+				xrayPrimary,
+				xraySecondary,
 				"localhost",
 			},
 		},

@@ -25,7 +25,6 @@ var (
 	validProtocols = map[string]bool{"tcp": true, "udp": true, "icmp": true, "all": true}
 	validActions   = map[string]bool{"ACCEPT": true, "DROP": true, "REJECT": true}
 	portRangeRe    = regexp.MustCompile(`^\d+(?::\d+)?$`)
-	ruleNumRe      = regexp.MustCompile(`^\d+$`)
 )
 
 // validateRule checks all user-supplied parameters before passing them to iptables.
@@ -197,7 +196,7 @@ func RemoveCloudflareProtection(port string) {
 	for i := len(rules) - 1; i >= 0; i-- {
 		r := rules[i]
 		if r.Port == port && (strings.Contains(r.Extra, "Cloudflare") || strings.Contains(r.Extra, "CF-Block-Others")) {
-			DeleteRule(r.Num)
+			DeleteRule(r)
 		}
 	}
 }
@@ -216,12 +215,26 @@ func IsCloudflareProtected(port string) bool {
 	return false
 }
 
-// DeleteRule removes a rule from the INPUT chain by line number
-func DeleteRule(num string) error {
-	if !ruleNumRe.MatchString(num) {
-		return fmt.Errorf("invalid rule number: must be a positive integer")
+// DeleteRule removes a rule from the INPUT chain by reconstructing its full spec.
+// This avoids the line-number shift bug where inserting rules changes line numbers
+// and causes subsequent deletions to target the wrong rule.
+func DeleteRule(r Rule) error {
+	args := []string{"-D", "INPUT"}
+	proto := strings.ToLower(r.Protocol)
+	if proto != "" && proto != "all" {
+		args = append(args, "-p", proto)
 	}
-	out, err := exec.Command("iptables", "-D", "INPUT", num).CombinedOutput()
+	if r.Source != "" && r.Source != "0.0.0.0/0" {
+		args = append(args, "-s", r.Source)
+	}
+	if r.Port != "" {
+		args = append(args, "--dport", r.Port)
+	}
+	if r.Target == "" {
+		return fmt.Errorf("rule target is required")
+	}
+	args = append(args, "-j", strings.ToUpper(r.Target))
+	out, err := exec.Command("iptables", args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("iptables: %s (%w)", strings.TrimSpace(string(out)), err)
 	}

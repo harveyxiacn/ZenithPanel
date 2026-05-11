@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon, GlobeAltIcon, Cog6ToothIcon, BoltIcon, CpuChipIcon, AdjustmentsHorizontalIcon, TrashIcon } from '@heroicons/vue/24/outline'
-import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup, downloadBackup, restoreBackup } from '@/api/system'
+import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup, downloadBackup, restoreBackup, getDNSSettings, updateDNSSettings } from '@/api/system'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '../composables/useToast'
 import { useUsageProfile } from '@/composables/useUsageProfile'
@@ -223,7 +223,42 @@ async function onRemoveTLS() {
 const accessPath = ref('')
 const accessPort = ref('')
 const accessUsageProfile = ref<UsageProfile>('mixed')
+const accessIPWhitelist = ref('')
+const accessYourIP = ref('')
 const accessLoading = ref(false)
+
+// ---- DNS Settings (Sing-box / Xray outbound DNS) ----
+const dnsMode = ref('plain')
+const dnsPrimary = ref('')
+const dnsSecondary = ref('')
+const dnsLoading = ref(false)
+
+async function loadDNSSettings() {
+  try {
+    const res = await getDNSSettings() as any
+    if (res.code === 200) {
+      dnsMode.value = res.data.dns_mode || 'plain'
+      dnsPrimary.value = res.data.dns_primary || ''
+      dnsSecondary.value = res.data.dns_secondary || ''
+    }
+  } catch { /* silent */ }
+}
+
+async function onSaveDNS() {
+  dnsLoading.value = true
+  try {
+    await updateDNSSettings({
+      dns_mode: dnsMode.value,
+      dns_primary: dnsPrimary.value,
+      dns_secondary: dnsSecondary.value,
+    })
+    toast.success('DNS settings saved. Re-apply proxy config to take effect.')
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || 'Failed to save DNS settings')
+  } finally {
+    dnsLoading.value = false
+  }
+}
 const accessMsg = ref('')
 const accessMsgType = ref<'success' | 'error'>('success')
 
@@ -251,6 +286,8 @@ async function loadAccessConfig() {
       accessPort.value = res.data.port || ''
       accessOriginalPort.value = res.data.port || ''
       accessUsageProfile.value = usageProfile.value
+      accessIPWhitelist.value = res.data.ip_whitelist || ''
+      accessYourIP.value = res.data.your_ip || ''
     }
   } catch { toast.error(t('common.errorOccurred')) }
 }
@@ -266,6 +303,7 @@ async function onSaveAccess() {
       panel_path: accessPath.value,
       port: accessPort.value,
       usage_profile: accessUsageProfile.value,
+      ip_whitelist: accessIPWhitelist.value,
     }) as any
     if (res.code === 200) {
       syncUsageProfile(accessUsageProfile.value)
@@ -801,6 +839,7 @@ onMounted(() => {
   loadSwapStatus()
   loadSysctlStatus()
   loadNotifyConfig()
+  loadDNSSettings()
 })
 </script>
 
@@ -968,6 +1007,24 @@ onMounted(() => {
               </div>
               <p class="text-xs text-slate-400 mt-1">{{ $t('security.access.pathHint') }}</p>
             </div>
+
+            <!-- IP Whitelist -->
+            <div class="border-t border-slate-100 pt-4">
+              <label class="block text-sm font-medium text-slate-700 mb-1">IP Whitelist</label>
+              <p class="text-xs text-slate-500 mb-2">Comma-separated IPs or CIDRs allowed to reach the panel. Leave empty to allow all. Non-matching requests get 404 (panel is hidden).</p>
+              <textarea v-model="accessIPWhitelist" rows="2" placeholder="1.2.3.4, 10.0.0.0/24"
+                class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:border-primary-500 focus:ring-primary-500"></textarea>
+              <div class="flex items-start gap-2 mt-2 text-xs">
+                <span class="text-slate-500">Your current IP:</span>
+                <span class="font-mono text-slate-700">{{ accessYourIP || '—' }}</span>
+                <button v-if="accessYourIP" @click="accessIPWhitelist = accessIPWhitelist ? accessIPWhitelist + ',' + accessYourIP : accessYourIP"
+                  class="text-primary-600 hover:underline">+ Add to whitelist</button>
+              </div>
+              <p v-if="accessIPWhitelist.trim()" class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
+                ⚠ Whitelist is active. If your IP changes and isn't whitelisted, you'll be locked out.
+              </p>
+            </div>
+
             <div v-if="accessMsg" :class="['text-sm p-2 rounded-lg', accessMsgType === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700']">{{ accessMsg }}</div>
             <div class="flex items-center space-x-3">
               <button @click="onSaveAccess" :disabled="accessLoading || accessRestarting" class="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
@@ -977,6 +1034,55 @@ onMounted(() => {
                 {{ accessRestarting ? $t('security.update.restarting', { n: '...' }) : $t('security.access.applyRestart') }}
               </button>
             </div>
+          </div>
+        </div>
+
+        <!-- DNS Settings -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-6 border-b border-slate-100 flex items-center">
+            <div class="bg-sky-500/10 text-sky-500 p-2 rounded-lg mr-4">
+              <GlobeAltIcon class="h-6 w-6" />
+            </div>
+            <div>
+              <h3 class="text-lg font-medium text-slate-800">DNS Configuration</h3>
+              <p class="text-sm text-slate-500">Controls how Sing-box / Xray resolve domains for outbound traffic</p>
+            </div>
+          </div>
+          <div class="p-6 space-y-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">DNS Mode</label>
+              <div class="flex gap-3">
+                <label class="flex items-center gap-2 text-sm">
+                  <input v-model="dnsMode" type="radio" value="plain" />
+                  <span>Plain DNS (UDP)</span>
+                </label>
+                <label class="flex items-center gap-2 text-sm">
+                  <input v-model="dnsMode" type="radio" value="doh" />
+                  <span>DNS over HTTPS (DoH)</span>
+                </label>
+              </div>
+              <p class="text-xs text-slate-400 mt-1">DoH hides DNS queries from your ISP. Plain DNS is faster but visible to network operators.</p>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="text-xs font-medium text-slate-600">Primary (optional override)</label>
+                <input v-model="dnsPrimary" type="text"
+                  :placeholder="dnsMode === 'doh' ? 'https://cloudflare-dns.com/dns-query' : 'udp://8.8.8.8'"
+                  class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono mt-1" />
+              </div>
+              <div>
+                <label class="text-xs font-medium text-slate-600">Secondary (optional override)</label>
+                <input v-model="dnsSecondary" type="text"
+                  :placeholder="dnsMode === 'doh' ? 'https://dns.google/dns-query' : 'udp://1.1.1.1'"
+                  class="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono mt-1" />
+              </div>
+            </div>
+            <p class="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded p-2">
+              ℹ Re-apply your proxy config after saving for changes to take effect.
+            </p>
+            <button @click="onSaveDNS" :disabled="dnsLoading" class="bg-primary-600 hover:bg-primary-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+              {{ dnsLoading ? $t('common.loading') : $t('common.save') }}
+            </button>
           </div>
         </div>
 
