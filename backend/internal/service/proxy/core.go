@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -147,9 +149,75 @@ func (c *BaseCore) validateConfig() error {
 		if output == "" {
 			output = err.Error()
 		}
+		hint := annotateSingboxError(c.ConfigPath, output)
+		if hint != "" {
+			return fmt.Errorf("config validation failed:\n%s\n\n%s", output, hint)
+		}
 		return fmt.Errorf("config validation failed:\n%s", output)
 	}
 	return nil
+}
+
+// annotateSingboxError post-processes a failed `sing-box check` output to add
+// a human-readable hint that maps inbound[N] back to the inbound's tag, and
+// flags missing cert files on disk. sing-box's native error references the
+// inbound by ordinal, which is useless when the panel has half a dozen of
+// them — this surfaces the actual tag the operator needs to fix.
+func annotateSingboxError(configPath, output string) string {
+	idx, ok := parseInboundIndex(output)
+	if !ok {
+		return ""
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Inbounds []map[string]interface{} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return ""
+	}
+	if idx < 0 || idx >= len(cfg.Inbounds) {
+		return ""
+	}
+	ib := cfg.Inbounds[idx]
+	tag, _ := ib["tag"].(string)
+	typ, _ := ib["type"].(string)
+	hint := fmt.Sprintf("Hint: the failing inbound is index %d — tag=%q, type=%q.", idx, tag, typ)
+	if tls, ok := ib["tls"].(map[string]interface{}); ok {
+		if cp, _ := tls["certificate_path"].(string); cp != "" {
+			if _, err := os.Stat(cp); err != nil {
+				hint += fmt.Sprintf("\nCert file %q does not exist on disk — issue or upload the certificate, or switch the inbound to Reality.", cp)
+			}
+		}
+		if kp, _ := tls["key_path"].(string); kp != "" {
+			if _, err := os.Stat(kp); err != nil {
+				hint += fmt.Sprintf("\nKey file %q does not exist on disk.", kp)
+			}
+		}
+	}
+	return hint
+}
+
+// parseInboundIndex extracts N from sing-box error strings like
+// "initialize inbound[3]: missing certificate". Returns (idx, true) on match.
+func parseInboundIndex(output string) (int, bool) {
+	const marker = "inbound["
+	i := strings.Index(output, marker)
+	if i < 0 {
+		return 0, false
+	}
+	rest := output[i+len(marker):]
+	end := strings.IndexByte(rest, ']')
+	if end <= 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // startAndVerify validates the config, starts the process, captures stdout+stderr,

@@ -52,6 +52,12 @@ func TestSingboxRealityHandshakeSplitsDest(t *testing.T) {
 	if handshake["server_port"] != 443 {
 		t.Errorf("expected handshake.server_port=443, got %v", handshake["server_port"])
 	}
+	// Sing-box 1.11+ silently ignores the reality block without this field
+	// and then bails at startup with "missing certificate" — guard against
+	// regression.
+	if reality["enabled"] != true {
+		t.Errorf("expected reality.enabled=true (sing-box 1.11 requirement), got %v", reality["enabled"])
+	}
 }
 
 // TestSingboxH2TransportMapping verifies that HTTP/2 stream settings produce

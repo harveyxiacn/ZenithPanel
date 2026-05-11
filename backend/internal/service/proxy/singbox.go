@@ -514,7 +514,15 @@ func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interf
 		tls := map[string]interface{}{
 			"enabled": true,
 		}
-		reality := map[string]interface{}{}
+		// Sing-box 1.11+ requires the inner reality block to set enabled:true
+		// explicitly. Without it the TLS block parses, reality is silently
+		// ignored, and sing-box errors at startup with the misleading
+		// "missing certificate" — because it then tries plain TLS without
+		// a cert path. Set this unconditionally; turning Reality off means
+		// switching security mode at the inbound level.
+		reality := map[string]interface{}{
+			"enabled": true,
+		}
 		if rs, ok := stream["realitySettings"].(map[string]interface{}); ok {
 			info := ReadRealityStreamInfo(stream)
 			if pk, ok := rs["privateKey"].(string); ok && pk != "" {
