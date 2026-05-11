@@ -993,6 +993,12 @@ async function useRecommended() {
 
 async function proceedToReview() {
   if (selectedPresetIds.value.length === 0) return
+  // Smart default for the Public Host/IP field: the user is already reaching the
+  // panel via the VPS hostname, so reuse it. Skip for loopback so we don't
+  // pre-fill nonsense during local development.
+  const browserHost = window.location.hostname
+  const isLoopback = browserHost === 'localhost' || browserHost === '127.0.0.1' || browserHost === '::1' || browserHost === ''
+  const defaultPublicHost = isLoopback ? '' : browserHost
   for (const id of selectedPresetIds.value) {
     const preset = presets.find(p => p.id === id)!
     // Generate unique tag: check existing inbounds to avoid UNIQUE constraint conflict
@@ -1024,7 +1030,7 @@ async function proceedToReview() {
       cfg.flow = 'xtls-rprx-vision'
       cfg.fingerprint = 'chrome'
     }
-    cfg.serverAddress = ''
+    cfg.serverAddress = defaultPublicHost
     if (preset.needsDomain) {
       cfg.domain = ''
     }
@@ -1143,15 +1149,15 @@ function buildPayload(presetId: string) {
 }
 
 async function executeQuickSetup() {
-  // Pre-flight: for TLS presets, either a Public Host/IP or a domain is
-  // required, otherwise the backend rejects the inbound because it cannot
-  // build a safe subscription URL.
+  // Pre-flight: every preset needs either a Public Host/IP or a domain so the
+  // backend can build a subscription URL and the proxy can be reached. For
+  // Reality presets `serverNames` is only the masquerade target, not the
+  // proxy host, so it doesn't count.
   for (const id of selectedPresetIds.value) {
-    const preset = presets.find(p => p.id === id)!
     const cfg = presetConfigs.value[id]
     const host = (cfg?.serverAddress || '').trim()
     const domain = (cfg?.domain || '').trim()
-    if (preset.needsDomain && !host && !domain) {
+    if (!host && !domain) {
       toast.error(t('proxy.quickSetup.errors.publicHostRequired', { preset: id }))
       return
     }
@@ -2122,10 +2128,10 @@ watch(activeTab, (newTab) => {
                     <div>
                       <label class="block text-xs font-medium text-slate-500 mb-1">
                         {{ $t('proxy.quickSetup.fields.serverAddress') }}
-                        <span v-if="presets.find(p => p.id === id)?.needsDomain" class="text-rose-400">*</span>
+                        <span class="text-rose-400">*</span>
                       </label>
-                      <input v-model="presetConfigs[id].serverAddress" class="input-field text-sm w-full" placeholder="vpn.example.com" />
-                      <p v-if="presets.find(p => p.id === id)?.needsDomain" class="text-xs text-slate-400 mt-1">{{ $t('proxy.quickSetup.fields.publicHostHint') }}</p>
+                      <input v-model="presetConfigs[id].serverAddress" class="input-field text-sm w-full" placeholder="vpn.example.com or 1.2.3.4" />
+                      <p class="text-xs text-slate-400 mt-1">{{ $t('proxy.quickSetup.fields.publicHostHint') }}</p>
                     </div>
                   </div>
 
