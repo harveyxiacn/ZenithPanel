@@ -44,6 +44,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/webserver"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/traffic"
 	sysopt "github.com/harveyxiacn/ZenithPanel/backend/internal/service/system"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/terminal"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/updater"
@@ -540,7 +541,7 @@ func findDuplicateRoutingRule(target model.RoutingRule, excludeID uint) (*model.
 }
 
 // SetupRoutes configures all the Gin routes.
-func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *proxy.SingboxManager, sched *scheduler.Scheduler) {
+func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *proxy.SingboxManager, sched *scheduler.Scheduler, tm *traffic.Monitor) {
 
 	// Security Headers
 	r.Use(func(c *gin.Context) {
@@ -861,6 +862,30 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 		authGroup.GET("/system/network-history", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": monitor.GetNetworkHistory()})
+		})
+
+		// Traffic Observer — who's moving bytes right now (proxy users + OS processes).
+		// Reads come from the shared in-process traffic.Monitor; no syscalls in
+		// the handler. tm is nil under unit tests, so each handler guards for it.
+		authGroup.GET("/traffic/live", func(c *gin.Context) {
+			if tm == nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Traffic monitor not initialized"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": tm.Latest()})
+		})
+		authGroup.GET("/traffic/history", func(c *gin.Context) {
+			if tm == nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Traffic monitor not initialized"})
+				return
+			}
+			secs := 120
+			if q := strings.TrimSpace(c.Query("seconds")); q != "" {
+				if v, err := strconv.Atoi(q); err == nil && v > 0 && v <= 600 {
+					secs = v
+				}
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": tm.History(secs)})
 		})
 
 		// Extended network history (persisted hourly snapshots). Default window: 7 days.
