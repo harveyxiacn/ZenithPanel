@@ -322,7 +322,8 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		// refuse to start (which would take the entire engine down).
 		if in.Protocol == "trojan" {
 			sec, _ := stream["security"].(string)
-			if sec != "tls" && sec != "reality" {
+			_, nativeTLS := stream["tls"].(map[string]interface{})
+			if sec != "tls" && sec != "reality" && !nativeTLS {
 				return nil, fmt.Errorf("trojan inbound %q requires TLS or Reality security (got %q) — "+
 					"set stream security to 'tls' or 'reality'", in.Tag, sec)
 			}
@@ -347,6 +348,25 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		}
 	} else if in.Protocol == "trojan" {
 		return nil, fmt.Errorf("trojan inbound %q requires TLS or Reality stream settings", in.Tag)
+	}
+
+	// Hysteria2 and TUIC are QUIC-based and mandate TLS with a certificate.
+	// Validate against the resolved entry so both Xray-style and sing-box-native
+	// stream formats are covered. Without this, sing-box refuses to start with
+	// the cryptic "initialize inbound[0]: missing certificate" error.
+	if in.Protocol == "hysteria2" || in.Protocol == "tuic" {
+		tls, _ := entry["tls"].(map[string]interface{})
+		if tls == nil || tls["enabled"] != true {
+			return nil, fmt.Errorf("%s inbound %q requires TLS — open the inbound editor, set Security to TLS, then provide certificate and key files",
+				in.Protocol, in.Tag)
+		}
+		certPath, _ := tls["certificate_path"].(string)
+		keyPath, _ := tls["key_path"].(string)
+		_, hasACME := tls["acme"].(map[string]interface{})
+		if (certPath == "" || keyPath == "") && !hasACME {
+			return nil, fmt.Errorf("%s inbound %q has TLS enabled but is missing certificate_path/key_path — fill in the cert and key files in the inbound editor",
+				in.Protocol, in.Tag)
+		}
 	}
 
 	return entry, nil
@@ -377,9 +397,22 @@ func resolveDNSServers() (string, string) {
 	return primary, secondary
 }
 
-// applyStreamToSingbox extracts TLS and transport config from Xray-style stream
-// settings and converts them to sing-box format.
+// applyStreamToSingbox extracts TLS and transport config from the stored stream
+// JSON. Two input shapes are supported:
+//   - Xray-style (visual form): {"security": "tls", "tlsSettings": {...}, ...}
+//   - Sing-box-native (smart-deploy presets): {"tls": {...}, "transport": {...}}
+//
+// Native blocks are passed through verbatim; Xray-style blocks are translated.
 func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interface{}) {
+	// Sing-box-native pass-through. Smart-deploy stores tls/transport in the
+	// shape sing-box already expects, so we forward them unchanged.
+	if nativeTLS, ok := stream["tls"].(map[string]interface{}); ok {
+		entry["tls"] = nativeTLS
+	}
+	if nativeTransport, ok := stream["transport"].(map[string]interface{}); ok {
+		entry["transport"] = nativeTransport
+	}
+
 	security, _ := stream["security"].(string)
 	network, _ := stream["network"].(string)
 

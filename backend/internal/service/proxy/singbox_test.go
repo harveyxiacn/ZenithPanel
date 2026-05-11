@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
@@ -154,6 +155,112 @@ func TestSingboxNoUTLSWhenNoFingerprint(t *testing.T) {
 	}
 	if _, has := tls["utls"]; has {
 		t.Errorf("expected no utls block when fingerprint is absent")
+	}
+}
+
+// TestSingboxHysteria2RequiresTLS verifies that a Hysteria2 inbound without
+// any TLS configuration is rejected before reaching sing-box, with a
+// user-actionable error rather than the cryptic "missing certificate" startup
+// failure.
+func TestSingboxHysteria2RequiresTLS(t *testing.T) {
+	in := model.Inbound{
+		Tag:      "hy2-no-tls",
+		Protocol: "hysteria2",
+		Port:     8443,
+		Stream:   `{"network": "udp", "security": "none"}`,
+	}
+	_, err := buildSingboxInbound(in, []model.Client{{Email: "u@test", UUID: "pw"}})
+	if err == nil {
+		t.Fatalf("expected error for Hysteria2 inbound without TLS, got nil")
+	}
+	if !strings.Contains(err.Error(), "requires TLS") {
+		t.Errorf("expected error to mention 'requires TLS', got: %v", err)
+	}
+}
+
+// TestSingboxHysteria2TLSWithoutCertRejected catches the case where the user
+// flipped Security to TLS but left cert/key blank.
+func TestSingboxHysteria2TLSWithoutCertRejected(t *testing.T) {
+	in := model.Inbound{
+		Tag:      "hy2-no-cert",
+		Protocol: "hysteria2",
+		Port:     8443,
+		Stream: `{
+			"network": "udp",
+			"security": "tls",
+			"tlsSettings": {"serverName": "example.com"}
+		}`,
+	}
+	_, err := buildSingboxInbound(in, []model.Client{{Email: "u@test", UUID: "pw"}})
+	if err == nil {
+		t.Fatalf("expected error for Hysteria2 with TLS but no cert, got nil")
+	}
+	if !strings.Contains(err.Error(), "certificate_path") {
+		t.Errorf("expected error to mention 'certificate_path', got: %v", err)
+	}
+}
+
+// TestSingboxHysteria2WithCertAccepted is the success-path baseline: a fully
+// configured Hy2 inbound with cert+key passes validation.
+func TestSingboxHysteria2WithCertAccepted(t *testing.T) {
+	in := model.Inbound{
+		Tag:      "hy2-ok",
+		Protocol: "hysteria2",
+		Port:     8443,
+		Stream: `{
+			"network": "udp",
+			"security": "tls",
+			"tlsSettings": {
+				"serverName": "example.com",
+				"alpn": ["h3"],
+				"certificates": [{"certificateFile": "/etc/ssl/cert.pem", "keyFile": "/etc/ssl/key.pem"}]
+			}
+		}`,
+	}
+	entry, err := buildSingboxInbound(in, []model.Client{{Email: "u@test", UUID: "pw"}})
+	if err != nil {
+		t.Fatalf("buildSingboxInbound: %v", err)
+	}
+	tls, ok := entry["tls"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected tls block on entry")
+	}
+	if tls["certificate_path"] != "/etc/ssl/cert.pem" {
+		t.Errorf("expected certificate_path to be set, got %v", tls["certificate_path"])
+	}
+}
+
+// TestSingboxNativeTLSStreamPassthrough verifies that smart-deploy's sing-box-
+// native stream format ({"tls": {...}}) is forwarded to the inbound entry
+// rather than dropped. Without this, Hy2/TUIC inbounds created via the
+// orchestrator would lose their cert paths on apply.
+func TestSingboxNativeTLSStreamPassthrough(t *testing.T) {
+	in := model.Inbound{
+		Tag:      "hy2-native",
+		Protocol: "hysteria2",
+		Port:     443,
+		Stream: `{
+			"tls": {
+				"enabled": true,
+				"server_name": "host.example",
+				"certificate_path": "/var/cert.pem",
+				"key_path": "/var/key.pem"
+			}
+		}`,
+	}
+	entry, err := buildSingboxInbound(in, []model.Client{{Email: "u@test", UUID: "pw"}})
+	if err != nil {
+		t.Fatalf("buildSingboxInbound: %v", err)
+	}
+	tls, ok := entry["tls"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected tls block on entry, got %T: %v", entry["tls"], entry["tls"])
+	}
+	if tls["certificate_path"] != "/var/cert.pem" {
+		t.Errorf("expected native certificate_path to pass through, got %v", tls["certificate_path"])
+	}
+	if tls["key_path"] != "/var/key.pem" {
+		t.Errorf("expected native key_path to pass through, got %v", tls["key_path"])
 	}
 }
 

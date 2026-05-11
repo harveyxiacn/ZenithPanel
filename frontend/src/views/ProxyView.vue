@@ -108,6 +108,20 @@ function resetVisualForm() {
   }
 }
 
+// Hysteria2 and TUIC mandate TLS — flipping the protocol auto-arms TLS so the
+// user can't save an inbound that sing-box will refuse with "missing certificate".
+// Also seed SNI from the inbound's public host so the cert verifies out of the box.
+watch(() => inboundForm.value.protocol, (proto) => {
+  if (proto === 'hysteria2' || proto === 'tuic') {
+    vf.value.security = 'tls'
+    if (!vf.value.alpn || vf.value.alpn === 'h2,http/1.1') vf.value.alpn = 'h3'
+    if (!vf.value.sni) {
+      const host = (inboundForm.value.server_address || '').trim()
+      if (host) vf.value.sni = host
+    }
+  }
+})
+
 function setApplyFeedback(message: string, tone: 'success' | 'error') {
   applyMessage.value = message
   applyMessageTone.value = tone
@@ -1466,10 +1480,10 @@ watch(activeTab, (newTab) => {
               </div>
               <div>
                 <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.security') }}</label>
-                <select v-model="vf.security" class="input-field text-sm w-full">
-                  <option value="none">None</option>
+                <select v-model="vf.security" class="input-field text-sm w-full" :disabled="singboxOnlyProtocols.has(inboundForm.protocol)">
+                  <option v-if="!singboxOnlyProtocols.has(inboundForm.protocol)" value="none">None</option>
                   <option value="tls">TLS</option>
-                  <option value="reality">Reality</option>
+                  <option v-if="!singboxOnlyProtocols.has(inboundForm.protocol)" value="reality">Reality</option>
                 </select>
               </div>
               <div v-if="inboundForm.protocol === 'vless'">
