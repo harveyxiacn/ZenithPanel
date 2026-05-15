@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -156,25 +157,39 @@ func ProbeInbound(in model.Inbound) InboundProbeResult {
 	return res
 }
 
-// inferTransport is a best-effort string for the human-readable
-// "transport" field. Pure cosmetic — used by the dashboard so users can tell
-// a probe failure on `tcp+tls` apart from one on `udp+quic` at a glance.
+// inferTransport returns the human-readable "transport" tag used by probe
+// results. It parses the stream JSON properly rather than scanning for
+// formatted substrings — the panel itself emits canonical Go-style JSON
+// (no spaces), but inbounds round-tripped through other tools (Python's
+// `json.dumps`, hand-edited config, etc.) come back with spaces and the
+// old substring match would silently mis-classify them.
 func inferTransport(in model.Inbound) string {
 	if quicProtocols[in.Protocol] {
 		return "udp+quic"
 	}
-	stream := strings.ToLower(in.Stream)
+	var stream map[string]any
+	if in.Stream != "" {
+		_ = json.Unmarshal([]byte(in.Stream), &stream)
+	}
+	network, _ := stream["network"].(string)
+	security, _ := stream["security"].(string)
 	parts := []string{}
-	if strings.Contains(stream, "\"network\":\"ws\"") {
+	switch strings.ToLower(network) {
+	case "ws":
 		parts = append(parts, "ws")
-	} else if strings.Contains(stream, "\"network\":\"grpc\"") {
+	case "grpc":
 		parts = append(parts, "grpc")
-	} else {
+	case "h2":
+		parts = append(parts, "h2")
+	case "httpupgrade":
+		parts = append(parts, "httpupgrade")
+	default:
 		parts = append(parts, "tcp")
 	}
-	if strings.Contains(stream, "\"security\":\"reality\"") {
+	switch strings.ToLower(security) {
+	case "reality":
 		parts = append(parts, "reality")
-	} else if strings.Contains(stream, "\"security\":\"tls\"") {
+	case "tls":
 		parts = append(parts, "tls")
 	}
 	return strings.Join(parts, "+")
