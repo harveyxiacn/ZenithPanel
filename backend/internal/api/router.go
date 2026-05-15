@@ -41,13 +41,13 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/monitor"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/notify"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
-	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/webserver"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
-	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/traffic"
 	sysopt "github.com/harveyxiacn/ZenithPanel/backend/internal/service/system"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/terminal"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/traffic"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/updater"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/webserver"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/time/rate"
@@ -215,7 +215,7 @@ func startLimiterCleanup() {
 			}
 			ipRateLimiters.Unlock()
 
-			subRateLimiters.Range(func(k, v interface{}) bool {
+			subRateLimiters.Range(func(k, v any) bool {
 				l := v.(*rate.Limiter)
 				if l.Tokens() >= 2.9 {
 					subRateLimiters.Delete(k)
@@ -225,7 +225,6 @@ func startLimiterCleanup() {
 		}
 	}()
 }
-
 
 // dockerIDRe validates Docker container IDs (hex strings, 12-64 chars).
 var dockerIDRe = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
@@ -396,7 +395,7 @@ func validateTrojanTLS(streamJSON string) string {
 	if streamJSON == "" || streamJSON == "{}" {
 		return "Trojan inbound requires TLS or Reality stream security (stream is not configured)"
 	}
-	var stream map[string]interface{}
+	var stream map[string]any
 	if err := json.Unmarshal([]byte(streamJSON), &stream); err != nil {
 		return "Trojan inbound has invalid stream JSON"
 	}
@@ -425,27 +424,27 @@ func inboundHasDerivedPublicHost(streamJSON string) bool {
 		return false
 	}
 
-	var stream map[string]interface{}
+	var stream map[string]any
 	if err := json.Unmarshal([]byte(streamJSON), &stream); err != nil {
 		return false
 	}
 
-	if tlsSettings, ok := stream["tlsSettings"].(map[string]interface{}); ok {
+	if tlsSettings, ok := stream["tlsSettings"].(map[string]any); ok {
 		if serverName, ok := tlsSettings["serverName"].(string); ok && strings.TrimSpace(serverName) != "" {
 			return true
 		}
 	}
 
-	if wsSettings, ok := stream["wsSettings"].(map[string]interface{}); ok {
-		if headers, ok := wsSettings["headers"].(map[string]interface{}); ok {
+	if wsSettings, ok := stream["wsSettings"].(map[string]any); ok {
+		if headers, ok := wsSettings["headers"].(map[string]any); ok {
 			if host, ok := headers["Host"].(string); ok && strings.TrimSpace(host) != "" {
 				return true
 			}
 		}
 	}
 
-	if httpSettings, ok := stream["httpSettings"].(map[string]interface{}); ok {
-		if hosts, ok := httpSettings["host"].([]interface{}); ok {
+	if httpSettings, ok := stream["httpSettings"].(map[string]any); ok {
+		if hosts, ok := httpSettings["host"].([]any); ok {
 			for _, host := range hosts {
 				if hostStr, ok := host.(string); ok && strings.TrimSpace(hostStr) != "" {
 					return true
@@ -454,7 +453,7 @@ func inboundHasDerivedPublicHost(streamJSON string) bool {
 		}
 	}
 
-	if httpUpgradeSettings, ok := stream["httpupgradeSettings"].(map[string]interface{}); ok {
+	if httpUpgradeSettings, ok := stream["httpupgradeSettings"].(map[string]any); ok {
 		if host, ok := httpUpgradeSettings["host"].(string); ok && strings.TrimSpace(host) != "" {
 			return true
 		}
@@ -1302,7 +1301,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 
-			results := make([]map[string]interface{}, 0, len(items))
+			results := make([]map[string]any, 0, len(items))
 			successCount := 0
 			for _, item := range items {
 				inbound, importedUsers, err := func() (model.Inbound, int, error) {
@@ -1316,7 +1315,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					return created, importedUsers, err
 				}()
 				if err != nil {
-					results = append(results, map[string]interface{}{
+					results = append(results, map[string]any{
 						"success":       false,
 						"source_tag":    strings.TrimSpace(item.Tag),
 						"source_remark": strings.TrimSpace(item.Remark),
@@ -1327,7 +1326,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 				successCount++
 				recordAudit(c, "inbound.import_3xui", inbound.Tag)
-				results = append(results, map[string]interface{}{
+				results = append(results, map[string]any{
 					"success":        true,
 					"inbound_id":     inbound.ID,
 					"imported_tag":   inbound.Tag,
@@ -1627,7 +1626,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				}
 				affected = res.RowsAffected
 			case "reset_traffic":
-				res := config.DB.Model(&model.Client{}).Where("id IN ?", req.IDs).Updates(map[string]interface{}{"up_load": 0, "down_load": 0})
+				res := config.DB.Model(&model.Client{}).Where("id IN ?", req.IDs).Updates(map[string]any{"up_load": 0, "down_load": 0})
 				if res.Error != nil {
 					c.JSON(500, gin.H{"code": 500, "msg": "Bulk reset failed"})
 					return
@@ -2222,7 +2221,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				}
 				defer resp.Body.Close()
 				body, _ := io.ReadAll(io.LimitReader(resp.Body, 5<<20)) // 5 MiB cap
-				var data interface{}
+				var data any
 				if err := json.Unmarshal(body, &data); err != nil {
 					c.JSON(http.StatusBadGateway, gin.H{"code": 502, "msg": "Invalid response from Clash API"})
 					return
@@ -2274,26 +2273,26 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 			// Check server public network — reports the VPS exit IP regardless of proxy state.
 			// Inbound connectivity probe — defensive, panel-local check that
-		// confirms the engine is actually serving the inbound's port. See
-		// docs/cli_api_spec.md §2.5 and service/diagnostic.ProbeInbound for
-		// the staged result (not_bound → tcp → tls → ok) the prober returns.
-		proxyGroup.GET("/test/:inbound_id", func(c *gin.Context) {
-			idStr := c.Param("inbound_id")
-			id, err := strconv.ParseUint(idStr, 10, 32)
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid inbound id"})
-				return
-			}
-			var in model.Inbound
-			if err := config.DB.First(&in, id).Error; err != nil {
-				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Inbound not found"})
-				return
-			}
-			result := diagnostic.ProbeInbound(in)
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok", "data": result})
-		})
+			// confirms the engine is actually serving the inbound's port. See
+			// docs/cli_api_spec.md §2.5 and service/diagnostic.ProbeInbound for
+			// the staged result (not_bound → tcp → tls → ok) the prober returns.
+			proxyGroup.GET("/test/:inbound_id", func(c *gin.Context) {
+				idStr := c.Param("inbound_id")
+				id, err := strconv.ParseUint(idStr, 10, 32)
+				if err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid inbound id"})
+					return
+				}
+				var in model.Inbound
+				if err := config.DB.First(&in, id).Error; err != nil {
+					c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Inbound not found"})
+					return
+				}
+				result := diagnostic.ProbeInbound(in)
+				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok", "data": result})
+			})
 
-		proxyGroup.POST("/test-connection", func(c *gin.Context) {
+			proxyGroup.POST("/test-connection", func(c *gin.Context) {
 				ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 				defer cancel()
 
@@ -2318,7 +2317,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				}
 				defer resp.Body.Close()
 
-				var result map[string]interface{}
+				var result map[string]any
 				if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 					c.JSON(200, gin.H{"code": 200, "data": gin.H{
 						"success": false,
@@ -2881,11 +2880,11 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			cfg := notify.Config{
-				TelegramToken:  payload.Token,
-				TelegramChatID: payload.ChatID,
-				WebhookURL:     payload.URL,
+				TelegramToken:      payload.Token,
+				TelegramChatID:     payload.ChatID,
+				WebhookURL:         payload.URL,
 				EnableExpiringSoon: true,
-				EnableExpired: true,
+				EnableExpired:      true,
 				EnableTrafficLimit: true,
 				EnableProxyCrashed: true,
 			}
@@ -3060,6 +3059,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 		// API token CRUD for CLI / headless automation. See docs/cli_api_spec.md.
 		registerAPITokenRoutes(authGroup)
+
+		// Prometheus-compatible metrics endpoint (authenticated). See metrics.go.
+		registerMetricsRoute(authGroup, xm, sm)
 	}
 
 	// Start background lockout cleanup and rate-limiter map GC
