@@ -115,6 +115,23 @@ On first run, the **Setup Wizard** will display a one-time password and a random
 docker logs zenithpanel
 ```
 
+### Optional: TLS certificate for Hysteria2 / TUIC / WS-TLS
+
+QUIC-based protocols (Hysteria2, TUIC) and `ws+tls` variants need a TLS
+certificate. Two paths are supported:
+
+- **No domain** — the panel auto-falls back to a self-signed cert (CN
+  = server IP). Quick Setup leaves the Domain field blank, and the
+  generated subscription URL carries `insecure=1` so clients skip
+  cert verification. Fastest to get running, but you lose strict TLS
+  and the cert fingerprint is easy to flag via DPI.
+- **With a domain** — the built-in ACME flow issues a Let's Encrypt
+  cert and pins it to your inbound. When port 80 is busy on the host
+  (reverse proxy, tunnel, etc.), use the `acme.sh + DNS-01 via DDNS`
+  path described in [docs/qr_setup_guide.md §3](docs/qr_setup_guide.md#3-issue-a-real-lets-encrypt-cert).
+  Any acme.sh-supported DNS provider works (DuckDNS, Cloudflare,
+  DNSPod, ...).
+
 ### Build from Source
 
 ```bash

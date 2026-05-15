@@ -22,7 +22,7 @@
 | 预设 | 协议 | 适用场景 |
 |---|---|---|
 | **稳定出口** ⭐ | VLESS + Reality · TCP 443 | 金融/电商账号固定 IP，规避风控；无需域名 |
-| **速度优先** | Hysteria2 · UDP 443 | 低延迟高吞吐；建议配域名用 ACME 证书 |
+| **速度优先** | Hysteria2 · UDP 443 | 低延迟高吞吐；填域名走 ACME 证书，无域名则自签 + `insecure=1` |
 | **全能组合** | Reality (TCP) + Hysteria2 (UDP) | 想要 TCP/UDP 双入口，客户端按需切换 |
 | **移动弱网** | Hysteria2 + TUIC · 双 UDP 端口 | 手机 4G/5G、丢包较高的网络 |
 
@@ -93,8 +93,10 @@ docker run -d \
 | VLESS + WS + TLS | 2083 | 是 | Xray / Sing-box | 支持 CDN（Cloudflare）转发 |
 | VMess + WS + TLS | 2087 | 是 | Xray / Sing-box | 客户端兼容性最广 |
 | Trojan + TLS | 2096 | 是 | Xray / Sing-box | 简单高速 |
-| Hysteria2 | 8443 | 是 | **仅 Sing-box** | UDP/QUIC 超高速 |
+| Hysteria2 | 8443 | 推荐† | **仅 Sing-box** | UDP/QUIC 超高速 |
 | Shadowsocks | 8388 | 否 | Xray / Sing-box | 轻量级 |
+
+> † **Hysteria2 无域名也能用**——快速配置里把"域名"留空，面板会回退到自签证书（CN = 服务器 IP），订阅 URL 自动注入 `insecure=1`，客户端必须接受不受信证书。代价：失去严格 TLS 校验，证书指纹也容易被 DPI 识别。条件允许时务必填域名 + 走 Let's Encrypt 证书（参见 [qr_setup_guide_CN.md §3](qr_setup_guide_CN.md#3-申请正式-lets-encrypt-证书)）。
 
 > **重要提示**：Hysteria2 仅支持 Sing-box 引擎。如果使用 Xray 引擎，Hysteria2 入站节点会被自动跳过并显示警告。通过 **Apply** 下拉菜单切换到 Sing-box 引擎以使用 Hysteria2。
 
