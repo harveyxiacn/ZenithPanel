@@ -27,7 +27,13 @@ const proxyStatus = ref({
   enabled_inbounds: 0,
   enabled_clients: 0,
   enabled_rules: 0,
+  // In single-engine mode the backend reports `xray_skipped_protocols` for
+  // inbounds Xray can't serve. In dual-engine mode it renames the field to
+  // `xray_handed_off_to_singbox` because they aren't skipped — Sing-box is
+  // serving them. The UI consumes both into one list and toggles tone.
   xray_skipped_protocols: [] as string[],
+  xray_handed_off_to_singbox: [] as string[],
+  dual_mode: false,
 })
 
 // Track which engine the user wants to apply. Defaults to singbox when the
@@ -170,6 +176,8 @@ async function loadProxyStatus() {
         enabled_clients: Number(res.data.enabled_clients || 0),
         enabled_rules: Number(res.data.enabled_rules || 0),
         xray_skipped_protocols: Array.isArray(res.data.xray_skipped_protocols) ? res.data.xray_skipped_protocols : [],
+        xray_handed_off_to_singbox: Array.isArray(res.data.xray_handed_off_to_singbox) ? res.data.xray_handed_off_to_singbox : [],
+        dual_mode: !!res.data.dual_mode,
       }
       // Sync the radio selector to whichever engine is actually running.
       // This ensures the selector reflects reality after a page refresh.
@@ -1291,13 +1299,31 @@ watch(activeTab, (newTab) => {
           <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-600">
             {{ $t('proxy.status.rules', { n: proxyStatus.enabled_rules }) }}
           </span>
-          <!-- Skipped protocol warning -->
+          <!-- Dual-engine badge: both engines cooperate; Sing-box owns
+               the QUIC-only protocols, Xray owns everything else. -->
           <span
-            v-if="proxyStatus.xray_skipped_protocols.length > 0"
-            class="inline-flex items-center rounded-full bg-amber-100 text-amber-700 px-2.5 py-1 font-medium"
-            :title="`Xray 跳过了这些协议（需切换至 Sing-box 引擎）：${proxyStatus.xray_skipped_protocols.join(', ')}`"
+            v-if="proxyStatus.dual_mode"
+            class="inline-flex items-center rounded-full bg-indigo-100 text-indigo-700 px-2.5 py-1 font-medium"
+            :title="$t('proxy.status.dualModeHint')"
           >
-            ⚠ {{ proxyStatus.xray_skipped_protocols.length }} 协议被跳过
+            ⚡ {{ $t('proxy.status.dualMode') }}
+          </span>
+          <!-- Single-engine skipped warning (kept for engine=xray override) -->
+          <span
+            v-if="!proxyStatus.dual_mode && proxyStatus.xray_skipped_protocols.length > 0"
+            class="inline-flex items-center rounded-full bg-amber-100 text-amber-700 px-2.5 py-1 font-medium"
+            :title="$t('proxy.status.skippedHint', { list: proxyStatus.xray_skipped_protocols.join(', ') })"
+          >
+            ⚠ {{ $t('proxy.status.skipped', { n: proxyStatus.xray_skipped_protocols.length }) }}
+          </span>
+          <!-- Dual-mode informational: protocols Sing-box owns. Click-hover
+               shows the list. -->
+          <span
+            v-if="proxyStatus.dual_mode && proxyStatus.xray_handed_off_to_singbox.length > 0"
+            class="inline-flex items-center rounded-full bg-sky-100 text-sky-700 px-2.5 py-1 font-medium"
+            :title="$t('proxy.status.handedOffHint', { list: proxyStatus.xray_handed_off_to_singbox.join(', ') })"
+          >
+            🔀 {{ $t('proxy.status.handedOff', { n: proxyStatus.xray_handed_off_to_singbox.length }) }}
           </span>
         </div>
       </div>
