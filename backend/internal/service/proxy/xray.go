@@ -183,7 +183,12 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]any,
 		"protocol": in.Protocol,
 		"sniffing": map[string]any{
 			"enabled":      true,
-			"destOverride": []string{"http", "tls", "quic", "fakedns"},
+			// fakedns is intentionally omitted — panel doesn't configure a
+			// fake-dns outbound, and listing it here makes xray attempt a
+			// no-op DNS sniff on every connection that adds latency and
+			// occasional spurious log noise. Re-add this once a fakedns
+			// block is wired into config.dns.
+			"destOverride": []string{"http", "tls", "quic"},
 		},
 	}
 	// Only set listen if explicitly configured; omitting lets Xray listen
