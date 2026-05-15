@@ -173,3 +173,37 @@ export function restoreBackup(file: File) {
     timeout: 60000,
   })
 }
+
+// API Tokens — used by the headless CLI (zenithctl) and automation. See
+// docs/cli_api_spec.md for the contract.
+export interface ApiTokenRow {
+  id: number
+  name: string
+  scopes: string
+  expires_at: number
+  last_used_at: number
+  revoked: boolean
+  created_at: string
+}
+
+export interface ApiTokenCreatePayload {
+  name: string
+  scopes?: string
+  expires_in_days?: number
+}
+
+export interface ApiTokenCreateResponse extends ApiTokenRow {
+  token: string // plaintext — shown to user once and never persisted client-side
+}
+
+export function listApiTokens() {
+  return apiClient.get<{ code: number; msg: string; data: ApiTokenRow[] }>('/v1/admin/api-tokens')
+}
+
+export function createApiToken(payload: ApiTokenCreatePayload) {
+  return apiClient.post<{ code: number; msg: string; data: ApiTokenCreateResponse }>('/v1/admin/api-tokens', payload)
+}
+
+export function revokeApiToken(id: number) {
+  return apiClient.delete(`/v1/admin/api-tokens/${id}`)
+}

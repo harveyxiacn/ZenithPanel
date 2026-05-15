@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon, GlobeAltIcon, Cog6ToothIcon, BoltIcon, CpuChipIcon, AdjustmentsHorizontalIcon, TrashIcon } from '@heroicons/vue/24/outline'
-import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup, downloadBackup, restoreBackup, getDNSSettings, updateDNSSettings } from '@/api/system'
+import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup, downloadBackup, restoreBackup, getDNSSettings, updateDNSSettings, listApiTokens, createApiToken, revokeApiToken, type ApiTokenRow } from '@/api/system'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '../composables/useToast'
 import { useUsageProfile } from '@/composables/useUsageProfile'
@@ -830,6 +830,92 @@ async function testNotify(channel: 'telegram' | 'webhook') {
   notifyTestLoading.value = null
 }
 
+// ---- API Tokens (used by zenithctl CLI / automation) ----
+// Plaintext is shown exactly once in a banner after creation; revisiting the
+// list page only ever shows redacted metadata. This mirrors how every modern
+// API token UI works (Stripe, GitHub PATs) and is enforced server-side —
+// we never re-fetch plaintext, the server doesn't keep it.
+const tokens = ref<ApiTokenRow[]>([])
+const tokensLoading = ref(false)
+const tokenName = ref('')
+const tokenScopes = ref('*')
+const tokenExpiresDays = ref<number | null>(null)
+const tokenCreating = ref(false)
+const tokenPlaintext = ref('')
+const tokenPlaintextName = ref('')
+
+async function loadTokens() {
+  tokensLoading.value = true
+  try {
+    const res = await listApiTokens()
+    tokens.value = res.data?.data ?? []
+  } catch {
+    toast.error(t('common.errorOccurred'))
+  } finally {
+    tokensLoading.value = false
+  }
+}
+
+async function onCreateToken() {
+  if (!tokenName.value.trim()) {
+    toast.error(t('security.apiTokens.errorNameRequired'))
+    return
+  }
+  tokenCreating.value = true
+  try {
+    const res = await createApiToken({
+      name: tokenName.value.trim(),
+      scopes: tokenScopes.value.trim() || '*',
+      expires_in_days: tokenExpiresDays.value ?? 0,
+    })
+    const data = res.data?.data
+    if (data?.token) {
+      tokenPlaintext.value = data.token
+      tokenPlaintextName.value = data.name
+      tokenName.value = ''
+      tokenExpiresDays.value = null
+      await loadTokens()
+    } else {
+      toast.error(res.data?.msg || t('common.errorOccurred'))
+    }
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || t('common.errorOccurred'))
+  } finally {
+    tokenCreating.value = false
+  }
+}
+
+async function onRevokeToken(row: ApiTokenRow) {
+  const ok = await confirmDialog({
+    title: t('security.apiTokens.revokeConfirmTitle'),
+    message: t('security.apiTokens.revokeConfirmBody', { name: row.name }),
+    confirmText: t('common.confirm'),
+    cancelText: t('common.cancel'),
+    variant: 'danger',
+  })
+  if (!ok) return
+  try {
+    await revokeApiToken(row.id)
+    await loadTokens()
+    toast.success(t('security.apiTokens.revokedToast'))
+  } catch {
+    toast.error(t('common.errorOccurred'))
+  }
+}
+
+function copyTokenToClipboard() {
+  if (!tokenPlaintext.value) return
+  navigator.clipboard?.writeText(tokenPlaintext.value).then(
+    () => toast.success(t('security.apiTokens.copied')),
+    () => toast.error(t('common.errorOccurred')),
+  )
+}
+
+function formatTokenTimestamp(ts: number): string {
+  if (!ts) return '—'
+  return new Date(ts * 1000).toLocaleString()
+}
+
 onMounted(() => {
   load2FAStatus()
   loadTLSStatus()
@@ -840,6 +926,7 @@ onMounted(() => {
   loadSysctlStatus()
   loadNotifyConfig()
   loadDNSSettings()
+  loadTokens()
 })
 </script>
 
@@ -1331,6 +1418,95 @@ onMounted(() => {
                 {{ backupRestoring ? $t('security.backup.restoring') : $t('security.backup.restore') }}
               </button>
               <input ref="restoreInputRef" type="file" accept=".zip,application/zip" class="hidden" @change="onRestoreFileChosen" />
+            </div>
+          </div>
+        </div>
+
+        <!-- API Tokens (used by zenithctl / automation) -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-6 border-b border-slate-100 flex items-center">
+            <div class="bg-violet-500/10 text-violet-500 p-2 rounded-lg mr-4">
+              <KeyIcon class="h-6 w-6" />
+            </div>
+            <div>
+              <h3 class="text-lg font-medium text-slate-800">{{ $t('security.apiTokens.title') }}</h3>
+              <p class="text-sm text-slate-500">{{ $t('security.apiTokens.subtitle') }}</p>
+            </div>
+          </div>
+          <div class="p-6 space-y-5">
+            <!-- One-time plaintext banner (shows after a successful create) -->
+            <div v-if="tokenPlaintext" class="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-emerald-800">{{ $t('security.apiTokens.justCreated', { name: tokenPlaintextName }) }}</p>
+                  <p class="text-xs text-emerald-700 mt-0.5">{{ $t('security.apiTokens.copyNowWarn') }}</p>
+                  <code class="block mt-2 font-mono text-xs bg-white border border-emerald-200 rounded-lg p-2 break-all">{{ tokenPlaintext }}</code>
+                </div>
+                <div class="flex flex-col gap-2">
+                  <button @click="copyTokenToClipboard" class="bg-emerald-500 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded-lg transition">
+                    {{ $t('security.apiTokens.copy') }}
+                  </button>
+                  <button @click="tokenPlaintext = ''" class="bg-white border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs px-3 py-1.5 rounded-lg transition">
+                    {{ $t('security.apiTokens.dismiss') }}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Create form -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+              <div class="md:col-span-2">
+                <label class="text-xs font-medium text-slate-500">{{ $t('security.apiTokens.nameLabel') }}</label>
+                <input v-model="tokenName" :placeholder="$t('security.apiTokens.namePlaceholder')" class="input-field text-sm mt-1 w-full" />
+              </div>
+              <div>
+                <label class="text-xs font-medium text-slate-500">{{ $t('security.apiTokens.scopesLabel') }}</label>
+                <input v-model="tokenScopes" placeholder="*" class="input-field text-sm mt-1 w-full" />
+              </div>
+              <div>
+                <label class="text-xs font-medium text-slate-500">{{ $t('security.apiTokens.expiresLabel') }}</label>
+                <input v-model.number="tokenExpiresDays" type="number" min="0" placeholder="0" class="input-field text-sm mt-1 w-full" />
+              </div>
+            </div>
+            <div class="flex justify-end">
+              <button @click="onCreateToken" :disabled="tokenCreating || !tokenName.trim()" class="bg-violet-500 hover:bg-violet-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                {{ tokenCreating ? $t('security.apiTokens.creating') : $t('security.apiTokens.create') }}
+              </button>
+            </div>
+
+            <!-- Existing tokens table -->
+            <div v-if="tokensLoading" class="text-sm text-slate-500">{{ $t('common.loading') }}</div>
+            <div v-else-if="tokens.length === 0" class="text-sm text-slate-500">{{ $t('security.apiTokens.empty') }}</div>
+            <div v-else class="overflow-x-auto">
+              <table class="min-w-full text-sm">
+                <thead class="text-xs text-slate-500 uppercase border-b border-slate-100">
+                  <tr>
+                    <th class="text-left py-2 pr-3 font-medium">{{ $t('security.apiTokens.colName') }}</th>
+                    <th class="text-left py-2 pr-3 font-medium">{{ $t('security.apiTokens.colScopes') }}</th>
+                    <th class="text-left py-2 pr-3 font-medium">{{ $t('security.apiTokens.colExpiry') }}</th>
+                    <th class="text-left py-2 pr-3 font-medium">{{ $t('security.apiTokens.colLastUsed') }}</th>
+                    <th class="text-left py-2 pr-3 font-medium">{{ $t('security.apiTokens.colStatus') }}</th>
+                    <th class="text-right py-2 font-medium">{{ $t('security.apiTokens.colActions') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in tokens" :key="row.id" class="border-b border-slate-50 last:border-0">
+                    <td class="py-2 pr-3 font-mono text-xs text-slate-700">{{ row.name }}</td>
+                    <td class="py-2 pr-3 text-slate-600">{{ row.scopes }}</td>
+                    <td class="py-2 pr-3 text-slate-600">{{ row.expires_at ? formatTokenTimestamp(row.expires_at) : '—' }}</td>
+                    <td class="py-2 pr-3 text-slate-600">{{ formatTokenTimestamp(row.last_used_at) }}</td>
+                    <td class="py-2 pr-3">
+                      <span v-if="row.revoked" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-rose-50 text-rose-700">{{ $t('security.apiTokens.revoked') }}</span>
+                      <span v-else class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-emerald-50 text-emerald-700">{{ $t('security.apiTokens.active') }}</span>
+                    </td>
+                    <td class="py-2 text-right">
+                      <button v-if="!row.revoked" @click="onRevokeToken(row)" class="text-xs bg-rose-50 hover:bg-rose-100 text-rose-700 px-2 py-1 rounded-md transition">
+                        {{ $t('security.apiTokens.revoke') }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
