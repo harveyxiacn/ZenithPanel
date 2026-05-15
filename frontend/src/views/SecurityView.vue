@@ -157,6 +157,47 @@ const certFile = ref<File | null>(null)
 const keyFile = ref<File | null>(null)
 const showCFGuide = ref(false)
 
+// ---- ACME (Let's Encrypt) ----
+const acmeDomain = ref('')
+const acmeEmail = ref('')
+const acmeIssuing = ref(false)
+const acmeResult = ref<{ cert_path?: string; key_path?: string; not_after?: number } | null>(null)
+
+async function onAcmeIssue() {
+  if (!acmeDomain.value.trim() || !acmeEmail.value.trim()) {
+    toast.error(t('security.acme.errorMissing'))
+    return
+  }
+  acmeIssuing.value = true
+  acmeResult.value = null
+  try {
+    const res = await fetch('/api/v1/proxy/tls/issue', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${localStorage.getItem('token') || ''}`,
+      },
+      body: JSON.stringify({ domain: acmeDomain.value.trim(), email: acmeEmail.value.trim() }),
+    })
+    const data = await res.json()
+    if (data.code === 200 && data.data) {
+      acmeResult.value = data.data
+      toast.success(t('security.acme.issued'))
+    } else {
+      toast.error(data.msg || t('common.errorOccurred'))
+    }
+  } catch {
+    toast.error(t('common.errorOccurred'))
+  } finally {
+    acmeIssuing.value = false
+  }
+}
+
+function formatAcmeExpiry(unix?: number): string {
+  if (!unix) return '—'
+  return new Date(unix * 1000).toLocaleString()
+}
+
 async function loadTLSStatus() {
   try {
     const res = await getTLSStatus() as any
@@ -1025,6 +1066,39 @@ onMounted(() => {
             </div>
 
             <div v-if="tlsMsg" :class="['text-sm p-2 rounded-lg', tlsMsgType === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700']">{{ tlsMsg }}</div>
+
+            <!-- ACME / Let's Encrypt: one-click issuance for users with a
+                 real domain pointed at this VPS. Lego occupies :80 for the
+                 HTTP-01 challenge, so port 80 must be reachable from the
+                 internet during issuance. -->
+            <div class="border-t border-slate-100 pt-4 space-y-3">
+              <div>
+                <h4 class="text-sm font-medium text-slate-700 mb-1">{{ $t('security.acme.title') }}</h4>
+                <p class="text-xs text-slate-500">{{ $t('security.acme.subtitle') }}</p>
+              </div>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label class="text-xs font-medium text-slate-500">{{ $t('security.acme.domainLabel') }}</label>
+                  <input v-model="acmeDomain" placeholder="panel.example.com" class="input-field text-sm mt-1 w-full" />
+                </div>
+                <div>
+                  <label class="text-xs font-medium text-slate-500">{{ $t('security.acme.emailLabel') }}</label>
+                  <input v-model="acmeEmail" type="email" placeholder="you@example.com" class="input-field text-sm mt-1 w-full" />
+                </div>
+              </div>
+              <button @click="onAcmeIssue" :disabled="acmeIssuing || !acmeDomain.trim() || !acmeEmail.trim()"
+                class="bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+                {{ acmeIssuing ? $t('security.acme.issuing') : $t('security.acme.issueBtn') }}
+              </button>
+              <p class="text-xs text-slate-400">{{ $t('security.acme.portWarn') }}</p>
+              <div v-if="acmeResult" class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800 space-y-1">
+                <p class="font-medium">{{ $t('security.acme.successHeader') }}</p>
+                <p class="font-mono text-xs">cert: {{ acmeResult.cert_path }}</p>
+                <p class="font-mono text-xs">key:  {{ acmeResult.key_path }}</p>
+                <p class="text-xs">{{ $t('security.acme.expires') }}: {{ formatAcmeExpiry(acmeResult.not_after) }}</p>
+                <p class="text-xs">{{ $t('security.acme.nextStep') }}</p>
+              </div>
+            </div>
 
             <!-- Cloudflare Guide -->
             <div class="border-t border-slate-100 pt-4">
