@@ -81,6 +81,8 @@ func Run(argv []string) int {
 		return runFirewall(client, args, gf)
 	case "backup":
 		return runBackup(client, args, gf)
+	case "cert":
+		return runCert(client, args, gf)
 	case "raw":
 		return runRaw(client, args, gf)
 	default:
@@ -868,6 +870,40 @@ func runBackup(c *Client, args []string, gf globalFlags) int {
 	return 1
 }
 
+// runCert exposes the ACME flow from the command line. `zenithctl cert issue
+// --domain x.com --email me@y.com` is the headless equivalent of the Web UI
+// button: it runs the HTTP-01 challenge (lego occupies port 80 during the
+// handshake) and on success persists the cert + key under
+// /opt/zenithpanel/data/certs/<domain>.{crt,key}. Renewal is automatic from
+// then on via the background renewer in service/cert.
+func runCert(c *Client, args []string, gf globalFlags) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: zenithctl cert issue --domain <name> --email <addr>")
+		return 1
+	}
+	switch args[0] {
+	case "issue":
+		fs := flag.NewFlagSet("cert issue", flag.ContinueOnError)
+		domain := fs.String("domain", "", "fully-qualified domain name resolving to this VPS")
+		email := fs.String("email", "", "ACME account email (for renewal notices and recovery)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 1
+		}
+		if *domain == "" || *email == "" {
+			fmt.Fprintln(os.Stderr, "cert issue: --domain and --email are required")
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "Issuing certificate for %s (lego will bind :80 briefly for HTTP-01 challenge)…\n", *domain)
+		env, st, err := c.Do("POST", "/api/v1/proxy/tls/issue", map[string]any{
+			"domain": *domain, "email": *email,
+		})
+		return exitFromEnvelope(st, env, err, gf)
+	default:
+		fmt.Fprintln(os.Stderr, "unknown cert subcommand:", args[0])
+		return 1
+	}
+}
+
 func runRaw(c *Client, args []string, gf globalFlags) int {
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: zenithctl raw <METHOD> <PATH> [--data @file|-]")
@@ -940,7 +976,8 @@ Common commands:
   proxy status|apply|config xray|test <id|all>|reality-keys
   sub url <uuid>
   firewall list|add|delete
-  backup export
+  backup export|restore --file <zip>
+  cert issue --domain <name> --email <addr>
   raw <METHOD> <PATH> [--data @f|-]
 
 Run 'zenithctl token bootstrap' on the panel host (as root) to mint a token
