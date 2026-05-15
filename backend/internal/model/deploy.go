@@ -74,15 +74,15 @@ type Deployment struct {
 // snapshot-based rollback. Ops are written before their side effects so that a
 // crash mid-apply still leaves a breadcrumb for cleanup.
 type DeploymentOp struct {
-	ID           uint   `gorm:"primaryKey" json:"id"`
-	DeploymentID uint   `gorm:"not null;index" json:"deployment_id"`
-	Sequence     int    `gorm:"not null" json:"sequence"`
-	OpType       string `gorm:"not null" json:"op_type"`
-	OpName       string `gorm:"not null" json:"op_name"`
-	PreValue     string `gorm:"type:text" json:"pre_value"`  // JSON snapshot before the op
-	PostValue    string `gorm:"type:text" json:"post_value"` // JSON target state after the op
-	Status       string `gorm:"not null;default:'pending'" json:"status"`
-	Error        string `gorm:"type:text;default:''" json:"error"`
+	ID           uint      `gorm:"primaryKey" json:"id"`
+	DeploymentID uint      `gorm:"not null;index" json:"deployment_id"`
+	Sequence     int       `gorm:"not null" json:"sequence"`
+	OpType       string    `gorm:"not null" json:"op_type"`
+	OpName       string    `gorm:"not null" json:"op_name"`
+	PreValue     string    `gorm:"type:text" json:"pre_value"`  // JSON snapshot before the op
+	PostValue    string    `gorm:"type:text" json:"post_value"` // JSON target state after the op
+	Status       string    `gorm:"not null;default:'pending'" json:"status"`
+	Error        string    `gorm:"type:text;default:''" json:"error"`
 	AppliedAt    time.Time `json:"applied_at"`
 
 	CreatedAt time.Time `json:"created_at"`

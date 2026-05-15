@@ -12,7 +12,7 @@ type RealityStreamInfo struct {
 	SpiderX     string
 }
 
-func normalizeStringSlice(raw interface{}) []string {
+func normalizeStringSlice(raw any) []string {
 	switch v := raw.(type) {
 	case string:
 		if strings.TrimSpace(v) == "" {
@@ -28,7 +28,7 @@ func normalizeStringSlice(raw interface{}) []string {
 			}
 		}
 		return out
-	case []interface{}:
+	case []any:
 		out := make([]string, 0, len(v))
 		for _, item := range v {
 			if s, ok := item.(string); ok {
@@ -44,7 +44,7 @@ func normalizeStringSlice(raw interface{}) []string {
 	}
 }
 
-func firstNonEmptyString(values ...interface{}) string {
+func firstNonEmptyString(values ...any) string {
 	for _, value := range values {
 		if s, ok := value.(string); ok {
 			s = strings.TrimSpace(s)
@@ -56,9 +56,9 @@ func firstNonEmptyString(values ...interface{}) string {
 	return ""
 }
 
-func ReadRealityStreamInfo(stream map[string]interface{}) RealityStreamInfo {
+func ReadRealityStreamInfo(stream map[string]any) RealityStreamInfo {
 	info := RealityStreamInfo{}
-	reality, ok := stream["realitySettings"].(map[string]interface{})
+	reality, ok := stream["realitySettings"].(map[string]any)
 	if !ok {
 		return info
 	}
@@ -69,7 +69,7 @@ func ReadRealityStreamInfo(stream map[string]interface{}) RealityStreamInfo {
 	info.PublicKey = firstNonEmptyString(reality["publicKey"])
 	info.Fingerprint = firstNonEmptyString(reality["fingerprint"])
 
-	if settings, ok := reality["settings"].(map[string]interface{}); ok {
+	if settings, ok := reality["settings"].(map[string]any); ok {
 		if info.PublicKey == "" {
 			info.PublicKey = firstNonEmptyString(settings["publicKey"])
 		}
@@ -83,7 +83,7 @@ func ReadRealityStreamInfo(stream map[string]interface{}) RealityStreamInfo {
 	return info
 }
 
-func NormalizeXrayStreamSettings(stream map[string]interface{}) map[string]interface{} {
+func NormalizeXrayStreamSettings(stream map[string]any) map[string]any {
 	if stream == nil {
 		return nil
 	}
@@ -91,9 +91,9 @@ func NormalizeXrayStreamSettings(stream map[string]interface{}) map[string]inter
 	network, _ := stream["network"].(string)
 	if network == "tcp" {
 		if _, ok := stream["tcpSettings"]; !ok {
-			stream["tcpSettings"] = map[string]interface{}{
+			stream["tcpSettings"] = map[string]any{
 				"acceptProxyProtocol": false,
-				"header": map[string]interface{}{
+				"header": map[string]any{
 					"type": "none",
 				},
 			}
@@ -105,7 +105,7 @@ func NormalizeXrayStreamSettings(stream map[string]interface{}) map[string]inter
 		return stream
 	}
 
-	reality, ok := stream["realitySettings"].(map[string]interface{})
+	reality, ok := stream["realitySettings"].(map[string]any)
 	if !ok {
 		return stream
 	}

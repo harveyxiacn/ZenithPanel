@@ -194,7 +194,7 @@ func TestHasScopeMatrix(t *testing.T) {
 		{"read,write", "read", true},
 		{"read,write", "admin", false},
 		{" read , write ", "write", true}, // tolerates whitespace
-		{"read,*", "admin", true},          // wildcard mid-list still wins
+		{"read,*", "admin", true},         // wildcard mid-list still wins
 	}
 	for _, c := range cases {
 		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())

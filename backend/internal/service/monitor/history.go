@@ -10,9 +10,9 @@ import (
 
 // NetworkSample holds a single point-in-time network I/O reading.
 type NetworkSample struct {
-	Timestamp int64  `json:"ts"`   // Unix milliseconds
-	InBytes   uint64 `json:"in"`   // cumulative bytes received (from gopsutil)
-	OutBytes  uint64 `json:"out"`  // cumulative bytes sent
+	Timestamp int64  `json:"ts"`       // Unix milliseconds
+	InBytes   uint64 `json:"in"`       // cumulative bytes received (from gopsutil)
+	OutBytes  uint64 `json:"out"`      // cumulative bytes sent
 	InRate    uint64 `json:"in_rate"`  // bytes/s since previous sample
 	OutRate   uint64 `json:"out_rate"` // bytes/s since previous sample
 }

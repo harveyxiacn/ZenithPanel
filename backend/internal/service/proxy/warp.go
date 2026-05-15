@@ -10,11 +10,11 @@ import (
 // WARPConfig holds the WireGuard keys and endpoint returned by the WARP registration API.
 type WARPConfig struct {
 	PrivateKey   string `json:"private_key"`
-	PublicKey    string `json:"public_key"`     // peer public key
-	Endpoint     string `json:"endpoint"`       // WARP anycast endpoint
+	PublicKey    string `json:"public_key"` // peer public key
+	Endpoint     string `json:"endpoint"`   // WARP anycast endpoint
 	EndpointPort int    `json:"endpoint_port"`
-	Address      string `json:"address"`        // assigned IPv4/IPv6 inside WARP
-	ReservedHex  string `json:"reserved_hex"`   // reserved bytes (3 octets hex, for some clients)
+	Address      string `json:"address"`      // assigned IPv4/IPv6 inside WARP
+	ReservedHex  string `json:"reserved_hex"` // reserved bytes (3 octets hex, for some clients)
 }
 
 // FetchWARPConfig retrieves WireGuard credentials from the Cloudflare WARP

@@ -27,8 +27,8 @@ import (
 type Manager struct {
 	mu      sync.RWMutex
 	db      *gorm.DB
-	srv80   *http.Server // plain HTTP (redirects to HTTPS or serves directly)
-	srv443  *http.Server // HTTPS with SNI
+	srv80   *http.Server                // plain HTTP (redirects to HTTPS or serves directly)
+	srv443  *http.Server                // HTTPS with SNI
 	certs   map[string]*tls.Certificate // domain → certificate
 	running bool
 }

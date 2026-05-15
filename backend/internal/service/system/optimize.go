@@ -211,19 +211,19 @@ type SysctlStatus struct {
 const sysctlTuningFile = "/etc/sysctl.d/99-zenith-network.conf"
 
 var networkTuningParams = map[string]string{
-	"net.core.rmem_max":                 "16777216",
-	"net.core.wmem_max":                 "16777216",
-	"net.ipv4.tcp_rmem":                 "4096 87380 16777216",
-	"net.ipv4.tcp_wmem":                 "4096 65536 16777216",
-	"net.ipv4.tcp_fastopen":             "3",
+	"net.core.rmem_max":                  "16777216",
+	"net.core.wmem_max":                  "16777216",
+	"net.ipv4.tcp_rmem":                  "4096 87380 16777216",
+	"net.ipv4.tcp_wmem":                  "4096 65536 16777216",
+	"net.ipv4.tcp_fastopen":              "3",
 	"net.ipv4.tcp_slow_start_after_idle": "0",
-	"net.ipv4.tcp_mtu_probing":          "1",
-	"net.core.somaxconn":                "65535",
-	"net.core.netdev_max_backlog":       "65535",
-	"net.ipv4.tcp_max_syn_backlog":      "65535",
-	"net.ipv4.tcp_tw_reuse":             "1",
-	"net.ipv4.ip_local_port_range":      "1024 65535",
-	"fs.file-max":                       "1048576",
+	"net.ipv4.tcp_mtu_probing":           "1",
+	"net.core.somaxconn":                 "65535",
+	"net.core.netdev_max_backlog":        "65535",
+	"net.ipv4.tcp_max_syn_backlog":       "65535",
+	"net.ipv4.tcp_tw_reuse":              "1",
+	"net.ipv4.ip_local_port_range":       "1024 65535",
+	"fs.file-max":                        "1048576",
 }
 
 func GetSysctlTuningStatus() SysctlStatus {

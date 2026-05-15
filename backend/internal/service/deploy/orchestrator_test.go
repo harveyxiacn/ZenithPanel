@@ -43,11 +43,11 @@ func setupTestOrchestrator(t *testing.T) (*Orchestrator, *gorm.DB, *stubTuner, *
 		files: map[string][]byte{
 			"/proc/version": []byte("Linux version 5.15.0"),
 		},
-		portFreeSet: map[int]bool{443: true, 8443: true},
-		ipv4:        "1.2.3.4",
-		cpuCores:    2,
-		ramBytes:    2 << 30,
-		nicName:     "eth0",
+		portFreeSet:  map[int]bool{443: true, 8443: true},
+		ipv4:         "1.2.3.4",
+		cpuCores:     2,
+		ramBytes:     2 << 30,
+		nicName:      "eth0",
 		nicSpeedMbps: 1000,
 	})
 
@@ -57,9 +57,9 @@ func setupTestOrchestrator(t *testing.T) (*Orchestrator, *gorm.DB, *stubTuner, *
 
 // stubTuner records calls and optionally fails a specific op name.
 type stubTuner struct {
-	applied []string
+	applied  []string
 	reverted []string
-	failOn  string
+	failOn   string
 }
 
 func (s *stubTuner) Apply(_ context.Context, name string, _ map[string]string) (system.Snapshot, error) {

@@ -67,4 +67,3 @@ func PrintSetupIfPending(port string) {
 		PrintSetupInstructions(pendingToken, pendingSuffix, port)
 	}
 }
-

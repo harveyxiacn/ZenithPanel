@@ -43,7 +43,7 @@ func ValidateToken(tokenString string) (*Claims, error) {
 	if len(SecretKey) == 0 {
 		return nil, errors.New("JWT secret not initialized")
 	}
-	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (any, error) {
 		return SecretKey, nil
 	})
 

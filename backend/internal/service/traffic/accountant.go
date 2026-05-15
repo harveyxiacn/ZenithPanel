@@ -133,7 +133,7 @@ func (a *Accountant) applyDeltas(deltas map[string]pendingDelta, source string) 
 		}
 		res := a.db.Model(&model.Client{}).
 			Where("email = ?", email).
-			Updates(map[string]interface{}{
+			Updates(map[string]any{
 				"up_load":   gorm.Expr("up_load + ?", d.up),
 				"down_load": gorm.Expr("down_load + ?", d.down),
 			})

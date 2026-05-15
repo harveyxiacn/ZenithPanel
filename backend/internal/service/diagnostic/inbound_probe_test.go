@@ -176,10 +176,10 @@ func TestProbeInboundTLSHandshake(t *testing.T) {
 // native `tls.enabled` do.
 func TestRequiresTLSDial(t *testing.T) {
 	cases := map[string]bool{
-		`{"network":"tcp","security":"tls"}`:                     true,
-		`{"tls":{"enabled":true}}`:                               true,
-		`{"network":"tcp","security":"reality"}`:                 false,
-		`{"network":"ws"}`:                                       false,
+		`{"network":"tcp","security":"tls"}`:                      true,
+		`{"tls":{"enabled":true}}`:                                true,
+		`{"network":"tcp","security":"reality"}`:                  false,
+		`{"network":"ws"}`:                                        false,
 		`{"network":"tcp","security":"reality","tlsSettings":{}}`: false,
 	}
 	for stream, want := range cases {

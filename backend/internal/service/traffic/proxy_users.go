@@ -26,14 +26,14 @@ type clashConn struct {
 }
 
 type clashConnMetadata struct {
-	Network     string `json:"network"`
-	Type        string `json:"type"`
-	SourceIP    string `json:"sourceIP"`
+	Network       string `json:"network"`
+	Type          string `json:"type"`
+	SourceIP      string `json:"sourceIP"`
 	DestinationIP string `json:"destinationIP"`
-	Host        string `json:"host"`
-	InboundUser string `json:"inboundUser"`
-	User        string `json:"user"`
-	Process     string `json:"process"`
+	Host          string `json:"host"`
+	InboundUser   string `json:"inboundUser"`
+	User          string `json:"user"`
+	Process       string `json:"process"`
 }
 
 type clashConnectionsResponse struct {

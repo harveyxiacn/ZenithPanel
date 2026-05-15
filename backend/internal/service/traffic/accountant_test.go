@@ -75,10 +75,10 @@ func TestApplyDeltasUpdatesClientRows(t *testing.T) {
 
 	a := &Accountant{db: db}
 	a.applyDeltas(map[string]pendingDelta{
-		"alice@x":     {up: 50, down: 75},
-		"bob@y":       {up: 1000, down: 2000},
+		"alice@x":       {up: 50, down: 75},
+		"bob@y":         {up: 1000, down: 2000},
 		"ghost@nowhere": {up: 999, down: 999}, // no matching row — should be skipped silently
-		"(anonymous)": {up: 5, down: 5},        // ignored by convention
+		"(anonymous)":   {up: 5, down: 5},     // ignored by convention
 	}, "test")
 
 	var alice model.Client

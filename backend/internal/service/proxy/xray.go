@@ -80,66 +80,66 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 	xrayPrimary = strings.TrimPrefix(xrayPrimary, "udp://")
 	xraySecondary = strings.TrimPrefix(xraySecondary, "udp://")
 	statsPort := XrayStatsAPIPort()
-	xrayConfig := map[string]interface{}{
-		"log": map[string]interface{}{
+	xrayConfig := map[string]any{
+		"log": map[string]any{
 			"loglevel": "warning",
 		},
 		// Enable per-user uplink/downlink counters. The traffic accountant
 		// reads these via the api inbound below; without this block Xray
 		// emits no stats and the panel's UpLoad/DownLoad columns stay zero.
-		"stats": map[string]interface{}{},
-		"policy": map[string]interface{}{
-			"levels": map[string]interface{}{
-				"0": map[string]interface{}{
+		"stats": map[string]any{},
+		"policy": map[string]any{
+			"levels": map[string]any{
+				"0": map[string]any{
 					"statsUserUplink":   true,
 					"statsUserDownlink": true,
 				},
 			},
 		},
-		"api": map[string]interface{}{
+		"api": map[string]any{
 			"tag":      "api",
 			"services": []string{"StatsService", "HandlerService"},
 		},
-		"dns": map[string]interface{}{
-			"servers": []interface{}{
+		"dns": map[string]any{
+			"servers": []any{
 				xrayPrimary,
 				xraySecondary,
 				"localhost",
 			},
 		},
-		"inbounds": []interface{}{
+		"inbounds": []any{
 			// Loopback-only API inbound for stats polling. dokodemo-door
 			// followType "api" is Xray's recommended way to expose StatsService
 			// to in-host consumers.
-			map[string]interface{}{
+			map[string]any{
 				"tag":      "api",
 				"listen":   "127.0.0.1",
 				"port":     statsPort,
 				"protocol": "dokodemo-door",
-				"settings": map[string]interface{}{
+				"settings": map[string]any{
 					"address": "127.0.0.1",
 				},
 			},
 		},
-		"outbounds": []interface{}{
-			map[string]interface{}{
+		"outbounds": []any{
+			map[string]any{
 				"protocol": "freedom",
 				"tag":      "direct",
-				"settings": map[string]interface{}{
+				"settings": map[string]any{
 					"domainStrategy": "UseIPv4v6",
 				},
 			},
-			map[string]interface{}{
+			map[string]any{
 				"protocol": "blackhole",
 				"tag":      "block",
 			},
 		},
-		"routing": map[string]interface{}{
+		"routing": map[string]any{
 			"domainStrategy": "IPIfNonMatch",
-			"rules": []interface{}{
+			"rules": []any{
 				// Pin the api inbound to the api outbound so stats traffic
 				// never leaks through user-defined routing rules.
-				map[string]interface{}{
+				map[string]any{
 					"type":        "field",
 					"inboundTag":  []string{"api"},
 					"outboundTag": "api",
@@ -158,7 +158,7 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("build inbound %q: %w", in.Tag, err)
 		}
-		xrayConfig["inbounds"] = append(xrayConfig["inbounds"].([]interface{}), inboundEntry)
+		xrayConfig["inbounds"] = append(xrayConfig["inbounds"].([]any), inboundEntry)
 	}
 	x.mu.Lock()
 	x.skippedProtos = skipped
@@ -166,8 +166,8 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 
 	for _, r := range rules {
 		ruleMap := buildXrayRoutingRule(r)
-		xrayConfig["routing"].(map[string]interface{})["rules"] = append(
-			xrayConfig["routing"].(map[string]interface{})["rules"].([]interface{}), ruleMap,
+		xrayConfig["routing"].(map[string]any)["rules"] = append(
+			xrayConfig["routing"].(map[string]any)["rules"].([]any), ruleMap,
 		)
 	}
 
@@ -176,12 +176,12 @@ func (x *XrayManager) GenerateConfig() (string, error) {
 
 // buildXrayInbound constructs a complete Xray inbound entry from the DB model,
 // parsing the Settings/Stream JSON and injecting the supplied client list.
-func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]interface{}, error) {
-	entry := map[string]interface{}{
+func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]any, error) {
+	entry := map[string]any{
 		"tag":      in.Tag,
 		"port":     in.Port,
 		"protocol": in.Protocol,
-		"sniffing": map[string]interface{}{
+		"sniffing": map[string]any{
 			"enabled":      true,
 			"destOverride": []string{"http", "tls", "quic", "fakedns"},
 		},
@@ -193,7 +193,7 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]inte
 	}
 
 	// Parse settings JSON
-	settings := map[string]interface{}{}
+	settings := map[string]any{}
 	if in.Settings != "" && in.Settings != "{}" {
 		if err := json.Unmarshal([]byte(in.Settings), &settings); err != nil {
 			return nil, fmt.Errorf("parse settings: %w", err)
@@ -206,9 +206,9 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]inte
 			settings["decryption"] = "none"
 		}
 		if len(clients) > 0 {
-			clientList := []map[string]interface{}{}
+			clientList := []map[string]any{}
 			for _, c := range clients {
-				cm := map[string]interface{}{"id": c.UUID, "email": c.Email}
+				cm := map[string]any{"id": c.UUID, "email": c.Email}
 				// Preserve flow if set in settings template
 				if flow, ok := settings["flow"]; ok {
 					cm["flow"] = flow
@@ -221,9 +221,9 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]inte
 
 	case "vmess":
 		if len(clients) > 0 {
-			clientList := []map[string]interface{}{}
+			clientList := []map[string]any{}
 			for _, c := range clients {
-				clientList = append(clientList, map[string]interface{}{
+				clientList = append(clientList, map[string]any{
 					"id":      c.UUID,
 					"email":   c.Email,
 					"alterId": 0,
@@ -234,9 +234,9 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]inte
 
 	case "trojan":
 		if len(clients) > 0 {
-			clientList := []map[string]interface{}{}
+			clientList := []map[string]any{}
 			for _, c := range clients {
-				clientList = append(clientList, map[string]interface{}{
+				clientList = append(clientList, map[string]any{
 					"password": c.UUID,
 					"email":    c.Email,
 				})
@@ -249,9 +249,9 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]inte
 		// Classic methods use a single shared password; keep settings as-is.
 		if method, ok := settings["method"].(string); ok && strings.HasPrefix(method, "2022-blake3") {
 			if len(clients) > 0 {
-				clientList := []map[string]interface{}{}
+				clientList := []map[string]any{}
 				for _, c := range clients {
-					clientList = append(clientList, map[string]interface{}{
+					clientList = append(clientList, map[string]any{
 						"password": c.UUID,
 						"email":    c.Email,
 					})
@@ -265,7 +265,7 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]inte
 
 	// Parse stream settings JSON
 	if in.Stream != "" && in.Stream != "{}" {
-		streamSettings := map[string]interface{}{}
+		streamSettings := map[string]any{}
 		if err := json.Unmarshal([]byte(in.Stream), &streamSettings); err != nil {
 			return nil, fmt.Errorf("parse stream: %w", err)
 		}
@@ -307,8 +307,8 @@ func splitAndTrimCSV(raw string) []string {
 	return out
 }
 
-func buildXrayRoutingRule(r model.RoutingRule) map[string]interface{} {
-	ruleMap := map[string]interface{}{
+func buildXrayRoutingRule(r model.RoutingRule) map[string]any {
+	ruleMap := map[string]any{
 		"type":        "field",
 		"outboundTag": r.OutboundTag,
 	}

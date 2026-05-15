@@ -14,7 +14,6 @@ import (
 	"github.com/docker/go-connections/nat"
 )
 
-
 // Manager wraps the docker client.
 type Manager struct {
 	cli *client.Client

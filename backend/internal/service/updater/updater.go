@@ -113,13 +113,13 @@ func newUpdateInfo(currentImageID string, inspect registry.DistributionInspect) 
 // updater helper. Uses the panel image directly to avoid `apk add` at runtime.
 func buildHelperContainerConfig(image, swapScript string) (*container.Config, *container.HostConfig) {
 	return &container.Config{
-		Image:      image,
-		Entrypoint: []string{"sh", "-c"},
-		Cmd:        []string{swapScript},
-	}, &container.HostConfig{
-		Binds:      []string{"/var/run/docker.sock:/var/run/docker.sock"},
-		AutoRemove: true,
-	}
+			Image:      image,
+			Entrypoint: []string{"sh", "-c"},
+			Cmd:        []string{swapScript},
+		}, &container.HostConfig{
+			Binds:      []string{"/var/run/docker.sock:/var/run/docker.sock"},
+			AutoRemove: true,
+		}
 }
 
 // CheckForUpdate inspects the registry digest without pulling layers and
