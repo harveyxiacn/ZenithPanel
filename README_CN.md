@@ -79,6 +79,8 @@
 | JWT + bcrypt 认证体系 | ✅ 已完成 |
 | TUIC v5 协议支持（Sing-box） | ✅ 已完成 |
 | 备份 / 恢复（可迁移归档） | ✅ 已完成 |
+| 无头 CLI (`zenithctl`) + API Token | ✅ 已完成 |
+| 双引擎并存 (Xray + Sing-box 同时跑) | ✅ 已完成 |
 | 实时流量图表 (ECharts) | 🔜 规划中 |
 | ACME / Let's Encrypt 自动 TLS | 🔜 规划中 |
 | WARP WireGuard 一键出站 | 🔜 规划中 |
@@ -129,6 +131,31 @@ cd backend && go build -o zenithpanel . && cd ..
 
 ./backend/zenithpanel
 ```
+
+---
+
+## 🖥️ 无头 CLI
+
+面板启动后，Web UI 上的所有操作都可以从命令行完成 —— 适用于自动化、故障排查
+以及 Claude-Code 式的 AI 代理操作。
+
+```bash
+# 在面板宿主机上（root）：创建 token 并写入 ~/.config/zenithctl/config.toml
+ln -sf /opt/zenithpanel/zenithpanel /usr/local/bin/zenithctl
+zenithctl token bootstrap
+
+# 日常使用
+zenithctl status
+zenithctl inbound list
+zenithctl client add --inbound 1 --email alice@example.com
+zenithctl proxy status
+zenithctl proxy apply              # 双引擎重启
+zenithctl raw GET /api/v1/clients  # 调用任意 API 的逃生口
+```
+
+跨主机使用：通过 `--host https://panel.example.com --token ztk_…` 或在
+`~/.config/zenithctl/config.toml` 中预先配置一个 profile。完整参考：
+[docs/cli_design_CN.md](docs/cli_design_CN.md) / [docs/cli_api_spec.md](docs/cli_api_spec.md)。
 
 ---
 

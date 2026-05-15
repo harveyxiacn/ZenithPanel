@@ -79,6 +79,8 @@ Current server panels (like 1Panel, BT) focus on website hosting and general mai
 | JWT + bcrypt auth | ✅ Done |
 | TUIC v5 support (Sing-box) | ✅ Done |
 | Backup / restore (portable archive) | ✅ Done |
+| Headless CLI (`zenithctl`) + API tokens | ✅ Done |
+| Dual-engine (Xray + Sing-box concurrent) | ✅ Done |
 | Real-time traffic charts (ECharts) | 🔜 Planned |
 | ACME / Let's Encrypt (auto TLS) | 🔜 Planned |
 | WARP WireGuard one-click outbound | 🔜 Planned |
@@ -129,6 +131,31 @@ cd backend && go build -o zenithpanel . && cd ..
 
 ./backend/zenithpanel
 ```
+
+---
+
+## 🖥️ Headless CLI
+
+Once the panel is running, every action available in the Web UI is reachable
+from a shell — useful for automation, debugging, and Claude-Code-style agents.
+
+```bash
+# On the panel host, as root: mint a token + write ~/.config/zenithctl/config.toml
+ln -sf /opt/zenithpanel/zenithpanel /usr/local/bin/zenithctl
+zenithctl token bootstrap
+
+# Day-to-day usage
+zenithctl status
+zenithctl inbound list
+zenithctl client add --inbound 1 --email alice@example.com
+zenithctl proxy status
+zenithctl proxy apply              # dual-engine restart
+zenithctl raw GET /api/v1/clients  # escape hatch for any endpoint
+```
+
+Remote/cross-host use: pass `--host https://panel.example.com --token ztk_…`
+or define a profile in `~/.config/zenithctl/config.toml`. Full reference:
+[docs/cli_design.md](docs/cli_design.md) / [docs/cli_api_spec.md](docs/cli_api_spec.md).
 
 ---
 
