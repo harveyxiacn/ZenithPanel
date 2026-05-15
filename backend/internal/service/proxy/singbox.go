@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -34,6 +35,22 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 	config.DB.Where("enable = ?", true).Find(&rules)
 	config.DB.Where("enable = ?", true).Find(&customOutbounds)
 	rules = UniqueRoutingRules(rules)
+
+	// In dual-engine mode, Sing-box only handles protocols Xray cannot serve
+	// (Hysteria2, TUIC, WireGuard inbounds). Anything Xray can do is dropped
+	// from this engine's inbound list to avoid port collisions and duplicated
+	// load. When dualMode is false (single-engine override via apply?engine=singbox)
+	// we keep every enabled inbound so the previous behavior is preserved.
+	if s.IsDualMode() {
+		filtered := inbounds[:0]
+		for _, in := range inbounds {
+			if xraySupportedProtocols[in.Protocol] {
+				continue
+			}
+			filtered = append(filtered, in)
+		}
+		inbounds = filtered
+	}
 
 	clientsByInbound := fetchClientsByInbound(inbounds)
 
@@ -283,16 +300,23 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		}
 
 	case "tuic":
-		// TUIC v5: each user has a UUID + password. We reuse the client's UUID
-		// for both (same pattern as Hysteria2 / VLESS) unless the settings JSON
-		// supplies a dedicated per-user password. congestion_control defaults
-		// to "bbr" which is the sing-box recommendation.
+		// TUIC v5: each user has a UUID + password. The UUID always comes from
+		// the Client row; the password comes from settings.clients[].password
+		// (keyed by email) when supplied, otherwise falls back to the UUID.
+		// This lets admins set a distinct TUIC secret without a schema change,
+		// while preserving the legacy UUID-as-password behavior for inbounds
+		// created before this fix.
+		passwordByEmail := perUserPasswordsFromSettings(settingsRaw)
 		users := make([]map[string]interface{}, 0, len(clients))
 		for _, c := range clients {
+			pw := c.UUID
+			if v, ok := passwordByEmail[c.Email]; ok && v != "" {
+				pw = v
+			}
 			users = append(users, map[string]interface{}{
 				"name":     c.Email,
 				"uuid":     c.UUID,
-				"password": c.UUID,
+				"password": pw,
 			})
 		}
 		entry["users"] = users
@@ -329,6 +353,20 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 			}
 		}
 		applyStreamToSingbox(entry, stream)
+
+		// QUIC-based protocols (Hysteria2, TUIC) negotiate over HTTP/3, which
+		// requires the server to advertise `alpn: ["h3"]`. Clients otherwise
+		// fail the handshake with `CRYPTO_ERROR 0x178: tls: server did not
+		// select an ALPN protocol`. Default it here when the inbound didn't
+		// supply one — admins can still override by setting tlsSettings.alpn
+		// explicitly.
+		if in.Protocol == "hysteria2" || in.Protocol == "tuic" {
+			if tlsBlock, ok := entry["tls"].(map[string]interface{}); ok {
+				if _, hasALPN := tlsBlock["alpn"]; !hasALPN {
+					tlsBlock["alpn"] = []interface{}{"h3"}
+				}
+			}
+		}
 
 		// Optional connection multiplexing (smux/yamux/h2mux). Sing-box treats
 		// multiplex as a sibling of transport, so it lives directly on the inbound.
@@ -451,6 +489,33 @@ func resolveDNSServers() (string, string) {
 		}
 	}
 	return primary, secondary
+}
+
+// perUserPasswordsFromSettings reads inbound.Settings.clients[] and indexes any
+// per-user password by email. Used by TUIC config generation so admins can
+// supply distinct secrets via the Web UI / API without a schema change.
+// Returns an empty map if settings is nil or has no clients array.
+func perUserPasswordsFromSettings(settings map[string]interface{}) map[string]string {
+	out := map[string]string{}
+	if settings == nil {
+		return out
+	}
+	rawClients, ok := settings["clients"].([]interface{})
+	if !ok {
+		return out
+	}
+	for _, rc := range rawClients {
+		m, _ := rc.(map[string]interface{})
+		if m == nil {
+			continue
+		}
+		email, _ := m["email"].(string)
+		pw, _ := m["password"].(string)
+		if email != "" && pw != "" {
+			out[email] = pw
+		}
+	}
+	return out
 }
 
 // applyStreamToSingbox extracts TLS and transport config from the stored stream
@@ -796,6 +861,11 @@ func (s *SingboxManager) Start() error {
 	}
 
 	cmd := exec.Command(s.BinaryPath, "run", "-c", s.ConfigPath)
+	// sing-box ≥1.11 deprecated the geosite database; without this opt-in the
+	// process refuses to load configs that reference it (panel currently emits
+	// geosite-backed routing rules). Migrating to rule-sets is tracked
+	// separately; this env var keeps the deprecated path alive in the meantime.
+	cmd.Env = append(os.Environ(), "ENABLE_DEPRECATED_GEOSITE=true")
 	return s.startAndVerify(cmd)
 }
 

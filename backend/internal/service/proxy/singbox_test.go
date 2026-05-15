@@ -326,6 +326,146 @@ func TestSingboxNativeTLSStreamPassthrough(t *testing.T) {
 	}
 }
 
+// TestTUICDefaultsALPNToH3 verifies that a TUIC inbound configured without
+// an explicit ALPN list still ends up with `alpn: ["h3"]` so clients can
+// negotiate QUIC successfully. Pre-fix the panel emitted no ALPN at all,
+// causing every TUIC client to fail with `tls: server did not select an
+// ALPN protocol`.
+func TestTUICDefaultsALPNToH3(t *testing.T) {
+	in := model.Inbound{
+		Tag:      "tuic-no-alpn",
+		Protocol: "tuic",
+		Port:     31406,
+		Settings: `{"clients":[{"email":"u@t","uuid":"u-uuid"}]}`,
+		Stream: `{
+			"network": "udp",
+			"security": "tls",
+			"tlsSettings": {
+				"serverName": "test.local",
+				"certificates": [{"certificateFile":"/c.pem","keyFile":"/k.pem"}]
+			}
+		}`,
+	}
+	clients := []model.Client{{Email: "u@t", UUID: "u-uuid"}}
+	entry, err := buildSingboxInbound(in, clients)
+	if err != nil {
+		t.Fatalf("buildSingboxInbound: %v", err)
+	}
+	tls, ok := entry["tls"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected tls block, got %T", entry["tls"])
+	}
+	alpn, ok := tls["alpn"].([]interface{})
+	if !ok || len(alpn) == 0 {
+		t.Fatalf("expected alpn=[\"h3\"], got %v", tls["alpn"])
+	}
+	if got, _ := alpn[0].(string); got != "h3" {
+		t.Errorf("expected alpn[0]=\"h3\", got %q", got)
+	}
+}
+
+// TestTUICHonorsExplicitALPN verifies that an admin-supplied tlsSettings.alpn
+// is not overwritten by the h3 default.
+func TestTUICHonorsExplicitALPN(t *testing.T) {
+	in := model.Inbound{
+		Tag:      "tuic-custom-alpn",
+		Protocol: "tuic",
+		Port:     31407,
+		Settings: `{"clients":[{"email":"u@t","uuid":"u-uuid"}]}`,
+		Stream: `{
+			"network": "udp", "security": "tls",
+			"tlsSettings": {
+				"serverName": "test.local",
+				"alpn": ["h3-29"],
+				"certificates": [{"certificateFile":"/c.pem","keyFile":"/k.pem"}]
+			}
+		}`,
+	}
+	entry, err := buildSingboxInbound(in, []model.Client{{Email: "u@t", UUID: "u-uuid"}})
+	if err != nil {
+		t.Fatalf("buildSingboxInbound: %v", err)
+	}
+	tls := entry["tls"].(map[string]interface{})
+	alpn := tls["alpn"].([]interface{})
+	if got, _ := alpn[0].(string); got != "h3-29" {
+		t.Errorf("expected explicit alpn to be preserved, got %q", got)
+	}
+}
+
+// TestTUICPerUserPasswordOverride verifies that settings.clients[].password
+// keyed by email overrides the UUID-as-password fallback.
+func TestTUICPerUserPasswordOverride(t *testing.T) {
+	in := model.Inbound{
+		Tag:      "tuic-custom-pw",
+		Protocol: "tuic",
+		Port:     31408,
+		Settings: `{"clients":[{"email":"alice@t","password":"alice-secret"}]}`,
+		Stream: `{
+			"network": "udp", "security": "tls",
+			"tlsSettings": {"serverName":"test.local","certificates":[{"certificateFile":"/c.pem","keyFile":"/k.pem"}]}
+		}`,
+	}
+	clients := []model.Client{
+		{Email: "alice@t", UUID: "alice-uuid"},
+		{Email: "bob@t", UUID: "bob-uuid"}, // no password override → falls back to UUID
+	}
+	entry, err := buildSingboxInbound(in, clients)
+	if err != nil {
+		t.Fatalf("buildSingboxInbound: %v", err)
+	}
+	users := entry["users"].([]map[string]interface{})
+	if users[0]["password"] != "alice-secret" {
+		t.Errorf("alice: expected password override 'alice-secret', got %v", users[0]["password"])
+	}
+	if users[1]["password"] != "bob-uuid" {
+		t.Errorf("bob: expected UUID fallback 'bob-uuid', got %v", users[1]["password"])
+	}
+}
+
+// TestHysteria2DefaultsALPNToH3 verifies the ALPN default also applies to
+// Hysteria2 — same QUIC handshake issue as TUIC.
+func TestHysteria2DefaultsALPNToH3(t *testing.T) {
+	in := model.Inbound{
+		Tag:      "hy2-no-alpn",
+		Protocol: "hysteria2",
+		Port:     8443,
+		Settings: `{}`,
+		Stream: `{
+			"network": "udp", "security": "tls",
+			"tlsSettings": {"serverName":"test.local","certificates":[{"certificateFile":"/c.pem","keyFile":"/k.pem"}]}
+		}`,
+	}
+	entry, err := buildSingboxInbound(in, []model.Client{{Email: "u@t", UUID: "u-uuid"}})
+	if err != nil {
+		t.Fatalf("buildSingboxInbound: %v", err)
+	}
+	tls := entry["tls"].(map[string]interface{})
+	alpn, ok := tls["alpn"].([]interface{})
+	if !ok || len(alpn) == 0 {
+		t.Fatalf("expected alpn default for hysteria2, got %v", tls["alpn"])
+	}
+	if got, _ := alpn[0].(string); got != "h3" {
+		t.Errorf("expected hysteria2 alpn=\"h3\", got %q", got)
+	}
+}
+
+// TestIsXraySupportedPartition verifies the engine partition rule the dual-mode
+// scheduler relies on. Adding a new protocol that should be xray-served is a
+// one-line change in xray.go; this test pins the invariant so a careless edit
+// won't silently break the partition.
+func TestIsXraySupportedPartition(t *testing.T) {
+	for _, p := range []string{"vless", "vmess", "trojan", "shadowsocks"} {
+		if !IsXraySupported(p) {
+			t.Errorf("IsXraySupported(%q) = false, want true", p)
+		}
+	}
+	for _, p := range []string{"hysteria2", "tuic", "wireguard", "unknown"} {
+		if IsXraySupported(p) {
+			t.Errorf("IsXraySupported(%q) = true, want false", p)
+		}
+	}
+}
+
 // TestSingboxConfigIsValidJSON verifies that GenerateConfig returns valid JSON
 // for a zero-inbound scenario (empty DB state).
 func TestSingboxConfigIsValidJSON(t *testing.T) {

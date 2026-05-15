@@ -7,16 +7,24 @@ import (
 )
 
 func recordAudit(c *gin.Context, action, detail string) {
-	username := ""
-	if u, exists := c.Get("username"); exists {
-		username, _ = u.(string)
+	// Prefer the new "principal" set by AuthMiddleware (e.g. "token:ci",
+	// "local-root", "admin:harvey"). Fall back to the legacy "username"
+	// claim so handlers using JWTAuthMiddleware (setup wizard) keep working.
+	principal := ""
+	if p, exists := c.Get("principal"); exists {
+		principal, _ = p.(string)
+	}
+	if principal == "" {
+		if u, exists := c.Get("username"); exists {
+			principal, _ = u.(string)
+		}
 	}
 	ip := c.ClientIP()
 	// Run in background so audit failures never affect the main request
 	go func() {
 		defer func() { recover() }()
 		config.DB.Create(&model.AuditLog{
-			Username: username,
+			Username: principal,
 			Action:   action,
 			Detail:   detail,
 			IP:       ip,

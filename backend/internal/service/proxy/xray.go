@@ -34,6 +34,13 @@ var xraySupportedProtocols = map[string]bool{
 	"shadowsocks": true,
 }
 
+// IsXraySupported reports whether Xray-core can natively serve the given
+// protocol. Used by the API layer's dual-engine partitioner to decide which
+// engine should own an inbound at runtime.
+func IsXraySupported(protocol string) bool {
+	return xraySupportedProtocols[protocol]
+}
+
 // SkippedProtocols returns protocol names that were skipped during the last config generation
 // because they are not supported by the engine.
 func (x *XrayManager) SkippedProtocols() []string {
