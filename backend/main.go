@@ -23,6 +23,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/audit"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/cert"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/monitor"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/notify"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
@@ -176,6 +177,12 @@ func main() {
 	// graceful shutdown can stop the loop.
 	stopAuditRetention := audit.Start(config.DB, config.GetSetting)
 	_ = stopAuditRetention // shutdown is process-exit so no explicit teardown needed
+
+	// 5d-ter. ACME cert renewer: every 12h scan certs in /opt/zenithpanel/data/certs
+	// and renew any within 30 days of expiry using the stored acme_email.
+	// Best-effort; logs failures and tries again on the next tick.
+	stopCertRenewer := cert.StartRenewer(config.GetSetting)
+	_ = stopCertRenewer
 
 	// 5e. Telegram bot lifecycle: watches the enable flag every 30s and
 	// starts/stops the long-polling goroutine accordingly. Splitting the
