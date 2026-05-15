@@ -267,6 +267,9 @@ export default {
       probeAll: 'Probe all',
       probingAll: 'Probing…',
       probeAllTooltip: 'Probe every enabled inbound; results appear inline per row',
+      autoProbeOff: 'Auto-probe off',
+      autoProbeOn: 'Auto-probing 30s',
+      autoProbeTooltip: 'Re-probe every 30 seconds while the inbound tab is open',
     },
     routing: {
       title: 'Routing Rules',

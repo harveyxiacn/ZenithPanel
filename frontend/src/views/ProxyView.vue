@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon, SignalIcon, ArrowDownTrayIcon, BoltIcon } from '@heroicons/vue/24/outline'
@@ -94,6 +94,13 @@ async function onProbeInbound(id: number) {
 // gates re-entry — a second click is a no-op until the wave finishes.
 const probeAllBusy = ref(false)
 
+// Auto-probe: when toggled on, runs Probe All every probeAutoIntervalMs.
+// The interval handle lives in a ref so tab switches and onUnmounted can
+// clean it up without leaking timers.
+const probeAutoEnabled = ref(false)
+const probeAutoIntervalMs = 30_000
+let probeAutoTimer: ReturnType<typeof setInterval> | null = null
+
 async function onProbeAllInbounds() {
   if (probeAllBusy.value || inbounds.value.length === 0) return
   probeAllBusy.value = true
@@ -121,6 +128,25 @@ async function onProbeAllInbounds() {
   }
   await Promise.all(inFlight)
   probeAllBusy.value = false
+}
+
+// Start/stop the auto-probe timer. Centralized so the toggle button + tab
+// changes + unmount cleanup all go through the same path.
+function setAutoProbe(enabled: boolean) {
+  probeAutoEnabled.value = enabled
+  if (probeAutoTimer) {
+    clearInterval(probeAutoTimer)
+    probeAutoTimer = null
+  }
+  if (enabled) {
+    // Fire one immediately so the user sees progress without waiting 30s.
+    onProbeAllInbounds()
+    probeAutoTimer = setInterval(() => {
+      // Only auto-probe while the inbound tab is active; switching away
+      // shouldn't keep hitting the API.
+      if (activeTab.value === 'inbounds') onProbeAllInbounds()
+    }, probeAutoIntervalMs)
+  }
 }
 const showInboundForm = ref(false)
 const editingInbound = ref<any>(null)
@@ -1322,6 +1348,16 @@ watch(activeTab, (newTab) => {
     connectionsPoll = null
   }
 })
+
+// Make sure the auto-probe interval doesn't outlive the component. Without
+// this it would keep firing after the user navigated away (during their
+// session), pulling unnecessary load and confusing the next page's state.
+onBeforeUnmount(() => {
+  if (probeAutoTimer) {
+    clearInterval(probeAutoTimer)
+    probeAutoTimer = null
+  }
+})
 </script>
 
 <template>
@@ -1485,6 +1521,23 @@ watch(activeTab, (newTab) => {
             >
               <BoltIcon class="h-4 w-4 mr-1" />
               {{ probeAllBusy ? $t('proxy.inbounds.probingAll') : $t('proxy.inbounds.probeAll') }}
+            </button>
+            <!-- Auto-probe toggle. Visual style mirrors the existing tab
+                 switcher pills. Disabled while no inbounds exist — there's
+                 nothing to probe. -->
+            <button
+              @click="setAutoProbe(!probeAutoEnabled)"
+              :disabled="inbounds.length === 0"
+              :class="[
+                'text-sm px-3 py-2 rounded-lg font-medium transition flex items-center disabled:opacity-50',
+                probeAutoEnabled
+                  ? 'bg-emerald-500 hover:bg-emerald-600 text-white'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+              ]"
+              :title="$t('proxy.inbounds.autoProbeTooltip')"
+            >
+              <ArrowPathIcon :class="['h-4 w-4 mr-1', probeAutoEnabled ? 'animate-spin' : '']" />
+              {{ probeAutoEnabled ? $t('proxy.inbounds.autoProbeOn') : $t('proxy.inbounds.autoProbeOff') }}
             </button>
             <button @click="openQuickSetup()" class="text-sm bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg font-medium transition flex items-center">
               <SparklesIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.inbounds.quickSetup') }}
