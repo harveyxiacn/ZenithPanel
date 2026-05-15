@@ -138,7 +138,48 @@ captured at first issuance. No manual action required.
 
 ---
 
-## 5. End-to-end Sanity Checklist
+## 5. Changing Inbound Ports
+
+You can change an inbound's listen port at any time and the change survives
+the next panel upgrade. **Inbound state lives in the SQLite DB under the
+volume-mounted `/opt/zenithpanel/data/` directory**, and the OTA flow
+inspects the old container's `HostConfig` and re-uses it for the new
+container — so the volume mount (and thus all inbound rows, certs, audit
+logs) is preserved.
+
+### From the Web UI
+
+1. **Proxy → Inbound Nodes**, click **Edit** on the row.
+2. Change the **Port** field, save.
+3. **Apply Configuration** to reload the engines on the new port.
+4. **Open the new port in your firewall**. The panel can do this for you
+   from **Settings → Firewall** (or via `ufw allow N/tcp` on the host).
+
+### From the CLI
+
+```bash
+zenithctl inbound set-port 3 31402                 # change port only
+zenithctl inbound set-port 3 31402 --sync-firewall # also UFW-allow the new port
+```
+
+The CLI prints both the old and new port, runs `proxy apply` automatically,
+and (with `--sync-firewall`) opens the new port through the existing
+firewall API. The old port stays in UFW; remove it manually with
+`ufw delete allow <old>/tcp` once you're sure nothing else uses it.
+
+### What survives an OTA upgrade
+
+- **Inbound ports**: in SQLite on the data volume.
+- **API tokens, audit logs, settings, certs**: same volume.
+- **UFW rules**: live on the host, not inside the container, untouched.
+- **Image-defined defaults (Dockerfile `CMD`)**: replaced by the new image.
+
+So if you change port 443 → 8443 in the panel and OTA-upgrade tomorrow, the
+new container will still bind 8443. No second migration required.
+
+---
+
+## 6. End-to-end Sanity Checklist
 
 When everything's right, you should see:
 
