@@ -3,6 +3,33 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — 2026-05-15 (sing-box rule-sets + Probe All)
+
+### Changed
+
+- **Sing-box geosite → rule_set migration.** The routing-rule generator no
+  longer emits the deprecated `geosite`/`geoip` keys; it now declares
+  remote `rule_set` entries that sing-box fetches from
+  `SagerNet/sing-geosite` and `SagerNet/sing-geoip` once per week. The
+  `ENABLE_DEPRECATED_GEOSITE=true` env-var hack on the sing-box exec.Cmd
+  is gone. `experimental.cache_file` is now emitted unconditionally so
+  rule-set downloads survive a panel restart.
+
+### Fixed
+
+- **`geoip:private` 404 at boot.** SagerNet's sing-geoip repo doesn't
+  ship a `private.srs` file, so the previous migration crashed the engine
+  at start-up. Routes that mention `geoip:private` now set the sing-box
+  built-in `ip_is_private: true` attribute instead of fetching a
+  rule-set. Regression pinned by `TestBuildSingboxRoutingRuleGeoipPrivateMapsToIsPrivate`.
+
+### Added
+
+- **Probe All button** on the Proxy → Inbound Nodes page. Walks every
+  enabled inbound with a concurrency cap of 4, fills the per-row probe
+  chip as results land, exits when all rows have either a green/red
+  badge. Strings localized for en/zh-CN/ja/zh-TW.
+
 ## [Unreleased] — 2026-05-15
 
 ### Added
