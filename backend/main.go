@@ -136,6 +136,9 @@ func main() {
 	if err := webserver.Get().Start(); err != nil {
 		log.Printf("Warning: built-in web server failed to start: %v", err)
 	}
+	// Let ACME issuance briefly steal :80 from the webserver; the cert
+	// package handles the Stop/Start dance automatically via this hook.
+	cert.SetPortBouncer(webserver.Get())
 
 	// 5b. Start background notification checker (every 6 hours)
 	go func() {
