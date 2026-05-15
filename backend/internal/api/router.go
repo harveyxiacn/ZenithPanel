@@ -2258,13 +2258,32 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					return
 				}
 
-				if err := cert.IssueCertificate(req.Domain, req.Email); err != nil {
+				// Use ObtainCert (not IssueCertificate) so we can surface the
+				// on-disk paths back to the caller. Operators need them to
+				// wire the cert into an inbound's tlsSettings.
+				certPath, keyPath, err := cert.ObtainCert(req.Domain, req.Email)
+				if err != nil {
 					log.Printf("Cert issue error: %v", err)
-					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to issue certificate"})
+					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": fmt.Sprintf("Failed to issue certificate: %v", err)})
 					return
 				}
 
-				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Certificate issued successfully"})
+				// Stamp the renewal bookkeeping so the auto-renewal ticker
+				// knows which (domain, email) pair to retry with.
+				setSetting("acme_email", req.Email)
+
+				notAfter, _ := cert.ValidatePair(certPath, keyPath)
+				recordAudit(c, "tls.issue", req.Domain)
+				c.JSON(http.StatusOK, gin.H{
+					"code": 200,
+					"msg":  "Certificate issued. Wire the paths into an inbound's tlsSettings or panel TLS upload to put it into use.",
+					"data": gin.H{
+						"domain":    req.Domain,
+						"cert_path": certPath,
+						"key_path":  keyPath,
+						"not_after": notAfter.Unix(),
+					},
+				})
 			})
 
 			// Generate X25519 keypair for VLESS Reality
