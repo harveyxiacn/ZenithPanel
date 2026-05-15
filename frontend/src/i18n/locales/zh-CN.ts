@@ -263,6 +263,7 @@ export default {
       autoProbeOff: '自动探活：关',
       autoProbeOn: '每 30 秒自动探活',
       autoProbeTooltip: '入站标签页打开时每 30 秒重新探活一次',
+      tlsRequiredHint: 'Hysteria2 与 TUIC 强制要求 TLS —— SNI 必须与证书匹配。没有真实域名？使用 <带短横线的IP>.nip.io。',
     },
     routing: {
       title: '路由规则',
