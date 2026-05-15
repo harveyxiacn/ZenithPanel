@@ -73,6 +73,173 @@ docker exec zenithpanel /opt/zenithpanel/zenithpanel ctl token bootstrap
 
 ---
 
+## 3.5 端到端首次安装完整步骤（"rabisu 实战"）
+
+这是我在参考 VPS（rabisu）上一字不漏跑通的序列。用户说"全部都帮我装上"
+时按这个顺序从上往下执行。每步给出**做什么 / 为什么 / 怎么验证下一步前
+确认对了**。已经满足条件的步骤直接跳。
+
+### 第 1 步 — 起容器，volume 必须挂
+
+```bash
+docker run -d \
+  --name zenithpanel \
+  --restart always \
+  --network host \
+  -v /opt/zenithpanel/data:/opt/zenithpanel/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/harveyxiacn/zenithpanel:main
+docker logs zenithpanel 2>&1 | grep -E 'setup-|listening'
+```
+
+验证：`curl -sf http://127.0.0.1:31310/api/v1/health | jq .` 返回
+`{"status":"ok",…}`。如果 403，说明 setup 向导没走完——把
+`docker logs` 里的向导 URL 给真人用户，无人值守的 setup 路径没有，是
+有意设计。
+
+### 第 2 步 — 拿 CLI token
+
+```bash
+ln -sf /opt/zenithpanel/zenithpanel /usr/local/bin/zenithctl
+docker exec zenithpanel /opt/zenithpanel/zenithpanel ctl token bootstrap
+```
+
+验证：`zenithctl status` 返回 200。从这一步起所有 `zenithctl …` 都自动
+认证（token 在 `~/.config/zenithctl/config.toml`）。
+
+### 第 3 步 — 防火墙提前放行
+
+```bash
+ufw allow 80/tcp    comment 'ACME HTTP-01'
+ufw allow 443/tcp   comment 'VLESS+Reality (A)'
+ufw allow 8443/udp  comment 'Hysteria2     (E)'
+ufw allow 31402/tcp comment 'VMess+WS+TLS  (B)'
+ufw allow 31403/tcp comment 'Trojan+TLS    (C)'
+ufw allow 31404/tcp comment 'SS-2022       (D)'
+ufw allow 31406/udp comment 'TUIC v5       (F)'
+ufw status numbered
+```
+
+只开用户实际要用的协议对应端口。**80/tcp 必须放行**——即使面板不用，
+Let's Encrypt 的 ACME 挑战会从公网打 :80 验证域名归属。
+
+### 第 4 步 — 选域名（没有就用 `<dashed-ip>.nip.io`）
+
+标准做法是真域名 A 记录指向 VPS。**没有域名的用户**直接用 nip.io 这种
+通配 DNS：`<带横杠的-IP>.nip.io` 自动解析到对应 IP。VPS `136.175.83.32`：
+
+```bash
+export PUBLIC_IP=136.175.83.32
+export DOMAIN=136-175-83-32.nip.io
+
+# 确认解析正确（应打印 PUBLIC_IP）
+dig +short "$DOMAIN"
+```
+
+注意：nip.io / sslip.io 各有 Let's Encrypt 的"per-registered-domain"
+周限额，撞了 `429 rateLimited` 时换另一个（`<dashed-ip>.sslip.io`）。
+生产场景应该让用户用自有真域名。
+
+### 第 5 步 — 申请真 Let's Encrypt 证书
+
+```bash
+zenithctl cert issue --domain "$DOMAIN" --email <用户真实邮箱>
+export CERT=/opt/zenithpanel/data/certs/${DOMAIN}.crt
+export KEY=/opt/zenithpanel/data/certs/${DOMAIN}.key
+```
+
+验证：
+```bash
+openssl x509 -in "$CERT" -noout -subject -issuer -dates
+# issuer 应为 "C = US, O = Let's Encrypt, CN = R13"（或 R10/R11）
+# notAfter 应距今 ~90 天
+```
+
+后台续期 ticker 每 12h 跑一次，30 天内到期自动重签，无需手动。
+
+### 第 6 步 — 一键 seed 6 个协议 + 默认用户
+
+```bash
+bash scripts/agent_seed_all_protocols.sh
+```
+
+幂等脚本（重跑打 `[skip] already exists`），结尾自动 `proxy apply` 并
+跑一次 `proxy test all`。**预期 6/6 OK=✓**。
+
+只要部分协议时改用 §4.4 单独配方（如只 A 跑 VLESS+Reality，或 A+E
+跑"最低延迟双协议组合"）。
+
+### 第 7 步 — 把订阅 URL 给用户
+
+```bash
+zenithctl -q raw GET /api/v1/clients | jq -r '.[] | "\(.email)  \(.uuid)"'
+# 然后每个 UUID：
+curl -s "http://${PUBLIC_IP}:31310/api/v1/sub/<uuid>" | base64 -d
+# Clash Meta / Stash / Mihomo 用户：
+curl -s -H 'User-Agent: clash-meta/1.0' "http://${PUBLIC_IP}:31310/api/v1/sub/<uuid>" > clash.yaml
+```
+
+每个 Client 行单独一个订阅。要扫码让用户上手机：真人用户打开 Web UI
+**代理 → 用户与订阅**，每行右边有 QR Code 按钮，浏览器里渲染。agent
+不需要介入这步。
+
+### 第 8 步 — 真实客户端视角的端到端验证
+
+```bash
+bash scripts/proto_sweep_dual.sh
+```
+
+为每个协议起一个 sing-box 客户端进程，本地 SOCKS5，`curl
+https://www.google.com` 走每个协议。**预期 6/6 PASS**。这是离"真实 Clash
+Meta 用户体验"最近的本地验证。
+
+### 全流程一气呵成（rabisu 实测原样）
+
+```bash
+# 前置：docker 已装；ufw active；用户拥有/选好 DOMAIN
+docker run -d --name zenithpanel --restart always --network host \
+  -v /opt/zenithpanel/data:/opt/zenithpanel/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/harveyxiacn/zenithpanel:main
+ln -sf /opt/zenithpanel/zenithpanel /usr/local/bin/zenithctl
+
+# 真人访问 docker logs 里印出的 setup 向导 URL
+
+docker exec zenithpanel /opt/zenithpanel/zenithpanel ctl token bootstrap
+
+for p in 80/tcp 443/tcp 8443/udp 31402/tcp 31403/tcp 31404/tcp 31406/udp; do
+  ufw allow "$p"
+done
+
+export PUBLIC_IP=<vps ip>
+export DOMAIN=<真实域名 或 "$(echo $PUBLIC_IP | tr . -).nip.io">
+zenithctl cert issue --domain "$DOMAIN" --email <用户邮箱>
+export CERT=/opt/zenithpanel/data/certs/${DOMAIN}.crt
+export KEY=/opt/zenithpanel/data/certs/${DOMAIN}.key
+
+bash scripts/agent_seed_all_protocols.sh
+zenithctl --output table proxy test all   # 预期 6/6 ✓
+```
+
+从"新 VPS"到"6 协议就绪可扫码进 Clash Meta"约两分钟。这是规范的 happy
+path，本手册其余内容都是它的变体。
+
+### 把已存在的自签名证书装迁到真证书
+
+之前用 self-signed 测试证书（带 `allowInsecure=1`）seed 过的面板，
+不要重建入站，直接：
+
+```bash
+# 第 5 步先签真证书，再：
+bash scripts/rabisu_switch_to_real_cert.py   # 参考实现，按 TAG 列表自适应
+```
+
+脚本遍历每个 TLS 入站：换 `tlsSettings.serverName` 为新域名，
+`certificates[0]` 改为 ACME 路径，删掉 `allowInsecure: true`（现在
+反而是安全风险），最后 proxy apply。
+
+---
+
 ## 4. 通过 API 建协议 + 用户
 
 通用配方：**inbound → client → apply → cert（可选）**。
@@ -151,6 +318,59 @@ bash scripts/agent_seed_all_protocols.sh
   时漏了，客户端会 `tls: server did not select an ALPN`。
 - **`geoip:private`** 在路由规则里 SagerNet 不发布 `.srs`。面板已自动
   改写为 `ip_is_private:true`。
+
+### 4.6 Hy2 / TUIC 的 TLS 与 SNI 真相（别搞错）
+
+常见 AI agent 误解："Hy2 不用域名也能跑，README 写了会自动跳过。"
+**两点都不对**：
+
+**README 里"自动跳过"的真实含义。** 只跑 Xray 引擎时，Hy2/TUIC 入站会
+被静默跳过，因为 Xray-core 根本不支持这两个协议——只有 Sing-box 支持。
+这是**引擎兼容**层面的跳过，**不是"域名要求被自动跳过"**。原句讨论的
+是"哪个引擎跑哪个协议"，跟域名/证书无关。
+
+**代码层强制了什么。** `backend/internal/service/proxy/singbox.go` 明
+确拒绝任何没开 TLS 的 Hy2/TUIC 入站：
+
+```
+%s inbound %q requires TLS — open the inbound editor, set Security to
+TLS, then provide certificate and key files
+```
+
+QUIC 协议本身就要求 TLS，TLS 需要证书，证书必须有 SAN（DNS 名或 IP
+名），客户端的 SNI/serverName 必须能匹配上（或者客户端开
+`skip-cert-verify` / `insecure=1`）。
+
+**所以 Hy2 始终需要给 `stream.tlsSettings.serverName` 填东西。** 只是
+不一定非要是你花钱注册的域名。三条合法路径：
+
+| 方案 | 适用场景 | `serverName` 值 | 证书 |
+|---|---|---|---|
+| 真域名 + LE | 你拥有 `panel.example.com` | `panel.example.com` | `zenithctl cert issue --domain panel.example.com` |
+| nip.io / sslip.io | 只有公网 IP | `136-175-83-32.nip.io` | `zenithctl cert issue --domain 136-175-83-32.nip.io`（免费真实 LE 证书） |
+| 自签 + insecure | 内网 / 测试 | 任意字符串，如 `hysteria2.example.com` | `cert: self_signed`；客户端必须 `insecure=1` |
+
+**rabisu (136.175.83.32) 实际操作的两阶段为证**，两阶段 Hy2 都开了
+TLS 且都有非空 `serverName`：
+
+- **阶段 1（自签）：** `serverName="hysteria2.fanni-panda.com"`，自签
+  证书 `/opt/zenithpanel/data/certs/fullchain.pem`（CN=`test.local`）。
+  订阅 URL 带 `insecure=1`——因为证书 CN 跟 SNI 不匹配，客户端必须跳
+  过验证才能连。
+- **阶段 2（真实 LE 证书）：** 执行 `zenithctl cert issue --domain
+  136-175-83-32.nip.io` 之后，把 Hy2 入站改为 `serverName=
+  "136-175-83-32.nip.io"`，指向 LE 证书文件，订阅 URL 去掉
+  `allowInsecure`。`openssl s_client` 返回 `Verify return code: 0 (ok)`。
+
+**rabisu 上的 Hy2 入站在任何阶段都没有空 `serverName`、没关 TLS、也
+没用过纯 IP 没主机名的配置。** 真要这么填，面板 apply 时直接拒绝。
+
+**UI 展示（自本次修复起）。** 入站列表的 Transport 单元格下方，对每
+条 TLS/Reality 入站都显示 SNI 值——一眼能看到 `udp+tls / SNI:
+136-175-83-32.nip.io`。可视化编辑器对 Hy2/TUIC 的 SNI 字段加红色
+`*`，TLS 区块顶部显示"始终强制 TLS"提示。Network 选择器对 Hy2/TUIC
+锁死为 UDP，Security 选择器锁死为 TLS——切换协议时 `ProxyView.vue`
+里的 watch 自动 arm，避免用户保存出 sing-box 会拒绝的入站。
 
 ---
 

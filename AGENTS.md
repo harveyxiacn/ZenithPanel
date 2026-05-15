@@ -98,6 +98,188 @@ inbound rows, certs, audit logs on the first `docker rm`.
 
 ---
 
+## 3.5 Canonical end-to-end first install (the "rabisu walkthrough")
+
+This is the exact sequence the reference VPS (rabisu) was set up with.
+Run top-to-bottom on a fresh install when the user says *"set everything
+up for me"*. Each step lists what to do, why, and how to verify before
+proceeding. Skip any block whose verification already passes.
+
+### Step 1 — Boot the container, take the volume mount
+
+```bash
+docker run -d \
+  --name zenithpanel \
+  --restart always \
+  --network host \
+  -v /opt/zenithpanel/data:/opt/zenithpanel/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/harveyxiacn/zenithpanel:main
+docker logs zenithpanel 2>&1 | grep -E 'setup-|listening'
+```
+
+Verify: `curl -sf http://127.0.0.1:31310/api/v1/health | jq .` returns
+`{"status":"ok",...}`. If 403, the setup wizard hasn't been completed yet
+— hand the wizard URL (printed in `docker logs`) to the human user;
+there's no headless setup path by design.
+
+### Step 2 — Mint a CLI token
+
+```bash
+ln -sf /opt/zenithpanel/zenithpanel /usr/local/bin/zenithctl
+docker exec zenithpanel /opt/zenithpanel/zenithpanel ctl token bootstrap
+```
+
+Verify: `zenithctl status` returns 200. From this point on, every
+`zenithctl …` call auto-authenticates via `~/.config/zenithctl/config.toml`.
+
+### Step 3 — Open the host firewall ports you'll need
+
+```bash
+ufw allow 80/tcp    comment 'ACME HTTP-01'
+ufw allow 443/tcp   comment 'VLESS+Reality (recipe A)'
+ufw allow 8443/udp  comment 'Hysteria2     (recipe E)'
+ufw allow 31402/tcp comment 'VMess+WS+TLS  (recipe B)'
+ufw allow 31403/tcp comment 'Trojan+TLS    (recipe C)'
+ufw allow 31404/tcp comment 'SS-2022       (recipe D)'
+ufw allow 31406/udp comment 'TUIC v5       (recipe F)'
+ufw status numbered
+```
+
+Open whichever ports correspond to the protocols the user actually
+wants. Port 80/tcp is needed by the ACME HTTP-01 challenge, even if you
+never serve HTTP from the panel — Let's Encrypt's CA reaches your VPS
+on :80 to verify domain ownership.
+
+### Step 4 — Pick a domain (or fall back to `<dashed-ip>.nip.io`)
+
+A real domain pointed at the VPS is the standard. If the user doesn't
+own one, use the wildcard DNS service `nip.io`: the hostname
+`<ip-with-dashes>.nip.io` resolves to the corresponding IP without any
+DNS setup. For VPS `136.175.83.32`:
+
+```bash
+export PUBLIC_IP=136.175.83.32
+export DOMAIN=136-175-83-32.nip.io
+
+# Confirm it resolves (should print PUBLIC_IP)
+dig +short "$DOMAIN"
+```
+
+Caveat: nip.io and sslip.io both have Let's Encrypt
+"certificates-per-registered-domain" rate limits that occasionally hit
+during high-traffic periods. If issuance returns `429 rateLimited`,
+swap the other one (`<ip-with-dashes>.sslip.io`) and retry. For
+long-term production, get the user to point a real domain at the VPS.
+
+### Step 5 — Issue a real Let's Encrypt cert
+
+```bash
+zenithctl cert issue --domain "$DOMAIN" --email <user-email-they-own>
+export CERT=/opt/zenithpanel/data/certs/${DOMAIN}.crt
+export KEY=/opt/zenithpanel/data/certs/${DOMAIN}.key
+```
+
+Verify:
+```bash
+openssl x509 -in "$CERT" -noout -subject -issuer -dates
+# issuer should be "C = US, O = Let's Encrypt, CN = R13" (or R10/R11)
+# notAfter should be ~90 days from today
+```
+
+The panel's renewer ticks every 12h and re-issues at <30 days remaining,
+so this is set-and-forget.
+
+### Step 6 — Seed all six protocols + a default user each
+
+```bash
+bash scripts/agent_seed_all_protocols.sh
+```
+
+The script is idempotent (`[skip] already exists` on re-runs), runs
+`proxy apply` at the end, and prints the result of `proxy test all` so
+you see whether every inbound is bound and reachable. **Expect all 6 to
+show OK=✓.**
+
+If you only want a subset, run the individual recipes from §4.4 instead
+(e.g. only A for VLESS+Reality, or A+E for "VLESS+Reality + Hysteria2"
+which is the lowest-latency two-protocol combo).
+
+### Step 7 — Hand the user their subscription URLs
+
+```bash
+zenithctl -q raw GET /api/v1/clients | jq -r '.[] | "\(.email)  \(.uuid)"'
+# Then for each UUID:
+curl -s "http://${PUBLIC_IP}:31310/api/v1/sub/<uuid>" | base64 -d
+# Or, for Clash Meta / Stash / Mihomo:
+curl -s -H 'User-Agent: clash-meta/1.0' "http://${PUBLIC_IP}:31310/api/v1/sub/<uuid>" > clash.yaml
+```
+
+Each Client row gets its own subscription. To get a QR for mobile
+scanning, the human user opens the Web UI **Proxy → Users & Subs**
+and clicks the QR Code button next to their row — the QR is rendered
+in-browser, no agent involvement needed.
+
+### Step 8 — Sanity check from a real client perspective
+
+```bash
+bash scripts/proto_sweep_dual.sh
+```
+
+This spins up one sing-box CLIENT per protocol, opens a local SOCKS5,
+and `curl`s `https://www.google.com` through each. **Expect 6/6 PASS**.
+This is the closest you can get to "what a real Clash Meta user
+experiences" without leaving the VPS.
+
+### What this whole walkthrough does, in one block
+
+```bash
+# Pre-condition: docker installed; ufw active; user owns/picked a DOMAIN
+docker run -d --name zenithpanel --restart always --network host \
+  -v /opt/zenithpanel/data:/opt/zenithpanel/data \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  ghcr.io/harveyxiacn/zenithpanel:main
+ln -sf /opt/zenithpanel/zenithpanel /usr/local/bin/zenithctl
+
+# Human visits the setup-wizard URL printed in `docker logs zenithpanel`
+
+docker exec zenithpanel /opt/zenithpanel/zenithpanel ctl token bootstrap
+
+for p in 80/tcp 443/tcp 8443/udp 31402/tcp 31403/tcp 31404/tcp 31406/udp; do
+  ufw allow "$p"
+done
+
+export PUBLIC_IP=<vps ip>
+export DOMAIN=<your domain or "$(echo $PUBLIC_IP | tr . -).nip.io">
+zenithctl cert issue --domain "$DOMAIN" --email <user-email>
+export CERT=/opt/zenithpanel/data/certs/${DOMAIN}.crt
+export KEY=/opt/zenithpanel/data/certs/${DOMAIN}.key
+
+bash scripts/agent_seed_all_protocols.sh
+zenithctl --output table proxy test all   # expect 6/6 ✓
+```
+
+From "fresh VPS" to "6 protocols ready to scan into Clash Meta" in
+roughly two minutes. This is the canonical happy path; everything else
+in this manual is variation on it.
+
+### Migrating an existing install that used a self-signed test cert
+
+If the panel was previously seeded with self-signed certs (the
+`allowInsecure=1` path used in the test fixtures), switch to the real
+ACME cert without re-creating the inbounds:
+
+```bash
+# Step 5 still applies (issue the real cert first), then:
+bash scripts/rabisu_switch_to_real_cert.py   # reference impl; adapt to your TAG list
+```
+
+The script walks every TLS-using inbound, swaps `tlsSettings.serverName`
+to the new domain, replaces `certificates[0]` with the ACME paths, and
+removes the now-dangerous `allowInsecure: true`.
+
+---
+
 ## 4. Setting up protocols via the API
 
 The standard recipe is: **inbound + client + apply + cert (optional)**.
@@ -345,6 +527,67 @@ between them in Clash Meta.
 - **`geoip:private`** in a routing rule will fail — the SagerNet repo
   doesn't ship a `geoip-private.srs`. The panel rewrites it to
   sing-box's built-in `ip_is_private: true` attribute automatically.
+
+### 4.8 Hy2 / TUIC TLS-and-SNI reality (don't get this wrong)
+
+Common AI-agent misconception: *"Hy2 can run without a domain — the
+README says it's auto-skipped."* That's wrong on two counts.
+
+**What the README's "auto-skip" actually means.** When you run the Xray
+engine only, Hy2/TUIC inbounds are silently skipped because Xray-core
+doesn't speak them — *only* Sing-box does. That's engine-compat skipping,
+**not** "the domain requirement is auto-skipped". The README phrase is
+about which engine serves which protocol, nothing else.
+
+**What the code enforces.** `backend/internal/service/proxy/singbox.go`
+explicitly rejects any Hy2/TUIC inbound without TLS:
+
+```
+%s inbound %q requires TLS — open the inbound editor, set Security to
+TLS, then provide certificate and key files
+```
+
+QUIC mandates TLS at the protocol level, and TLS needs a certificate.
+A certificate has either a DNS SAN (a name) or an IP SAN, and the client's
+SNI/serverName must match one of them (or the client must opt into
+`skip-cert-verify` / `insecure=1`).
+
+**So Hy2 always needs *something* in `stream.tlsSettings.serverName`.**
+It just doesn't have to be a domain you paid for. Three valid paths:
+
+| Path | When | `serverName` value | Cert |
+|---|---|---|---|
+| Real LE domain | You own `panel.example.com` | `panel.example.com` | `zenithctl cert issue --domain panel.example.com` |
+| nip.io / sslip.io | You only have a public IP | `136-175-83-32.nip.io` | `zenithctl cert issue --domain 136-175-83-32.nip.io` (real LE cert, $0) |
+| Self-signed + insecure | Internal / testing | any string, e.g. `hysteria2.example.com` | `cert: self_signed`; client must set `insecure=1` |
+
+**Ground truth from the rabisu (136.175.83.32) walkthrough**, both
+phases shipped Hy2 with TLS on and `serverName` populated:
+
+- **Phase 1 (self-signed):** `serverName="hysteria2.fanni-panda.com"`,
+  self-signed cert at `/opt/zenithpanel/data/certs/fullchain.pem`
+  (CN=`test.local`). The subscription URL emitted `insecure=1` because
+  the cert CN didn't match the SNI — clients had to skip verification
+  to connect.
+- **Phase 2 (real Let's Encrypt):** after `zenithctl cert issue --domain
+  136-175-83-32.nip.io`, the Hy2 inbound was edited to `serverName=
+  "136-175-83-32.nip.io"` pointing at the LE cert files, and
+  `allowInsecure` was dropped from the sub URL. `openssl s_client` then
+  returned `Verify return code: 0 (ok)`.
+
+**At no point did the rabisu Hy2 inbound run with empty `serverName`,
+TLS off, or pure-IP without a hostname.** If you ever see that, the
+panel will reject it on apply.
+
+**UI display (since this fix).** The inbounds table shows the SNI value
+under the Transport cell for every TLS/Reality inbound — so you can
+glance at a row and see e.g. `udp+tls / SNI: 136-175-83-32.nip.io`. The
+visual editor marks the SNI field with `*` for Hy2/TUIC and shows the
+"always require TLS" hint above the TLS field group. The network
+selector for Hy2/TUIC is locked to UDP and the security selector is
+locked to TLS — the watch in `ProxyView.vue` arms both on protocol
+switch, so users can't accidentally save a Hy2 inbound that sing-box
+would reject.
 
 ---
 
