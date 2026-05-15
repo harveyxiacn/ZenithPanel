@@ -769,6 +769,21 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				"db":     dbStatus,
 			}
 
+			// Engine-level uptime helps external monitors distinguish "always
+			// running" from "just restarted N seconds ago" (i.e. flapping).
+			// Zero indicates the engine isn't currently running.
+			health["xray_uptime_seconds"] = int(xm.Uptime().Seconds())
+			health["singbox_uptime_seconds"] = int(sm.Uptime().Seconds())
+
+			// last_apply_unix is the wall-clock time of the most recent
+			// proxy/apply. Set on apply, surfaced here so a config that
+			// got stuck pre-apply is visible.
+			if raw := config.GetSetting("last_apply_unix"); raw != "" {
+				if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v > 0 {
+					health["last_apply_unix"] = v
+				}
+			}
+
 			if stats, err := monitor.GetSystemStats(); err == nil {
 				health["uptime_seconds"] = stats.UptimeSeconds
 				health["disk_free_gb"] = float64(stats.DiskTotal-stats.DiskUsed) / (1024 * 1024 * 1024)
@@ -2106,6 +2121,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 						"msg":  strings.Join(msgs, "; "),
 						"data": data,
 					})
+					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
 					recordAudit(c, "proxy.apply", engine)
 				case "xray":
 					// Stop Sing-box first to free any ports it holds before Xray binds them.
@@ -2133,6 +2149,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 						"msg":               msg,
 						"skipped_protocols": xm.SkippedProtocols(),
 					})
+					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
 					recordAudit(c, "proxy.apply", engine)
 				case "singbox", "sing-box":
 					// Stop Xray first to free any ports it holds before Sing-box binds them.
@@ -2154,6 +2171,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 						"code": 200,
 						"msg":  "Sing-box configuration applied successfully",
 					})
+					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
 					recordAudit(c, "proxy.apply", engine)
 				default:
 					c.JSON(http.StatusBadRequest, gin.H{
