@@ -392,8 +392,32 @@ func TestTUICHonorsExplicitALPN(t *testing.T) {
 	}
 }
 
-// TestTUICPerUserPasswordOverride verifies that settings.clients[].password
-// keyed by email overrides the UUID-as-password fallback.
+// TestTUICPasswordIsAlwaysUUID is the regression that prevents us from
+// re-introducing the per-user password override without also updating the
+// subscription-URL generator. Pre-fix the server expected the override but
+// the sub URL still emitted UUID, breaking every TUIC client.
+func TestTUICPasswordIsAlwaysUUID(t *testing.T) {
+	in := model.Inbound{
+		Tag:      "tuic-pin",
+		Protocol: "tuic",
+		Port:     31406,
+		Settings: `{"clients":[{"email":"alice@t","password":"should-be-ignored"}]}`,
+		Stream:   `{"network":"udp","security":"tls","tlsSettings":{"serverName":"x","certificates":[{"certificateFile":"/c","keyFile":"/k"}]}}`,
+	}
+	clients := []model.Client{{Email: "alice@t", UUID: "alice-uuid"}}
+	entry, err := buildSingboxInbound(in, clients)
+	if err != nil {
+		t.Fatalf("buildSingboxInbound: %v", err)
+	}
+	users := entry["users"].([]map[string]any)
+	if users[0]["password"] != "alice-uuid" {
+		t.Errorf("TUIC password must equal UUID (matches sub URL); got %v", users[0]["password"])
+	}
+}
+
+// TestTUICPerUserPasswordOverride: legacy name retained, now asserts the
+// override is intentionally ignored. Renaming the test would lose grep
+// history; the body is the assertion that matters.
 func TestTUICPerUserPasswordOverride(t *testing.T) {
 	in := model.Inbound{
 		Tag:      "tuic-custom-pw",
@@ -414,11 +438,14 @@ func TestTUICPerUserPasswordOverride(t *testing.T) {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
 	users := entry["users"].([]map[string]any)
-	if users[0]["password"] != "alice-secret" {
-		t.Errorf("alice: expected password override 'alice-secret', got %v", users[0]["password"])
+	// Per-user TUIC passwords were intentionally rolled back: both rows now
+	// use UUID to match what the subscription generator emits. See
+	// TestTUICPasswordIsAlwaysUUID for the regression rationale.
+	if users[0]["password"] != "alice-uuid" {
+		t.Errorf("alice: expected UUID 'alice-uuid' (override intentionally ignored), got %v", users[0]["password"])
 	}
 	if users[1]["password"] != "bob-uuid" {
-		t.Errorf("bob: expected UUID fallback 'bob-uuid', got %v", users[1]["password"])
+		t.Errorf("bob: expected UUID 'bob-uuid', got %v", users[1]["password"])
 	}
 }
 
