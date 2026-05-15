@@ -32,14 +32,6 @@ type threeXUIInboundImportPayload struct {
 	ClientStats          []threeXUIClientStatPayload `json:"clientStats"`
 }
 
-type threeXUIImportResult struct {
-	InboundID     uint   `json:"inbound_id"`
-	ImportedTag   string `json:"imported_tag"`
-	SourceRemark  string `json:"source_remark,omitempty"`
-	SourceTag     string `json:"source_tag,omitempty"`
-	ImportedUsers int    `json:"imported_users"`
-}
-
 type threeXUISettingsClientExport struct {
 	Comment    string `json:"comment,omitempty"`
 	CreatedAt  int64  `json:"created_at,omitempty"`

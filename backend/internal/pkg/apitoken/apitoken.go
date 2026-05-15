@@ -43,7 +43,8 @@ func Hash(plaintext string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Looks structurally well-formed. Cheap pre-check before hitting the DB.
+// IsWellFormed reports whether s has the structural shape of a ZenithPanel
+// API token. Cheap pre-check before hitting the DB.
 func IsWellFormed(s string) bool {
 	if !strings.HasPrefix(s, Prefix) {
 		return false

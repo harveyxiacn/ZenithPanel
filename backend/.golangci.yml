@@ -1,0 +1,49 @@
+# golangci-lint config — see https://golangci-lint.run/usage/configuration/.
+#
+# This config opens with a deliberately small set of linters. The rule of thumb
+# we follow is: a CI lint failure should mean a real bug or a maintainability
+# regression, not a stylistic nitpick. The existing codebase has hundreds of
+# `interface{}` → `any` and similar modernization opportunities — those are
+# tracked as a separate sweep, not gated here.
+#
+# When we bake more discipline into the codebase we expand this list. Today
+# it pins the bugs.
+
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  default: none
+  enable:
+    - govet          # printf, copy-by-value, etc.
+    - ineffassign    # writes that are immediately overwritten
+    - staticcheck    # canonical Go correctness checks
+    - unused         # dead code (subject to deliberate //nolint markers)
+  # errcheck is intentionally NOT enabled in this first pass: the existing
+  # codebase has many deferred Close() and one-shot rand.Read calls without
+  # error handling. Enabling it would flood CI with pre-existing noise that
+  # has no realistic exploit path. The next sweep will turn errcheck on and
+  # add explicit handlers or //nolint markers in the same commit.
+  settings:
+    staticcheck:
+      # Drop the QFxxxx "quick-fix" suggestions and the STxxxx stylecheck
+      # rules — they're useful as IDE hints but generate noise across the
+      # existing codebase (tagged-switch suggestions, error-string casing).
+      # The SAxxxx correctness rules stay on; those catch real bugs.
+      checks:
+        - all
+        - "-QF1001"  # could apply De Morgan's law
+        - "-QF1002"  # could use tagged switch on err
+        - "-QF1003"  # could use tagged switch on string
+        - "-ST1005"  # error strings should not be capitalized
+        - "-ST1000"  # every file should have a package comment (existing code rarely does)
+        - "-ST1003"  # naming conventions (TLS vs Tls etc — pre-existing patterns)
+  exclusions:
+    rules: []
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -12,6 +12,34 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  backend-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.3.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      # golangci-lint runs `go build` under the hood. The embed directive in
+      # internal/api needs *some* dist folder to exist; rather than wire up
+      # the npm pipeline here, stub the directory so static analysis can
+      # type-check the code without producing the real frontend bundle.
+      - name: Stub embed assets so lint can compile
+        run: |
+          mkdir -p backend/internal/api/dist/assets
+          touch backend/internal/api/dist/index.html
+          touch backend/internal/api/dist/assets/.gitkeep
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9.0.0
+        with:
+          version: v2.6.2
+          working-directory: backend
+
   backend-verify:
     runs-on: ubuntu-latest
     steps:
@@ -74,6 +102,7 @@ jobs:
   build-and-push-image:
     runs-on: ubuntu-latest
     needs:
+      - backend-lint
       - backend-verify
       - frontend-verify
     permissions:
