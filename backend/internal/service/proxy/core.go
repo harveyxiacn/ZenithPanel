@@ -105,6 +105,22 @@ type BaseCore struct {
 	lastErr    string
 	outputBuf  *ringBuffer
 	dualMode   bool
+	// startedAt is set when Start succeeds and cleared on stop/crash. Exposed
+	// via Uptime() for /health and Prometheus metrics so operators can spot
+	// engine flapping at a glance.
+	startedAt time.Time
+}
+
+// Uptime returns how long the engine has been running, or zero when it's
+// stopped. Read under the same lock that protects `cmd` so concurrent
+// start/stop transitions can't tear the value.
+func (c *BaseCore) Uptime() time.Duration {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.cmd == nil || c.startedAt.IsZero() {
+		return 0
+	}
+	return time.Since(c.startedAt)
 }
 
 // SetDualMode toggles dual-engine partitioning. Call this before Restart()/Start()
@@ -139,6 +155,7 @@ func (c *BaseCore) LastError() string {
 func (c *BaseCore) setCmd(cmd *exec.Cmd) {
 	c.mu.Lock()
 	c.cmd = cmd
+	c.startedAt = time.Now()
 	c.mu.Unlock()
 }
 
@@ -149,6 +166,7 @@ func (c *BaseCore) clearCmd(cmd *exec.Cmd) {
 			c.lastErr = c.outputBuf.String()
 		}
 		c.cmd = nil
+		c.startedAt = time.Time{}
 	}
 	c.mu.Unlock()
 }
@@ -294,6 +312,7 @@ func (c *BaseCore) Stop() error {
 	c.mu.Lock()
 	cmd := c.cmd
 	c.cmd = nil
+	c.startedAt = time.Time{}
 	c.mu.Unlock()
 
 	if cmd == nil || cmd.Process == nil {
