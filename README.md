@@ -81,8 +81,10 @@ Current server panels (like 1Panel, BT) focus on website hosting and general mai
 | Backup / restore (portable archive) | ✅ Done |
 | Headless CLI (`zenithctl`) + API tokens | ✅ Done |
 | Dual-engine (Xray + Sing-box concurrent) | ✅ Done |
-| Real-time traffic charts (ECharts) | 🔜 Planned |
-| ACME / Let's Encrypt (auto TLS) | 🔜 Planned |
+| Real-time traffic charts (ECharts) | ✅ Done |
+| ACME / Let's Encrypt (auto TLS + renewal) | ✅ Done |
+| Ad-block toggle (panel-managed routing rule) | ✅ Done |
+| Prometheus `/metrics` endpoint | ✅ Done |
 | WARP WireGuard one-click outbound | 🔜 Planned |
 | 2FA / IP Whitelist | 🔜 Planned |
 

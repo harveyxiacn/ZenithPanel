@@ -81,8 +81,10 @@
 | 备份 / 恢复（可迁移归档） | ✅ 已完成 |
 | 无头 CLI (`zenithctl`) + API Token | ✅ 已完成 |
 | 双引擎并存 (Xray + Sing-box 同时跑) | ✅ 已完成 |
-| 实时流量图表 (ECharts) | 🔜 规划中 |
-| ACME / Let's Encrypt 自动 TLS | 🔜 规划中 |
+| 实时流量图表 (ECharts) | ✅ 已完成 |
+| ACME / Let's Encrypt 自动 TLS + 自动续期 | ✅ 已完成 |
+| 广告拦截一键开关（路由层） | ✅ 已完成 |
+| Prometheus `/metrics` 端点 | ✅ 已完成 |
 | WARP WireGuard 一键出站 | 🔜 规划中 |
 | 两步验证 (2FA) / IP 白名单 | 🔜 规划中 |
 

@@ -88,11 +88,9 @@ durable credential without needing the password.
 
 ### 2.5 `GET /api/v1/proxy/test/:inbound_id`
 
-Server-side probe of a single inbound. The server resolves the inbound's
-`(host, port, protocol, transport, tls)` tuple from the DB, then performs a
-connect + protocol handshake from inside the panel process. Used by
-`zenithctl proxy test` and by the protocol-connectivity regression sweep
-described in §6.
+Server-side probe of a single inbound. Reads `/proc/net/{tcp,udp}{,6}` to
+confirm the listener is bound, then performs a TCP dial (+ TLS handshake
+where applicable) or a UDP sentinel send from inside the panel process.
 
 Response:
 ```json
@@ -100,18 +98,81 @@ Response:
   "code": 200, "msg": "ok",
   "data": {
     "inbound_id": 3,
+    "tag": "vless-reality",
     "protocol": "vless",
     "transport": "tcp+reality",
+    "port": 443,
     "ok": true,
-    "elapsed_ms": 87,
-    "handshake": "reality:ok",
-    "warnings": []
+    "elapsed_ms": 1,
+    "stage": "",
+    "err": ""
   }
 }
 ```
 
-On failure, `ok=false` and `handshake` carries the failing stage
-(`tcp`, `tls`, `reality`, `vmess`, `trojan`, `ss`, `hy2`, `tuic`).
+On failure, `ok=false` and `stage` carries one of `not_bound | tcp | tls |
+udp` plus a free-form `err`. CLI uses this for `zenithctl proxy test <id>`
+and `zenithctl proxy test all` (iterates every enabled inbound, exits
+non-zero on any failure).
+
+### 2.6 `POST /api/v1/proxy/tls/issue`
+
+Issues a Let's Encrypt cert via lego's HTTP-01 challenge. Requires port 80
+to be reachable. The panel's vhost webserver yields :80 to lego briefly
+through the `PortBouncer` hook in `service/cert`, so the existing webserver
+doesn't have to be torn down by hand.
+
+Request:
+```json
+{ "domain": "panel.example.com", "email": "you@example.com" }
+```
+
+Response (`200`):
+```json
+{
+  "code": 200,
+  "msg": "Certificate issued. Wire the paths into an inbound's tlsSettings or panel TLS upload to put it into use.",
+  "data": {
+    "domain": "panel.example.com",
+    "cert_path": "/opt/zenithpanel/data/certs/panel.example.com.crt",
+    "key_path": "/opt/zenithpanel/data/certs/panel.example.com.key",
+    "not_after": 1786601525
+  }
+}
+```
+
+Side effect: `acme_email` is persisted in `Settings` so the 12-hour
+background renewer can re-issue at <30 days remaining without re-prompting.
+
+### 2.7 `GET / PUT /api/v1/admin/adblock`
+
+Toggle the panel-managed Block Ads routing rule. Both require `admin` scope.
+
+`GET` response:
+```json
+{ "code": 200, "msg": "ok", "data": { "enabled": false } }
+```
+
+`PUT` request: `{"enabled": true}`. Response: same shape as GET, plus
+`msg: "Ad-block true|false"`. Side effects:
+- Inserts/removes a routing-rule row with `rule_tag: "Block Ads
+  (panel-managed)"` and `domain: geosite:category-ads-all → block`.
+- Restarts both engines in parallel (dual mode) so the new route table
+  takes effect immediately.
+
+### 2.8 `GET /api/v1/metrics`
+
+Prometheus text-format scrape endpoint. Authenticated like every other
+`/api/v1` route — mint a read-only API token and configure scrape with
+`bearer_token`. Exposes:
+
+- `zenithpanel_uptime_seconds` (gauge)
+- `zenithpanel_xray_running` / `_singbox_running` / `_dual_mode` (0/1)
+- `zenithpanel_xray_uptime_seconds` / `_singbox_uptime_seconds` (gauge)
+- `zenithpanel_enabled_inbounds` / `_clients` / `_rules` (gauge)
+- `zenithpanel_handed_off_singbox` (gauge, dual-mode partition size)
+- `zenithpanel_api_tokens{state="active"|"revoked"}` (gauge)
+- `zenithpanel_client_traffic_bytes{email,inbound,direction}` (counter)
 
 ## 3. CLI ↔ HTTP Mapping
 
@@ -122,6 +183,7 @@ On failure, `ok=false` and `handshake` carries the failing stage
 | `token list`                              | `GET /admin/api-tokens`                           |
 | `token create --name x --scopes s`        | `POST /admin/api-tokens`                          |
 | `token revoke <id>`                       | `DELETE /admin/api-tokens/:id`                    |
+| `token rotate <name>`                     | list → POST + DELETE; updates active profile     |
 | `token bootstrap`                         | `POST /admin/api-tokens/bootstrap` (unix only)    |
 | `system info`                             | `GET /system/monitor`                             |
 | `system bbr status`                       | `GET /system/bbr/status`                          |
@@ -131,6 +193,7 @@ On failure, `ok=false` and `handshake` carries the failing stage
 | `inbound show <id>`                       | `GET /inbounds` (client-side filter)              |
 | `inbound create --file f.json`            | `POST /inbounds`                                  |
 | `inbound update <id> --file f.json`       | `PUT /inbounds/:id`                               |
+| `inbound set-port <id> <port>`            | list → PUT + optional firewall POST + apply       |
 | `inbound delete <id>`                     | `DELETE /inbounds/:id`                            |
 | `client list [--inbound id]`              | `GET /clients`                                    |
 | `client add --inbound <id> --email e`     | `POST /clients`                                   |
@@ -141,6 +204,8 @@ On failure, `ok=false` and `handshake` carries the failing stage
 | `proxy config singbox`                    | `GET /proxy/config/singbox`                       |
 | `proxy reality-keys`                      | `POST /proxy/generate-reality-keys`               |
 | `proxy test <id>`                         | `GET /proxy/test/:inbound_id`                     |
+| `proxy test all`                          | list + per-row `GET /proxy/test/:id`              |
+| `cert issue --domain X --email Y`         | `POST /proxy/tls/issue`                           |
 | `sub url <uuid>`                          | builds `https://<host>/api/v1/sub/<uuid>`         |
 | `firewall list`                           | `GET /firewall/rules`                             |
 | `firewall add --port 443 --proto tcp`     | `POST /firewall/rules`                            |

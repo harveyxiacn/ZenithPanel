@@ -142,21 +142,26 @@ zenithctl logout                                — wipes cached JWT
 zenithctl token list
 zenithctl token create   --name X [--scopes …] [--expires-in 90d]
 zenithctl token revoke   <id|name>
+zenithctl token rotate   <name>                 — mints v2, revokes v1, updates active profile in place
 zenithctl token bootstrap                       — local-root only; creates token, writes config
 zenithctl system info                           — CPU/mem/disk one-shot
 zenithctl system bbr (status|enable|disable)
 zenithctl system swap (status|create|remove) [--size 1G]
 zenithctl inbound list [--json]
 zenithctl inbound show <id>
-zenithctl inbound create  --file inbound.json
-zenithctl inbound update  <id> --file inbound.json
-zenithctl inbound delete  <id>
+zenithctl inbound create   --file inbound.json
+zenithctl inbound update   <id> --file inbound.json
+zenithctl inbound set-port <id> <port> [--sync-firewall]
+zenithctl inbound delete   <id>
 zenithctl client list [--inbound <id>]
 zenithctl client add      --inbound <id> --email foo [--uuid …] [--expires …]
 zenithctl client delete   <id>
 zenithctl proxy status
 zenithctl proxy apply                           — re-render configs + reload xray/sing-box
+zenithctl proxy test     <id> | all             — server-side connectivity probe
 zenithctl proxy config (xray|singbox)
+zenithctl cert  issue    --domain X --email Y   — ACME / Let's Encrypt
+zenithctl backup restore --file backup.zip      — upload + replace inbounds/clients/rules/cron
 zenithctl proxy reality-keys
 zenithctl proxy test <inbound-id>               — server-side probe of an inbound
 zenithctl sub url <client-uuid>                 — print subscription URL

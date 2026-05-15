@@ -131,21 +131,26 @@ zenithctl logout
 zenithctl token list
 zenithctl token create   --name X [--scopes …] [--expires-in 90d]
 zenithctl token revoke   <id|name>
+zenithctl token rotate   <name>                 — 签发 v2、吊销 v1、就地更新当前 profile（自身 token 也可安全轮换）
 zenithctl token bootstrap                       — 仅 local-root；自助创建 token 并写入配置
 zenithctl system info
 zenithctl system bbr (status|enable|disable)
 zenithctl system swap (status|create|remove) [--size 1G]
 zenithctl inbound list [--json]
-zenithctl inbound show   <id>
-zenithctl inbound create --file inbound.json
-zenithctl inbound update <id> --file inbound.json
-zenithctl inbound delete <id>
+zenithctl inbound show     <id>
+zenithctl inbound create   --file inbound.json
+zenithctl inbound update   <id> --file inbound.json
+zenithctl inbound set-port <id> <port> [--sync-firewall]
+zenithctl inbound delete   <id>
 zenithctl client list [--inbound <id>]
 zenithctl client add     --inbound <id> --email foo [--uuid …] [--expires …]
 zenithctl client delete  <id>
 zenithctl proxy status
 zenithctl proxy apply                           — 重新渲染配置并 reload xray/sing-box
+zenithctl proxy test     <id> | all             — 服务端连通性探活
 zenithctl proxy config (xray|singbox)
+zenithctl cert  issue    --domain X --email Y   — ACME / Let's Encrypt 一键签证书
+zenithctl backup restore --file backup.zip      — 上传并替换入站/客户端/路由/Cron
 zenithctl proxy reality-keys
 zenithctl proxy test <inbound-id>               — 服务端自检入站连通性
 zenithctl sub url <client-uuid>
