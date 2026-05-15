@@ -10,13 +10,13 @@ import (
 // original order, and honor both `--flag value` and `--flag=value`.
 func TestParseGlobalFlagsRecognizesShortAndLongForms(t *testing.T) {
 	cases := []struct {
-		name       string
-		in         []string
-		wantHost   string
-		wantToken  string
-		wantOut    string
-		wantQuiet  bool
-		wantRest   []string
+		name      string
+		in        []string
+		wantHost  string
+		wantToken string
+		wantOut   string
+		wantQuiet bool
+		wantRest  []string
 	}{
 		{
 			name:     "long-form host + token",

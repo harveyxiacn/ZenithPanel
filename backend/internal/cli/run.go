@@ -102,7 +102,14 @@ type globalFlags struct {
 }
 
 func parseGlobalFlags(args []string) globalFlags {
-	g := globalFlags{output: "json"}
+	// Default output: table when stdout is a terminal (a human is watching),
+	// json otherwise (a pipe, file, or CI is collecting structured data).
+	// Explicit --output beats the auto-detection in either direction.
+	defaultOut := "json"
+	if IsTTY() {
+		defaultOut = "table"
+	}
+	g := globalFlags{output: defaultOut}
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -182,7 +189,12 @@ func exitFromEnvelope(status int, env *Envelope, err error, gf globalFlags) int 
 		}
 		return 0
 	}
-	fmt.Println(Pretty(env))
+	switch gf.output {
+	case "table":
+		PrintAsTable(env)
+	default:
+		fmt.Println(Pretty(env))
+	}
 	return 0
 }
 
@@ -494,9 +506,9 @@ func runClient(c *Client, args []string, gf globalFlags) int {
 			return 1
 		}
 		body := map[string]any{
-			"inbound_id": *inbound,
-			"email":      *email,
-			"total":      *total,
+			"inbound_id":  *inbound,
+			"email":       *email,
+			"total":       *total,
 			"expiry_time": *expires,
 		}
 		if *uuid != "" {
@@ -551,9 +563,9 @@ func runProxy(c *Client, args []string, gf globalFlags) int {
 }
 
 // runProxyTestAll iterates every enabled inbound and asks the server-side
-// prober to probe each one. Output is a compact JSON array; exit code is
+// prober to probe each one. Honors --output json|table; exit code is
 // non-zero if any probe fails. See ProbeInbound in service/diagnostic.
-func runProxyTestAll(c *Client, _ globalFlags) int {
+func runProxyTestAll(c *Client, gf globalFlags) int {
 	env, _, err := c.Do("GET", "/api/v1/inbounds", nil)
 	if err != nil || env == nil {
 		fmt.Fprintln(os.Stderr, "could not list inbounds:", err)
@@ -609,7 +621,16 @@ func runProxyTestAll(c *Client, _ globalFlags) int {
 		}
 		results = append(results, r)
 	}
-	fmt.Println(Pretty(results))
+	// Wrap in an envelope so the global --output / -q handling kicks in.
+	raw, _ := json.Marshal(results)
+	env = &Envelope{Code: 200, Msg: "ok", Data: raw}
+	if gf.quiet {
+		fmt.Println(string(raw))
+	} else if gf.output == "table" {
+		PrintAsTable(env)
+	} else {
+		fmt.Println(Pretty(env))
+	}
 	if bad > 0 {
 		return 2
 	}
