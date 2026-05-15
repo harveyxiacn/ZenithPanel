@@ -117,6 +117,30 @@ func TestResolveProfileFlagOverridesEnvAndConfig(t *testing.T) {
 	}
 }
 
+// TestSplitVersionedName pins the rotate-name math so a name like
+// "ci-runner-v7" advances to v8 instead of wrapping or duplicating.
+func TestSplitVersionedName(t *testing.T) {
+	cases := []struct {
+		in       string
+		wantBase string
+		wantVer  int
+	}{
+		{"ci-runner", "ci-runner", 1},
+		{"ci-runner-v2", "ci-runner", 2},
+		{"ci-runner-v123", "ci-runner", 123},
+		{"weird-v", "weird-v", 1},      // empty suffix → not a version
+		{"weird-vabc", "weird-vabc", 1}, // non-numeric → not a version
+		{"weird-v-1", "weird-v-1", 1},   // negative → not a version
+		{"-v5", "", 5},                  // edge case but consistent
+	}
+	for _, c := range cases {
+		base, ver := splitVersionedName(c.in)
+		if base != c.wantBase || ver != c.wantVer {
+			t.Errorf("splitVersionedName(%q) = (%q, %d), want (%q, %d)", c.in, base, ver, c.wantBase, c.wantVer)
+		}
+	}
+}
+
 // TestIsUnixHost is a one-liner but worth pinning because it gates a lot of
 // branching (skipping token header, treating bootstrap as available, etc.).
 func TestIsUnixHost(t *testing.T) {
