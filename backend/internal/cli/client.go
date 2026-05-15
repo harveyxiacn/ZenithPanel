@@ -116,6 +116,47 @@ func (c *Client) Do(method, path string, body any) (*Envelope, int, error) {
 	return env, resp.StatusCode, nil
 }
 
+// DoRaw is Do's binary-friendly sibling. The body is sent verbatim with the
+// caller-supplied content-type, used for backup-zip uploads, cert PEM bytes,
+// or anything else that isn't JSON. Behaves identically to Do() for response
+// decoding so callers can keep the same envelope-handling code.
+func (c *Client) DoRaw(method, path, contentType string, body []byte) (*Envelope, int, error) {
+	req, err := http.NewRequest(method, c.effectiveBase()+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if c.Profile.Token != "" && !isUnixHost(c.Profile.Host) {
+		req.Header.Set("Authorization", "Bearer "+c.Profile.Token)
+	}
+	req.Header.Set("X-Zenith-Api", "v1")
+
+	resp, err := c.Inner.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("%w: %v", ErrTransport, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, err
+	}
+	env := &Envelope{}
+	if len(raw) > 0 {
+		jerr := json.Unmarshal(raw, env)
+		if jerr != nil {
+			env.Data = raw
+		} else if env.Code == 0 && len(env.Data) == 0 {
+			env.Data = raw
+		}
+	}
+	if env.Code == 0 {
+		env.Code = resp.StatusCode
+	}
+	return env, resp.StatusCode, nil
+}
+
 // ErrTransport flags network-level failures.
 var ErrTransport = errors.New("transport error")
 

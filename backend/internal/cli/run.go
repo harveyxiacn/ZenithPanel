@@ -264,10 +264,142 @@ func runToken(c *Client, cfg *Config, args []string, gf globalFlags) int {
 		return exitFromEnvelope(st, env, err, gf)
 	case "bootstrap":
 		return runBootstrap(c, cfg, gf)
+	case "rotate":
+		return runTokenRotate(c, args, gf)
 	default:
 		fmt.Fprintln(os.Stderr, "unknown token subcommand:", args[0])
 		return 1
 	}
+}
+
+// runTokenRotate revokes the named token and mints a fresh one inheriting
+// the old scopes. The new token gets a versioned name (`name-v2` etc.) so
+// the unique-name constraint is respected and the audit log keeps the old
+// row visibly revoked. Idempotent: rotating a name that doesn't exist yet
+// just creates it fresh.
+//
+// Self-rotation safety: if the rotated token IS the one stored in the
+// active profile, we update the profile in-memory and persist it before
+// revoking. Otherwise the very next CLI call would 401 because the caller
+// is holding a revoked token.
+func runTokenRotate(c *Client, args []string, gf globalFlags) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: zenithctl token rotate <name>")
+		return 1
+	}
+	target := args[1]
+
+	// List tokens to find the latest live (non-revoked) row whose base name
+	// matches `target`. Versioned siblings (target, target-v2, target-v3 …)
+	// are treated as the same logical token.
+	env, _, err := c.Do("GET", "/api/v1/admin/api-tokens", nil)
+	if err != nil || env == nil {
+		fmt.Fprintln(os.Stderr, "list tokens:", err)
+		return 1
+	}
+	var rows []struct {
+		ID      int    `json:"id"`
+		Name    string `json:"name"`
+		Scopes  string `json:"scopes"`
+		Revoked bool   `json:"revoked"`
+	}
+	_ = json.Unmarshal(env.Data, &rows)
+
+	// Pick the live row (if any) that shares the base name. Track the
+	// highest version suffix seen so the new name doesn't collide.
+	var current struct {
+		ID     int
+		Scopes string
+		Found  bool
+	}
+	highest := 1
+	for _, r := range rows {
+		base, ver := splitVersionedName(r.Name)
+		if base != target {
+			continue
+		}
+		if ver > highest {
+			highest = ver
+		}
+		if !r.Revoked {
+			current.ID = r.ID
+			current.Scopes = r.Scopes
+			current.Found = true
+		}
+	}
+
+	scopes := current.Scopes
+	if scopes == "" {
+		scopes = "*"
+	}
+	newName := fmt.Sprintf("%s-v%d", target, highest+1)
+	// First mint, then revoke — if mint fails we still hold the old token.
+	createRes, st, err := c.Do("POST", "/api/v1/admin/api-tokens", map[string]any{
+		"name": newName, "scopes": scopes,
+	})
+	if err != nil || st != 200 {
+		return exitFromEnvelope(st, createRes, err, gf)
+	}
+
+	// Parse the new plaintext out so we can swap the active profile before
+	// revoking the old one (otherwise we'd revoke the token we're using and
+	// the revoke call itself would 401 mid-flight).
+	var minted struct {
+		Token string `json:"token"`
+	}
+	_ = json.Unmarshal(createRes.Data, &minted)
+	if minted.Token != "" {
+		// If the active profile is using the about-to-be-revoked token,
+		// rewrite ~/.config/zenithctl/config.toml in place so subsequent
+		// calls (including the revoke we're about to issue) authenticate
+		// with the new credential.
+		if cfg, cerr := LoadConfig(); cerr == nil {
+			swapped := false
+			for name, p := range cfg.Profile {
+				if p.Token != "" && p.Token == c.Profile.Token {
+					p.Token = minted.Token
+					cfg.Profile[name] = p
+					swapped = true
+				}
+			}
+			if swapped {
+				_ = SaveConfig(cfg)
+				// Update the in-process client so the revoke call below uses
+				// the new credential.
+				c.Profile.Token = minted.Token
+			}
+		}
+	}
+
+	if current.Found {
+		revRes, revSt, err := c.Do("DELETE", fmt.Sprintf("/api/v1/admin/api-tokens/%d", current.ID), nil)
+		if err != nil || revSt != 200 {
+			fmt.Fprintln(os.Stderr, "WARNING: minted new token but failed to revoke old one (id="+strconv.Itoa(current.ID)+")")
+			return exitFromEnvelope(revSt, revRes, err, gf)
+		}
+	}
+
+	// Reuse the standard envelope path so --output flag still applies.
+	return exitFromEnvelope(200, createRes, nil, gf)
+}
+
+// splitVersionedName splits "ci-runner-v3" → ("ci-runner", 3). A name without
+// a `-v<N>` suffix returns (name, 1) so the rotation logic can treat the
+// very first token as version 1.
+func splitVersionedName(name string) (base string, version int) {
+	idx := strings.LastIndex(name, "-v")
+	if idx < 0 {
+		return name, 1
+	}
+	suffix := name[idx+2:]
+	if suffix == "" {
+		return name, 1
+	}
+	v, err := strconv.Atoi(suffix)
+	if err != nil || v < 1 {
+		return name, 1
+	}
+	return name[:idx], v
 }
 
 func runBootstrap(c *Client, cfg *Config, gf globalFlags) int {
@@ -683,7 +815,7 @@ func runFirewall(c *Client, args []string, gf globalFlags) int {
 	return 1
 }
 
-func runBackup(c *Client, args []string, _ globalFlags) int {
+func runBackup(c *Client, args []string, gf globalFlags) int {
 	if len(args) == 0 {
 		return 1
 	}
@@ -712,8 +844,26 @@ func runBackup(c *Client, args []string, _ globalFlags) int {
 		fmt.Println("wrote", *out)
 		return 0
 	case "restore":
-		fmt.Fprintln(os.Stderr, "restore via CLI not implemented in v1; use the Web UI")
-		return 1
+		fs := flag.NewFlagSet("backup restore", flag.ContinueOnError)
+		file := fs.String("file", "", "path to backup .zip file")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 1
+		}
+		if *file == "" {
+			fmt.Fprintln(os.Stderr, "backup restore: --file is required")
+			return 1
+		}
+		// Read the whole zip — the server caps at 16 MB and rejects empty
+		// uploads, so handing it raw bytes with a content-type-zip header
+		// matches the existing UI flow.
+		data, err := os.ReadFile(*file)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "read backup file:", err)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "Uploading %d-byte backup… this replaces inbounds, clients, routing rules, and cron jobs.\n", len(data))
+		env, st, err := c.DoRaw("POST", "/api/v1/admin/backup/restore", "application/zip", data)
+		return exitFromEnvelope(st, env, err, gf)
 	}
 	return 1
 }
