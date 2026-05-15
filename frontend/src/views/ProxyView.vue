@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon, SignalIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
-import { listInbounds, createInbound, updateInbound, deleteInbound, importThreeXUIInbounds, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig, bulkClientAction, getActiveConnections, getClashApiStatus, enableClashApi, disableClashApi } from '@/api/proxy'
+import { listInbounds, createInbound, updateInbound, deleteInbound, importThreeXUIInbounds, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig, bulkClientAction, getActiveConnections, getClashApiStatus, enableClashApi, disableClashApi, probeInbound, type InboundProbeResult } from '@/api/proxy'
 import apiClient from '@/api/client'
 import QRCode from 'qrcode'
 import { useConfirm } from '@/composables/useConfirm'
@@ -66,6 +66,27 @@ const tabs = computed(() => [
 // ---- Inbounds ----
 const inbounds = ref<any[]>([])
 const inboundsLoading = ref(false)
+
+// Per-row probe state. Keyed by inbound id; cleared once the user navigates
+// away or applies new config. Each value is either a result object (ok/stage
+// pulled from the server) or the string 'pending' while the probe runs.
+const probeResults = ref<Record<number, InboundProbeResult | 'pending'>>({})
+
+async function onProbeInbound(id: number) {
+  probeResults.value = { ...probeResults.value, [id]: 'pending' }
+  try {
+    const res = await probeInbound(id)
+    if (res.data?.code === 200 && res.data?.data) {
+      probeResults.value = { ...probeResults.value, [id]: res.data.data }
+    } else {
+      // Server replied but not with the expected shape — treat as a request-
+      // level failure so the chip turns red and the user can retry.
+      probeResults.value = { ...probeResults.value, [id]: { inbound_id: id, tag: '', protocol: '', transport: '', port: 0, ok: false, stage: 'request', elapsed_ms: 0, err: res.data?.msg || '' } }
+    }
+  } catch (e: any) {
+    probeResults.value = { ...probeResults.value, [id]: { inbound_id: id, tag: '', protocol: '', transport: '', port: 0, ok: false, stage: 'request', elapsed_ms: 0, err: e?.message || 'network' } }
+  }
+}
 const showInboundForm = ref(false)
 const editingInbound = ref<any>(null)
 const inboundForm = ref({ tag: '', protocol: 'vless', listen: '', server_address: '', port: 443, settings: '{}', stream: '{}' })
@@ -1682,7 +1703,32 @@ watch(activeTab, (newTab) => {
               </td>
               <td class="px-6 py-4 text-sm text-slate-500">{{ node.port }}</td>
               <td class="px-6 py-4 text-sm text-slate-500">{{ parseTransport(node.stream) }}</td>
-              <td class="px-6 py-4 text-right text-sm font-medium space-x-2">
+              <td class="px-6 py-4 text-right text-sm font-medium space-x-2 whitespace-nowrap">
+                <!-- Probe result chip: replaces the Probe button while a
+                     check is in flight, then shows a green/red badge. The
+                     user can click the chip to re-probe. -->
+                <span
+                  v-if="probeResults[node.id] === 'pending'"
+                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600"
+                >…</span>
+                <button
+                  v-else-if="probeResults[node.id] && (probeResults[node.id] as InboundProbeResult).ok"
+                  @click="onProbeInbound(node.id)"
+                  :class="['inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium transition', 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200']"
+                  :title="`OK · ${(probeResults[node.id] as InboundProbeResult).elapsed_ms}ms · ${$t('proxy.inbounds.probeRecheck')}`"
+                >✓ {{ (probeResults[node.id] as InboundProbeResult).elapsed_ms }}ms</button>
+                <button
+                  v-else-if="probeResults[node.id]"
+                  @click="onProbeInbound(node.id)"
+                  :class="['inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium transition', 'bg-rose-100 text-rose-700 hover:bg-rose-200']"
+                  :title="`${(probeResults[node.id] as InboundProbeResult).stage}: ${(probeResults[node.id] as InboundProbeResult).err || ''}`"
+                >✗ {{ (probeResults[node.id] as InboundProbeResult).stage }}</button>
+                <button
+                  v-else
+                  @click="onProbeInbound(node.id)"
+                  class="text-slate-500 hover:text-slate-700 inline-flex items-center"
+                  :title="$t('proxy.inbounds.probeTooltip')"
+                >{{ $t('proxy.inbounds.probe') }}</button>
                 <button @click="addClientForInbound(node.id)" class="text-emerald-600 hover:text-emerald-900 inline-flex items-center" :title="$t('proxy.clients.addClient')">
                   <UserPlusIcon class="h-4 w-4 mr-1" />
                   {{ $t('proxy.inbounds.addUser') }}
