@@ -260,6 +260,9 @@ export default {
       probeAll: '探活全部',
       probingAll: '探活中…',
       probeAllTooltip: '探活每个启用的入站；结果按行内联显示',
+      autoProbeOff: '自动探活：关',
+      autoProbeOn: '每 30 秒自动探活',
+      autoProbeTooltip: '入站标签页打开时每 30 秒重新探活一次',
     },
     routing: {
       title: '路由规则',

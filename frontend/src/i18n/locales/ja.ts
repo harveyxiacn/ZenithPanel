@@ -260,6 +260,9 @@ export default {
       probeAll: '一括確認',
       probingAll: '確認中…',
       probeAllTooltip: '有効なすべてのインバウンドを順に確認し、結果を各行にインライン表示します',
+      autoProbeOff: '自動確認: オフ',
+      autoProbeOn: '30秒ごとに自動確認',
+      autoProbeTooltip: 'インバウンドタブを開いている間、30秒ごとに再確認します',
     },
     routing: {
       title: 'ルーティングルール',
