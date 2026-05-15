@@ -538,13 +538,82 @@ func runProxy(c *Client, args []string, gf globalFlags) int {
 		env, st, err := c.Do("POST", "/api/v1/proxy/generate-reality-keys", nil)
 		return exitFromEnvelope(st, env, err, gf)
 	case "test":
-		// Server-side probe is designed in docs/cli_api_spec.md §2.5 but
-		// not yet implemented; until then run scripts/proto_sweep.sh on
-		// the panel host for end-to-end coverage.
-		fmt.Fprintln(os.Stderr, "proxy test: server-side prober not implemented yet — use scripts/proto_sweep.sh on the panel host")
-		return 1
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: zenithctl proxy test <inbound-id|all>")
+			return 1
+		}
+		if args[1] == "all" {
+			return runProxyTestAll(c, gf)
+		}
+		return runSimpleGet(c, "/api/v1/proxy/test/"+url.PathEscape(args[1]), gf)
 	}
 	return 1
+}
+
+// runProxyTestAll iterates every enabled inbound and asks the server-side
+// prober to probe each one. Output is a compact JSON array; exit code is
+// non-zero if any probe fails. See ProbeInbound in service/diagnostic.
+func runProxyTestAll(c *Client, _ globalFlags) int {
+	env, _, err := c.Do("GET", "/api/v1/inbounds", nil)
+	if err != nil || env == nil {
+		fmt.Fprintln(os.Stderr, "could not list inbounds:", err)
+		return 1
+	}
+	var inbounds []struct {
+		ID       int    `json:"id"`
+		Tag      string `json:"tag"`
+		Protocol string `json:"protocol"`
+		Enable   bool   `json:"enable"`
+	}
+	_ = json.Unmarshal(env.Data, &inbounds)
+	type row struct {
+		ID        int    `json:"id"`
+		Tag       string `json:"tag"`
+		Protocol  string `json:"protocol"`
+		Transport string `json:"transport,omitempty"`
+		OK        bool   `json:"ok"`
+		Stage     string `json:"stage,omitempty"`
+		ElapsedMs int64  `json:"elapsed_ms,omitempty"`
+		Err       string `json:"err,omitempty"`
+	}
+	bad := 0
+	results := make([]row, 0, len(inbounds))
+	for _, ib := range inbounds {
+		if !ib.Enable {
+			continue
+		}
+		probeEnv, _, err := c.Do("GET", "/api/v1/proxy/test/"+strconv.Itoa(ib.ID), nil)
+		r := row{ID: ib.ID, Tag: ib.Tag, Protocol: ib.Protocol}
+		if err != nil || probeEnv == nil || probeEnv.Code != 200 {
+			r.OK = false
+			r.Stage = "request"
+			results = append(results, r)
+			bad++
+			continue
+		}
+		var probe struct {
+			Transport string `json:"transport"`
+			OK        bool   `json:"ok"`
+			Stage     string `json:"stage"`
+			ElapsedMs int64  `json:"elapsed_ms"`
+			Err       string `json:"err"`
+		}
+		_ = json.Unmarshal(probeEnv.Data, &probe)
+		r.OK = probe.OK
+		r.Stage = probe.Stage
+		r.Transport = probe.Transport
+		r.ElapsedMs = probe.ElapsedMs
+		r.Err = probe.Err
+		if !probe.OK {
+			bad++
+		}
+		results = append(results, r)
+	}
+	fmt.Println(Pretty(results))
+	if bad > 0 {
+		return 2
+	}
+	return 0
 }
 
 func runSub(c *Client, args []string, _ globalFlags) int {
