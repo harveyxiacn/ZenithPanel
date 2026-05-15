@@ -5,15 +5,18 @@ import (
 	cryptotls "crypto/tls"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/api"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/cli"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/core/setup"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/docker"
@@ -29,6 +32,13 @@ import (
 )
 
 func main() {
+	// CLI mode: when invoked as `zenithpanel ctl …` (or via the zenithctl
+	// symlink), short-circuit to the headless command tree. The CLI never
+	// touches DB, scheduler, or proxy managers — it only speaks HTTP.
+	if shouldRunCLI() {
+		os.Exit(cli.Run(cliArgs()))
+	}
+
 	// Initialize the application
 	log.Println("ZenithPanel server starting...")
 
@@ -73,14 +83,38 @@ func main() {
 	xm := proxy.NewXrayManager()
 	sm := proxy.NewSingboxManager()
 
-	var enabledInboundCount int64
-	if err := config.DB.Model(&model.Inbound{}).Where("enable = ?", true).Count(&enabledInboundCount).Error; err != nil {
-		log.Printf("Warning: Failed to count enabled inbounds: %v", err)
-	} else if enabledInboundCount > 0 {
-		if err := xm.Start(); err != nil {
-			log.Printf("Warning: Failed to auto-start Xray: %v", err)
-		} else {
-			log.Printf("Xray auto-started with %d enabled inbound(s)", enabledInboundCount)
+	// Auto-start both engines in dual mode so every enabled inbound is
+	// reachable immediately after panel boot, regardless of which engine its
+	// protocol needs. The partitioner decides whether each engine has work;
+	// engines with nothing to do are left stopped.
+	var enabled []model.Inbound
+	if err := config.DB.Where("enable = ?", true).Find(&enabled).Error; err != nil {
+		log.Printf("Warning: Failed to list enabled inbounds: %v", err)
+	} else if len(enabled) > 0 {
+		wantXray := false
+		wantSingbox := false
+		for _, in := range enabled {
+			if proxy.IsXraySupported(in.Protocol) {
+				wantXray = true
+			} else {
+				wantSingbox = true
+			}
+		}
+		xm.SetDualMode(true)
+		sm.SetDualMode(true)
+		if wantXray {
+			if err := xm.Start(); err != nil {
+				log.Printf("Warning: Failed to auto-start Xray: %v", err)
+			} else {
+				log.Printf("Xray auto-started in dual mode")
+			}
+		}
+		if wantSingbox {
+			if err := sm.Start(); err != nil {
+				log.Printf("Warning: Failed to auto-start Sing-box: %v", err)
+			} else {
+				log.Printf("Sing-box auto-started in dual mode")
+			}
 		}
 	}
 
@@ -169,6 +203,9 @@ func main() {
 	}
 	r := gin.New()
 	r.Use(gin.Recovery())
+	// Promotes the unix-socket request-context marker into c.Set("trusted_local").
+	// No-op for TCP requests; safe to mount globally.
+	r.Use(api.TrustedLocalFromContext())
 	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
 		SkipPaths: []string{
 			"/api/v1/system/monitor",
@@ -212,6 +249,15 @@ func main() {
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: r,
+	}
+
+	// 7a. Unix domain socket listener for the in-host CLI (`zenithctl`). The
+	// socket lives under /run/ (or $XDG_RUNTIME_DIR fallback) with mode 0600;
+	// connections through it carry a request-context marker that the auth
+	// middleware reads as `trusted_local`, so root on the host doesn't need a
+	// token. Linux only — Windows and macOS skip this gracefully.
+	if runtime.GOOS == "linux" {
+		go startUnixSocketServer(r)
 	}
 
 	// 8. Run the server in a goroutine so it doesn't block
@@ -265,5 +311,79 @@ func main() {
 		log.Fatal("Server forced to shutdown:", err)
 	}
 
+	// Best-effort cleanup of the unix socket so the next start binds fresh.
+	if runtime.GOOS == "linux" {
+		_ = api.RemoveExistingSocket(api.LocalSocketPath)
+	}
+
 	log.Println("Server exiting")
+}
+
+// shouldRunCLI is true when argv signals headless mode:
+//
+//	zenithpanel ctl …          (subcommand on the main binary)
+//	zenithctl                  (symlink — argv[0] basename equals "zenithctl")
+func shouldRunCLI() bool {
+	if base := filepathBase(os.Args[0]); base == "zenithctl" || base == "zenithctl.exe" {
+		return true
+	}
+	return len(os.Args) >= 2 && os.Args[1] == "ctl"
+}
+
+// cliArgs strips the `ctl` subcommand when invoked through the main binary so
+// the CLI parser sees a uniform argv regardless of entry point.
+func cliArgs() []string {
+	if len(os.Args) >= 2 && os.Args[1] == "ctl" {
+		out := make([]string, 0, len(os.Args)-1)
+		out = append(out, os.Args[0])
+		out = append(out, os.Args[2:]...)
+		return out
+	}
+	return os.Args
+}
+
+// filepathBase is a tiny path.Base() without an extra import.
+func filepathBase(p string) string {
+	for i := len(p) - 1; i >= 0; i-- {
+		if p[i] == '/' || p[i] == '\\' {
+			return p[i+1:]
+		}
+	}
+	return p
+}
+
+// startUnixSocketServer binds /run/zenithpanel.sock and serves the same gin
+// engine wrapped in EngineWithLocalTrust. Errors are logged but never fatal —
+// the panel keeps working on TCP if the socket can't be created (e.g. /run
+// is read-only, or we're not root).
+func startUnixSocketServer(engine http.Handler) {
+	path := api.LocalSocketPath
+	if err := api.RemoveExistingSocket(path); err != nil {
+		log.Printf("unix socket: cleanup failed (%v); continuing", err)
+	}
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		// Fall back to $XDG_RUNTIME_DIR if /run isn't writable.
+		if alt := os.Getenv("XDG_RUNTIME_DIR"); alt != "" {
+			path = alt + "/zenithpanel.sock"
+			_ = api.RemoveExistingSocket(path)
+			if ln2, err2 := net.Listen("unix", path); err2 == nil {
+				ln, err = ln2, nil
+			}
+		}
+		if err != nil {
+			log.Printf("unix socket: listen failed (%v); CLI on-host access unavailable", err)
+			return
+		}
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		log.Printf("unix socket: chmod 0600 failed (%v); refusing to serve to avoid exposing it", err)
+		ln.Close()
+		return
+	}
+	log.Printf("Unix socket listening on %s", path)
+	srv := &http.Server{Handler: api.EngineWithLocalTrust(engine)}
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		log.Printf("unix socket: serve ended (%v)", err)
+	}
 }

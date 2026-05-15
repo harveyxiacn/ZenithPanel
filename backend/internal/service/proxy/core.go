@@ -92,6 +92,11 @@ func (r *ringBuffer) Reset() {
 // BaseCore provides common functionalities for proxy cores.
 // outputBuf captures stdout+stderr in a ring buffer so long-running engines
 // can report their most recent log output without leaking memory.
+//
+// dualMode is consulted by GenerateConfig on each manager to decide whether
+// the engine should serve every enabled inbound (legacy single-engine mode)
+// or only the subset that the other engine cannot handle (dual mode, where
+// Xray and Sing-box run side-by-side and each takes a disjoint partition).
 type BaseCore struct {
 	BinaryPath string
 	ConfigPath string
@@ -99,6 +104,23 @@ type BaseCore struct {
 	cmd        *exec.Cmd
 	lastErr    string
 	outputBuf  *ringBuffer
+	dualMode   bool
+}
+
+// SetDualMode toggles dual-engine partitioning. Call this before Restart()/Start()
+// so the next config generation honors the new mode.
+func (c *BaseCore) SetDualMode(b bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.dualMode = b
+}
+
+// IsDualMode reports whether dual-engine partitioning is enabled. Returned
+// under the read lock so it's safe to call from config generators.
+func (c *BaseCore) IsDualMode() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.dualMode
 }
 
 func (c *BaseCore) Status() bool {

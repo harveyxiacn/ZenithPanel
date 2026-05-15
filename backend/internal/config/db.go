@@ -69,6 +69,12 @@ func InitDB(dbPath string) {
 		log.Printf("Warning: failed to migrate NetworkMetric table: %v", err)
 	}
 
+	// ApiToken table for CLI / headless automation credentials. Non-fatal so
+	// the panel keeps booting even if the migration fails on an exotic DB.
+	if err := database.AutoMigrate(&model.ApiToken{}); err != nil {
+		log.Printf("Warning: failed to migrate ApiToken table: %v", err)
+	}
+
 	DB = database
 	log.Println("Database initialized and migrated successfully")
 }

@@ -327,6 +327,29 @@ func applyInboundPayload(target *model.Inbound, payload inboundPayload) {
 	}
 }
 
+// partitionInboundEngines splits a list of enabled inbounds into the two
+// engines that will serve them in dual-engine mode. Used by the proxy/apply
+// endpoint and by startup auto-recovery to decide which engines to spin up.
+//
+// The rule is simple and stable: anything Xray can natively serve goes to
+// Xray; everything else (Hysteria2, TUIC, future QUIC-only protocols) goes
+// to Sing-box. We never split a single protocol across engines, so port
+// validation in validateInbound is sufficient — no two enabled inbounds can
+// land on the same port.
+func partitionInboundEngines(enabled []model.Inbound) (wantXray, wantSingbox bool) {
+	for _, in := range enabled {
+		if proxy.IsXraySupported(in.Protocol) {
+			wantXray = true
+		} else {
+			wantSingbox = true
+		}
+		if wantXray && wantSingbox {
+			break
+		}
+	}
+	return
+}
+
 func validateInbound(target model.Inbound) string {
 	if strings.TrimSpace(target.Tag) == "" {
 		return "Tag is required"
@@ -847,7 +870,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 	// Protected API (Post-Setup) - Needs JWT
 	// ======================================
 	authGroup := r.Group("/api/v1")
-	authGroup.Use(middleware.JWTAuthMiddleware())
+	authGroup.Use(middleware.AuthMiddleware())
 	{
 		authGroup.GET("/system/monitor", func(c *gin.Context) {
 			stats, err := monitor.GetSystemStats()
@@ -1965,19 +1988,26 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					Count(&enabledClients)
 				config.DB.Model(&model.RoutingRule{}).Where("enable = ?", true).Count(&enabledRules)
 
+				dualMode := xm.IsDualMode() || sm.IsDualMode()
 				data := gin.H{
 					"xray_running":     xm.Status(),
 					"singbox_running":  sm.Status(),
 					"enabled_inbounds": enabledInbounds,
 					"enabled_clients":  enabledClients,
 					"enabled_rules":    enabledRules,
+					"dual_mode":        dualMode,
 				}
 				if !xm.Status() {
 					if e := xm.LastError(); e != "" {
 						data["xray_last_error"] = e
 					}
-				} else {
-					if skipped := xm.SkippedProtocols(); len(skipped) > 0 {
+				} else if skipped := xm.SkippedProtocols(); len(skipped) > 0 {
+					// In dual mode these aren't "skipped" — they're being served
+					// by Sing-box. Rename the field so the UI doesn't show a
+					// scary warning when both engines cooperate as designed.
+					if dualMode {
+						data["xray_handed_off_to_singbox"] = skipped
+					} else {
 						data["xray_skipped_protocols"] = skipped
 					}
 				}
@@ -1994,16 +2024,87 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			})
 
 			proxyGroup.POST("/apply", func(c *gin.Context) {
-				engine := strings.ToLower(strings.TrimSpace(c.DefaultQuery("engine", "xray")))
+				// Default to "auto" (dual-engine partition). Explicit engine=xray
+				// or engine=singbox preserves the legacy single-engine override
+				// used by the Web UI's per-engine apply buttons.
+				engine := strings.ToLower(strings.TrimSpace(c.DefaultQuery("engine", "auto")))
 
 				switch engine {
-				case "", "xray":
+				case "auto", "":
+					// Partition enabled inbounds: Xray handles everything it can
+					// (VLESS / VMess / Trojan / SS); Sing-box handles the rest
+					// (Hysteria2 / TUIC / any future singbox-exclusive protocol).
+					// Both engines run concurrently so all protocols stay reachable
+					// at the same time.
+					var enabledInbounds []model.Inbound
+					config.DB.Where("enable = ?", true).Find(&enabledInbounds)
+					wantXray, wantSingbox := partitionInboundEngines(enabledInbounds)
+
+					xm.SetDualMode(true)
+					sm.SetDualMode(true)
+
+					if err := xm.Stop(); err != nil {
+						log.Printf("Xray pre-stop (auto): %v", err)
+					}
+					if err := sm.Stop(); err != nil {
+						log.Printf("Sing-box pre-stop (auto): %v", err)
+					}
+
+					var xrayErr, singboxErr error
+					if wantXray {
+						if err := xm.Start(); err != nil {
+							xrayErr = err
+							log.Printf("Xray start (auto): %v", err)
+						}
+					}
+					if wantSingbox {
+						if err := sm.Start(); err != nil {
+							singboxErr = err
+							log.Printf("Sing-box start (auto): %v", err)
+						}
+					}
+
+					data := gin.H{
+						"xray_running":    xm.Status(),
+						"singbox_running": sm.Status(),
+						"mode":            "auto",
+					}
+					var msgs []string
+					if wantXray {
+						if xrayErr != nil {
+							msgs = append(msgs, fmt.Sprintf("Xray failed: %v", xrayErr))
+						} else {
+							msgs = append(msgs, "Xray applied")
+						}
+					}
+					if wantSingbox {
+						if singboxErr != nil {
+							msgs = append(msgs, fmt.Sprintf("Sing-box failed: %v", singboxErr))
+						} else {
+							msgs = append(msgs, "Sing-box applied")
+						}
+					}
+					if !wantXray && !wantSingbox {
+						msgs = append(msgs, "No enabled inbounds; both engines stopped")
+					}
+					status := http.StatusOK
+					if xrayErr != nil || singboxErr != nil {
+						status = http.StatusInternalServerError
+					}
+					c.JSON(status, gin.H{
+						"code": status,
+						"msg":  strings.Join(msgs, "; "),
+						"data": data,
+					})
+					recordAudit(c, "proxy.apply", engine)
+				case "xray":
 					// Stop Sing-box first to free any ports it holds before Xray binds them.
 					if sm.Status() {
 						if err := sm.Stop(); err != nil {
 							log.Printf("Sing-box stop (before Xray start): %v", err)
 						}
 					}
+					xm.SetDualMode(false)
 					if err := xm.Restart(); err != nil {
 						log.Printf("Xray apply error: %v", err)
 						c.JSON(http.StatusInternalServerError, gin.H{
@@ -2030,6 +2131,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 							log.Printf("Xray stop (before Sing-box start): %v", err)
 						}
 					}
+					sm.SetDualMode(false)
 					if err := sm.Restart(); err != nil {
 						log.Printf("Sing-box apply error: %v", err)
 						c.JSON(http.StatusInternalServerError, gin.H{
@@ -2912,6 +3014,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		// Smart Deploy — preset-driven one-click egress with reversible
 		// tuning. See docs/superpowers/specs/2026-04-21-smart-deploy-design.md.
 		RegisterDeployRoutes(authGroup)
+
+		// API token CRUD for CLI / headless automation. See docs/cli_api_spec.md.
+		registerAPITokenRoutes(authGroup)
 	}
 
 	// Start background lockout cleanup and rate-limiter map GC
