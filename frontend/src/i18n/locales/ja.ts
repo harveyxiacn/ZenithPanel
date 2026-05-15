@@ -263,6 +263,7 @@ export default {
       autoProbeOff: '自動確認: オフ',
       autoProbeOn: '30秒ごとに自動確認',
       autoProbeTooltip: 'インバウンドタブを開いている間、30秒ごとに再確認します',
+      tlsRequiredHint: 'Hysteria2 と TUIC は TLS が必須です — SNI は証明書と一致する必要があります。実ドメインがない場合は <ハイフン区切りのIP>.nip.io を使用してください。',
     },
     routing: {
       title: 'ルーティングルール',

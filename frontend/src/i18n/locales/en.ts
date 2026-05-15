@@ -270,6 +270,7 @@ export default {
       autoProbeOff: 'Auto-probe off',
       autoProbeOn: 'Auto-probing 30s',
       autoProbeTooltip: 'Re-probe every 30 seconds while the inbound tab is open',
+      tlsRequiredHint: 'Hysteria2 and TUIC always require TLS — the SNI must match the certificate. No real domain? Use <your-IP-with-dashes>.nip.io.',
     },
     routing: {
       title: 'Routing Rules',

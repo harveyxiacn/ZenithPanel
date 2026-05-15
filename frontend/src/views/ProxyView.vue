@@ -196,12 +196,14 @@ function resetVisualForm() {
   }
 }
 
-// Hysteria2 and TUIC mandate TLS — flipping the protocol auto-arms TLS so the
-// user can't save an inbound that sing-box will refuse with "missing certificate".
-// Also seed SNI from the inbound's public host so the cert verifies out of the box.
+// Hysteria2 and TUIC mandate TLS over QUIC — flipping the protocol auto-arms
+// TLS+UDP and seeds the SNI from the public host so the inbound is shaped
+// correctly out of the box. sing-box rejects these protocols without TLS, and
+// a non-UDP transport on Hy2/TUIC is just nonsense.
 watch(() => inboundForm.value.protocol, (proto) => {
   if (proto === 'hysteria2' || proto === 'tuic') {
     vf.value.security = 'tls'
+    vf.value.network = 'udp'
     if (!vf.value.alpn || vf.value.alpn === 'h2,http/1.1') vf.value.alpn = 'h3'
     if (!vf.value.sni) {
       const host = (inboundForm.value.server_address || '').trim()
@@ -973,6 +975,19 @@ function parseTransport(stream: string): string {
   } catch { return 'tcp' }
 }
 
+// Extract the SNI / serverName so the inbound list can show *which* domain
+// each TLS/Reality node terminates on. Without this, Hy2/TUIC rows just
+// say "udp+tls" and users can't tell at a glance that a domain is configured.
+function parseSNI(stream: string): string {
+  if (!stream || stream === '{}') return ''
+  try {
+    const s = JSON.parse(stream)
+    if (s.tlsSettings?.serverName) return String(s.tlsSettings.serverName)
+    if (s.realitySettings?.serverNames?.[0]) return String(s.realitySettings.serverNames[0])
+  } catch { /* fall through */ }
+  return ''
+}
+
 // ---- Quick Setup Wizard ----
 const showQuickSetup = ref(false)
 const quickSetupStep = ref(1)
@@ -1602,6 +1617,7 @@ onBeforeUnmount(() => {
               <option value="vmess">VMess</option>
               <option value="trojan">Trojan</option>
               <option value="hysteria2">Hysteria2</option>
+              <option value="tuic">TUIC</option>
               <option value="shadowsocks">Shadowsocks</option>
             </select>
             <input v-model="inboundForm.listen" :placeholder="$t('proxy.inbounds.listen')" class="input-field text-sm" />
@@ -1615,11 +1631,12 @@ onBeforeUnmount(() => {
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div>
                 <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.network') }}</label>
-                <select v-model="vf.network" class="input-field text-sm w-full">
-                  <option value="tcp">TCP</option>
-                  <option value="ws">WebSocket</option>
-                  <option value="grpc">gRPC</option>
-                  <option value="h2">HTTP/2</option>
+                <select v-model="vf.network" class="input-field text-sm w-full" :disabled="singboxOnlyProtocols.has(inboundForm.protocol)">
+                  <option v-if="!singboxOnlyProtocols.has(inboundForm.protocol)" value="tcp">TCP</option>
+                  <option value="udp">UDP</option>
+                  <option v-if="!singboxOnlyProtocols.has(inboundForm.protocol)" value="ws">WebSocket</option>
+                  <option v-if="!singboxOnlyProtocols.has(inboundForm.protocol)" value="grpc">gRPC</option>
+                  <option v-if="!singboxOnlyProtocols.has(inboundForm.protocol)" value="h2">HTTP/2</option>
                 </select>
               </div>
               <div>
@@ -1651,10 +1668,15 @@ onBeforeUnmount(() => {
 
             <!-- TLS settings -->
             <template v-if="vf.security === 'tls'">
+              <div v-if="singboxOnlyProtocols.has(inboundForm.protocol)" class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                {{ $t('proxy.inbounds.tlsRequiredHint') }}
+              </div>
               <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
                 <div>
-                  <label class="block text-xs font-medium text-slate-500 mb-1">SNI</label>
-                  <input v-model="vf.sni" class="input-field text-sm w-full" placeholder="example.com" />
+                  <label class="block text-xs font-medium text-slate-500 mb-1">
+                    SNI<span v-if="singboxOnlyProtocols.has(inboundForm.protocol)" class="text-rose-500"> *</span>
+                  </label>
+                  <input v-model="vf.sni" class="input-field text-sm w-full" placeholder="example.com or 1-2-3-4.nip.io" />
                 </div>
                 <div>
                   <label class="block text-xs font-medium text-slate-500 mb-1">ALPN</label>
@@ -1799,7 +1821,12 @@ onBeforeUnmount(() => {
                 >Sing-box only</span>
               </td>
               <td class="px-6 py-4 text-sm text-slate-500">{{ node.port }}</td>
-              <td class="px-6 py-4 text-sm text-slate-500">{{ parseTransport(node.stream) }}</td>
+              <td class="px-6 py-4 text-sm text-slate-500">
+                <div>{{ parseTransport(node.stream) }}</div>
+                <div v-if="parseSNI(node.stream)" class="text-xs text-slate-400 font-mono truncate max-w-[14rem]" :title="parseSNI(node.stream)">
+                  SNI: {{ parseSNI(node.stream) }}
+                </div>
+              </td>
               <td class="px-6 py-4 text-right text-sm font-medium space-x-2 whitespace-nowrap">
                 <!-- Probe result chip: replaces the Probe button while a
                      check is in flight, then shows a green/red badge. The
