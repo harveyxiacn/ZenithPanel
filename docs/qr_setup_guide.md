@@ -123,6 +123,67 @@ The panel's renewal goroutine ticks every 12 hours, scans
 **30 days of expiry** gets re-issued using the `acme_email` setting
 captured at first issuance. No manual action required.
 
+### Alternative: DNS-01 via a DDNS provider (when port 80 is busy)
+
+The built-in lego flow binds `:80` for the HTTP-01 challenge. If another
+service permanently owns port 80 on this host (a reverse proxy, an
+ingress controller, a tunnel daemon like `tunwg`, etc.), HTTP-01 will
+fail and you can't stop the conflicting service for every renewal.
+
+The clean way out is **DNS-01** via a Dynamic-DNS provider that exposes
+an API. acme.sh ships with built-in support for many — examples include
+**DuckDNS, Cloudflare, DNSPod, Aliyun DNS, Namecheap, He.net** — anything
+[on acme.sh's dnsapi list][acme-dnsapi] works.
+
+[acme-dnsapi]: https://github.com/acmesh-official/acme.sh/wiki/dnsapi
+
+**Setup outline** (using DuckDNS as one concrete example — substitute
+your provider's env vars per the dnsapi page):
+
+```bash
+# 1. Install acme.sh
+curl https://get.acme.sh | sh -s email=you@example.com
+
+# 2. Provider API credentials (DuckDNS in this example).
+#    For Cloudflare you'd set CF_Token / CF_Account_ID instead, etc.
+export DuckDNS_Token='<your-provider-token>'
+
+# 3. Issue against the domain that points at this VPS
+~/.acme.sh/acme.sh --issue --dns dns_duckdns \
+  -d your-subdomain.duckdns.org \
+  --server letsencrypt
+
+# 4. Install into the panel's cert directory + reload hook for sing-box.
+#    Xray reloads certs per-connection, but sing-box reads them at
+#    startup, so renewals need a `proxy apply` to take effect.
+~/.acme.sh/acme.sh --install-cert -d your-subdomain.duckdns.org --ecc \
+  --fullchain-file /opt/zenithpanel/data/certs/fullchain.pem \
+  --key-file       /opt/zenithpanel/data/certs/privkey.pem \
+  --reloadcmd      'docker exec zenithpanel /opt/zenithpanel/zenithpanel ctl proxy apply >/dev/null 2>&1'
+```
+
+acme.sh installs its own cron job at install time and re-issues ~60
+days before expiry; the `--reloadcmd` ensures sing-box picks up the new
+material. Tokens are persisted in `~/.acme.sh/account.conf` (mode 600).
+
+#### Optional: keep the DDNS hostname in sync with a changing IP
+
+If the VPS public IP can change (re-image, migration, ISP rotation),
+add a one-line cron so the DDNS record follows the host. DuckDNS
+example:
+
+```bash
+( crontab -l 2>/dev/null; echo "*/5 * * * * curl -fsS 'https://www.duckdns.org/update?domains=your-subdomain&token=<TOKEN>' >/dev/null" ) | crontab -
+```
+
+Other providers expose equivalent update URLs / CLIs (e.g.
+`cloudflare-ddns`, `cf-ddns.sh`); pick whichever matches your provider.
+
+> **Why not Cloudflare / DNSPod automatically?** They work the same
+> way — acme.sh's `--dns dns_cf` and `--dns dns_dp` are drop-in
+> replacements for `dns_duckdns` above. We use DuckDNS in this example
+> because it's free and registration-only; pick whatever fits.
+
 ---
 
 ## 4. Troubleshooting

@@ -1170,6 +1170,21 @@ async function proceedToReview() {
   quickSetupStep.value = 2
 }
 
+// QUIC inbounds (Hysteria2, TUIC) share an identical TLS stream shape: when no
+// domain is set, the cert is self-signed (CN=IP), so `allowInsecure` is flipped
+// so the generated subscription URL carries `insecure=1`.
+function buildQuicTlsStream(cfg: any) {
+  const sni = cfg.domain?.trim()
+  return {
+    network: 'udp', security: 'tls',
+    tlsSettings: {
+      ...(sni ? { serverName: sni } : { allowInsecure: true }),
+      alpn: ['h3'],
+      certificates: [{ certificateFile: cfg.certFile, keyFile: cfg.keyFile }],
+    },
+  }
+}
+
 function buildPayload(presetId: string) {
   const preset = presets.find(p => p.id === presetId)!
   const cfg = presetConfigs.value[presetId]
@@ -1233,10 +1248,7 @@ function buildPayload(presetId: string) {
         up_mbps: 100,
         down_mbps: 100,
       }
-      stream = {
-        network: 'udp', security: 'tls',
-        tlsSettings: { serverName: cfg.domain, alpn: ['h3'], certificates: [{ certificateFile: cfg.certFile, keyFile: cfg.keyFile }] },
-      }
+      stream = buildQuicTlsStream(cfg)
       break
     case 'tuic':
       settings = {
@@ -1244,10 +1256,7 @@ function buildPayload(presetId: string) {
         udp_relay_mode: 'native',
         zero_rtt_handshake: false,
       }
-      stream = {
-        network: 'udp', security: 'tls',
-        tlsSettings: { serverName: cfg.domain, alpn: ['h3'], certificates: [{ certificateFile: cfg.certFile, keyFile: cfg.keyFile }] },
-      }
+      stream = buildQuicTlsStream(cfg)
       break
     case 'shadowsocks':
       settings = { method: cfg.method, password: cfg.password }
@@ -2387,7 +2396,7 @@ onBeforeUnmount(() => {
 
                   <!-- Domain field (for TLS-based presets) -->
                   <div v-if="presets.find(p => p.id === id)?.needsDomain">
-                    <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.domain') }} <span class="text-rose-400">*</span></label>
+                    <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.domain') }}</label>
                     <input v-model="presetConfigs[id].domain" class="input-field text-sm w-full" placeholder="example.com" />
                     <p class="text-xs text-slate-400 mt-1">{{ $t('proxy.quickSetup.fields.domainRequired') }}</p>
                   </div>
