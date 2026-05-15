@@ -73,11 +73,14 @@ func (m *Manager) Reload() error {
 func (m *Manager) Stop() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Best-effort close on shutdown. http.Server.Close returns whatever the
+	// underlying Listener returned, which during shutdown is usually
+	// "use of closed network connection" — non-actionable.
 	if m.srv80 != nil {
-		m.srv80.Close()
+		_ = m.srv80.Close()
 	}
 	if m.srv443 != nil {
-		m.srv443.Close()
+		_ = m.srv443.Close()
 	}
 	m.running = false
 }

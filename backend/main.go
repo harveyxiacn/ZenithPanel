@@ -44,7 +44,9 @@ func main() {
 
 	// 1. Initialize Database (store in data/ so Docker volumes persist it across updates)
 	dbPath := "data/zenith.db"
-	os.MkdirAll("data", 0700)
+	if err := os.MkdirAll("data", 0700); err != nil {
+		log.Fatalf("Failed to create data directory: %v", err)
+	}
 	// Migrate old file locations if they exist (pre-v1.1 stored them outside data/)
 	migrateFile := func(oldPath, newPath string) {
 		if _, err := os.Stat(oldPath); err == nil {
@@ -52,7 +54,9 @@ func main() {
 				log.Printf("Migrating %s -> %s", oldPath, newPath)
 				if err := os.Rename(oldPath, newPath); err != nil {
 					if data, err := os.ReadFile(oldPath); err == nil {
-						os.WriteFile(newPath, data, 0600)
+						if werr := os.WriteFile(newPath, data, 0600); werr != nil {
+							log.Printf("migrate: write %s: %v", newPath, werr)
+						}
 					}
 				}
 			}
@@ -268,14 +272,23 @@ func main() {
 			// Verify cert files exist and are valid before attempting TLS
 			certData, certErr := os.ReadFile(certPath)
 			keyData, keyErr := os.ReadFile(keyPath)
+			// On any kind of cert misconfiguration, clear the persisted paths
+			// so the next boot starts on plain HTTP without retrying the same
+			// broken cert. Logging the persistence failure is the most we can
+			// do — losing the cert pointer is recoverable next boot.
+			clearTLSPaths := func(reason string) {
+				log.Printf("TLS clear reason: %s", reason)
+				if err := config.SetSetting("tls_cert_path", ""); err != nil {
+					log.Printf("clear tls_cert_path: %v", err)
+				}
+				if err := config.SetSetting("tls_key_path", ""); err != nil {
+					log.Printf("clear tls_key_path: %v", err)
+				}
+			}
 			if certErr != nil || keyErr != nil {
-				log.Printf("TLS cert/key files not found (cert: %v, key: %v), falling back to HTTP...", certErr, keyErr)
-				config.SetSetting("tls_cert_path", "")
-				config.SetSetting("tls_key_path", "")
+				clearTLSPaths(fmt.Sprintf("files not found (cert: %v, key: %v)", certErr, keyErr))
 			} else if _, err := cryptotls.X509KeyPair(certData, keyData); err != nil {
-				log.Printf("TLS cert/key invalid (%v), falling back to HTTP...", err)
-				config.SetSetting("tls_cert_path", "")
-				config.SetSetting("tls_key_path", "")
+				clearTLSPaths(fmt.Sprintf("invalid pair: %v", err))
 			} else {
 				log.Printf("ZenithPanel listening on https://0.0.0.0:%s", port)
 				if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil && err != http.ErrServerClosed {

@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
 	"regexp"
@@ -196,7 +197,12 @@ func RemoveCloudflareProtection(port string) {
 	for i := len(rules) - 1; i >= 0; i-- {
 		r := rules[i]
 		if r.Port == port && (strings.Contains(r.Extra, "Cloudflare") || strings.Contains(r.Extra, "CF-Block-Others")) {
-			DeleteRule(r)
+			// Cleanup pass — keep going past a failed delete so we still
+			// remove every remaining Cloudflare/Block rule. Per-rule failure
+			// is logged but doesn't abort the loop.
+			if err := DeleteRule(r); err != nil {
+				log.Printf("firewall.DeleteRule(%s): %v", r.Extra, err)
+			}
 		}
 	}
 }

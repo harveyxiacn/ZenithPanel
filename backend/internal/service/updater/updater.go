@@ -129,7 +129,7 @@ func CheckForUpdate(ctx context.Context) (*UpdateInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	containerID, err := getContainerID()
 	if err != nil {
@@ -165,7 +165,7 @@ func PerformUpdate(_ context.Context) error {
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	// 1. Pull latest image (may already be cached from check)
 	log.Println("OTA: pulling latest image...")
@@ -207,11 +207,14 @@ func PerformUpdate(_ context.Context) error {
 
 	log.Printf("OTA: container name=%s, will rename to=%s", containerName, oldName)
 
-	// Clean up leftover containers from previous update attempts
-	cli.ContainerStop(ctx, oldName, container.StopOptions{})
-	cli.ContainerRemove(ctx, oldName, types.ContainerRemoveOptions{Force: true})
-	cli.ContainerStop(ctx, "zenith-updater", container.StopOptions{})
-	cli.ContainerRemove(ctx, "zenith-updater", types.ContainerRemoveOptions{Force: true})
+	// Clean up leftover containers from previous update attempts. Each of
+	// these can legitimately fail with "no such container" on a first-time
+	// upgrade; drop the error and let the rename step below decide whether
+	// the host is in a recoverable state.
+	_ = cli.ContainerStop(ctx, oldName, container.StopOptions{})
+	_ = cli.ContainerRemove(ctx, oldName, types.ContainerRemoveOptions{Force: true})
+	_ = cli.ContainerStop(ctx, "zenith-updater", container.StopOptions{})
+	_ = cli.ContainerRemove(ctx, "zenith-updater", types.ContainerRemoveOptions{Force: true})
 
 	// 4. Rename old container to free the name
 	if err := cli.ContainerRename(ctx, containerID, oldName); err != nil {
@@ -223,7 +226,7 @@ func PerformUpdate(_ context.Context) error {
 	resp, err := cli.ContainerCreate(ctx, newConfig, hostConfig, nil, nil, containerName)
 	if err != nil {
 		log.Printf("OTA: create failed, rolling back rename: %v", err)
-		cli.ContainerRename(ctx, containerID, containerName) // rollback
+		_ = cli.ContainerRename(ctx, containerID, containerName) // rollback
 		return fmt.Errorf("create container: %w", err)
 	}
 	log.Printf("OTA: created new container %s", resp.ID[:12])
@@ -238,14 +241,14 @@ func PerformUpdate(_ context.Context) error {
 
 	helperResp, err := cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
 	if err != nil {
-		cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-		cli.ContainerRename(ctx, containerID, containerName)
+		_ = cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
+		_ = cli.ContainerRename(ctx, containerID, containerName)
 		return fmt.Errorf("create updater helper: %w", err)
 	}
 	if err := cli.ContainerStart(ctx, helperResp.ID, types.ContainerStartOptions{}); err != nil {
-		cli.ContainerRemove(ctx, helperResp.ID, types.ContainerRemoveOptions{})
-		cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-		cli.ContainerRename(ctx, containerID, containerName)
+		_ = cli.ContainerRemove(ctx, helperResp.ID, types.ContainerRemoveOptions{})
+		_ = cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
+		_ = cli.ContainerRename(ctx, containerID, containerName)
 		return fmt.Errorf("start updater helper: %w", err)
 	}
 
@@ -263,7 +266,7 @@ func RestartSelf(_ context.Context, newPort string) error {
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 
 	containerID, err := getContainerID()
 	if err != nil {
@@ -312,10 +315,10 @@ func RestartSelf(_ context.Context, newPort string) error {
 	log.Printf("Restart: container name=%s, will rename to=%s", containerName, oldName)
 
 	// Clean up leftovers
-	cli.ContainerStop(ctx, oldName, container.StopOptions{})
-	cli.ContainerRemove(ctx, oldName, types.ContainerRemoveOptions{Force: true})
-	cli.ContainerStop(ctx, "zenith-updater", container.StopOptions{})
-	cli.ContainerRemove(ctx, "zenith-updater", types.ContainerRemoveOptions{Force: true})
+	_ = cli.ContainerStop(ctx, oldName, container.StopOptions{})
+	_ = cli.ContainerRemove(ctx, oldName, types.ContainerRemoveOptions{Force: true})
+	_ = cli.ContainerStop(ctx, "zenith-updater", container.StopOptions{})
+	_ = cli.ContainerRemove(ctx, "zenith-updater", types.ContainerRemoveOptions{Force: true})
 
 	// Rename old container
 	if err := cli.ContainerRename(ctx, containerID, oldName); err != nil {
@@ -327,7 +330,7 @@ func RestartSelf(_ context.Context, newPort string) error {
 	resp, err := cli.ContainerCreate(ctx, newConfig, hostConfig, nil, nil, containerName)
 	if err != nil {
 		log.Printf("Restart: create failed, rolling back: %v", err)
-		cli.ContainerRename(ctx, containerID, containerName)
+		_ = cli.ContainerRename(ctx, containerID, containerName)
 		return fmt.Errorf("create container: %w", err)
 	}
 	log.Printf("Restart: created new container %s", resp.ID[:12])
@@ -340,14 +343,14 @@ func RestartSelf(_ context.Context, newPort string) error {
 	helperCfg, helperHC := buildHelperContainerConfig(newConfig.Image, swapScript)
 	helperResp, err := cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
 	if err != nil {
-		cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-		cli.ContainerRename(ctx, containerID, containerName)
+		_ = cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
+		_ = cli.ContainerRename(ctx, containerID, containerName)
 		return fmt.Errorf("create helper: %w", err)
 	}
 	if err := cli.ContainerStart(ctx, helperResp.ID, types.ContainerStartOptions{}); err != nil {
-		cli.ContainerRemove(ctx, helperResp.ID, types.ContainerRemoveOptions{})
-		cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-		cli.ContainerRename(ctx, containerID, containerName)
+		_ = cli.ContainerRemove(ctx, helperResp.ID, types.ContainerRemoveOptions{})
+		_ = cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
+		_ = cli.ContainerRename(ctx, containerID, containerName)
 		return fmt.Errorf("start helper: %w", err)
 	}
 
