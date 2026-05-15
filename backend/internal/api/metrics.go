@@ -72,9 +72,15 @@ func registerMetricsRoute(g *gin.RouterGroup, xm *proxy.XrayManager, sm *proxy.S
 		write("zenithpanel_xray_running",
 			"1 when the Xray engine is currently running, 0 otherwise.",
 			"gauge", b01(xrayRunning))
+		write("zenithpanel_xray_uptime_seconds",
+			"Seconds since the Xray engine was last (re)started. 0 if not running.",
+			"gauge", xm.Uptime().Seconds())
 		write("zenithpanel_singbox_running",
 			"1 when the Sing-box engine is currently running, 0 otherwise.",
 			"gauge", b01(singboxRunning))
+		write("zenithpanel_singbox_uptime_seconds",
+			"Seconds since the Sing-box engine was last (re)started. 0 if not running.",
+			"gauge", sm.Uptime().Seconds())
 		write("zenithpanel_dual_mode",
 			"1 when both engines cooperate on disjoint partitions, 0 in single-engine mode.",
 			"gauge", b01(dualMode))
@@ -96,6 +102,33 @@ func registerMetricsRoute(g *gin.RouterGroup, xm *proxy.XrayManager, sm *proxy.S
 		fmt.Fprintf(&b, "# TYPE zenithpanel_api_tokens gauge\n")
 		writeLabeled("zenithpanel_api_tokens", `state="active"`, float64(activeTokens))
 		writeLabeled("zenithpanel_api_tokens", `state="revoked"`, float64(revokedTokens))
+
+		// Per-client traffic counters. Joined against inbounds so we have the
+		// inbound tag for the label set — operators usually want to group
+		// dashboards by inbound, not by email alone. `direction` separates
+		// upload and download as is standard for Prometheus byte counters.
+		type clientTrafficRow struct {
+			Email     string
+			Tag       string
+			UpLoad    int64
+			DownLoad  int64
+		}
+		var clientRows []clientTrafficRow
+		config.DB.
+			Table("clients").
+			Select("clients.email, inbounds.tag, clients.up_load, clients.down_load").
+			Joins("JOIN inbounds ON inbounds.id = clients.inbound_id AND inbounds.deleted_at IS NULL").
+			Where("clients.enable = ? AND inbounds.enable = ?", true, true).
+			Scan(&clientRows)
+		if len(clientRows) > 0 {
+			fmt.Fprintf(&b, "# HELP zenithpanel_client_traffic_bytes Cumulative client traffic, in bytes, by inbound and direction.\n")
+			fmt.Fprintf(&b, "# TYPE zenithpanel_client_traffic_bytes counter\n")
+			for _, r := range clientRows {
+				labels := fmt.Sprintf(`email=%q,inbound=%q`, r.Email, r.Tag)
+				writeLabeled("zenithpanel_client_traffic_bytes", labels+`,direction="up"`, float64(r.UpLoad))
+				writeLabeled("zenithpanel_client_traffic_bytes", labels+`,direction="down"`, float64(r.DownLoad))
+			}
+		}
 
 		c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		c.String(http.StatusOK, b.String())
