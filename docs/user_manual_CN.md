@@ -126,6 +126,10 @@ docker run -d \
 
 ## 📱 订阅二维码
 
+> 想看一步步的"扫码到 Clash Meta / V2RayN" + "换正式 Let's Encrypt 证书"
+> 操作图文？见 [qr_setup_guide_CN.md](qr_setup_guide_CN.md)。
+
+
 **用户与订阅（Users & Subs）** 标签页中，每个客户端都有 **QR Code** 按钮，可生成手机客户端可扫描的二维码：
 
 - **V2Ray / V2RayN** 格式：生成 Base64 订阅二维码，适用于 V2RayN、V2RayNG、Shadowrocket。
