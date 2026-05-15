@@ -2,7 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon, GlobeAltIcon, Cog6ToothIcon, BoltIcon, CpuChipIcon, AdjustmentsHorizontalIcon, TrashIcon } from '@heroicons/vue/24/outline'
-import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup, downloadBackup, restoreBackup, getDNSSettings, updateDNSSettings, listApiTokens, createApiToken, revokeApiToken, type ApiTokenRow } from '@/api/system'
+import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup, downloadBackup, restoreBackup, getDNSSettings, updateDNSSettings, listApiTokens, createApiToken, revokeApiToken, getAdBlockStatus, setAdBlockEnabled, type ApiTokenRow } from '@/api/system'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '../composables/useToast'
 import { useUsageProfile } from '@/composables/useUsageProfile'
@@ -156,6 +156,35 @@ const tlsMsgType = ref<'success' | 'error'>('success')
 const certFile = ref<File | null>(null)
 const keyFile = ref<File | null>(null)
 const showCFGuide = ref(false)
+
+// ---- Ad-block toggle ----
+// Panel-managed routing rule: when on, a `Block Ads (panel-managed)` rule
+// gets inserted into routing_rules and proxy.apply triggers automatically.
+// When off, the rule is removed. Hard-flips with no smart fallback.
+const adblockEnabled = ref(false)
+const adblockLoading = ref(false)
+
+async function loadAdBlockStatus() {
+  try {
+    const res = await getAdBlockStatus()
+    adblockEnabled.value = !!res.data?.data?.enabled
+  } catch {
+    // Silent — endpoint may not be available on older panels.
+  }
+}
+
+async function onToggleAdBlock(target: boolean) {
+  adblockLoading.value = true
+  try {
+    const res = await setAdBlockEnabled(target)
+    adblockEnabled.value = !!res.data?.data?.enabled
+    toast.success(target ? t('security.adblock.toastEnabled') : t('security.adblock.toastDisabled'))
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || t('common.errorOccurred'))
+  } finally {
+    adblockLoading.value = false
+  }
+}
 
 // ---- ACME (Let's Encrypt) ----
 const acmeDomain = ref('')
@@ -968,6 +997,7 @@ onMounted(() => {
   loadNotifyConfig()
   loadDNSSettings()
   loadTokens()
+  loadAdBlockStatus()
 })
 </script>
 
@@ -1024,6 +1054,35 @@ onMounted(() => {
                 {{ updateApplying ? $t('security.update.updating') : $t('security.update.updateNow') }}
               </button>
             </div>
+          </div>
+        </div>
+
+        <!-- Ad Block toggle (routing-layer; not a true uBlock replacement) -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+          <div class="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div class="flex items-center">
+              <div class="bg-rose-500/10 text-rose-500 p-2 rounded-lg mr-4">
+                <ShieldCheckIcon class="h-6 w-6" />
+              </div>
+              <div>
+                <h3 class="text-lg font-medium text-slate-800">{{ $t('security.adblock.title') }}</h3>
+                <p class="text-sm text-slate-500">{{ $t('security.adblock.subtitle') }}</p>
+              </div>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                :checked="adblockEnabled"
+                @change="onToggleAdBlock(!adblockEnabled)"
+                :disabled="adblockLoading"
+                class="sr-only peer"
+              />
+              <div class="w-11 h-6 bg-slate-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-rose-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-rose-500"></div>
+            </label>
+          </div>
+          <div class="p-6 space-y-2 text-sm text-slate-600">
+            <p>{{ $t('security.adblock.howItWorks') }}</p>
+            <p class="text-xs text-slate-500">{{ $t('security.adblock.youtubeCaveat') }}</p>
           </div>
         </div>
 

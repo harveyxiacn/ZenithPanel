@@ -442,6 +442,14 @@ export default {
       cfStep5: 'Set Cloudflare SSL/TLS mode to "Full (Strict)".',
       cfNote: 'Cloudflare Origin Certificates are only trusted by Cloudflare proxy, not browsers directly.',
     },
+    adblock: {
+      title: 'Ad block',
+      subtitle: 'Route ad-network and tracker domains to the block outbound on both engines.',
+      howItWorks: 'When enabled, the panel adds a managed routing rule that sends geosite:category-ads-all traffic to the block outbound. The proxy engines reload automatically.',
+      youtubeCaveat: "Note: YouTube serves in-video ads from the same CDN as the videos themselves (server-side ad insertion), so this rule can't strip them. For DOM-level YouTube ad-stripping, use uBlock Origin in your browser, SmartTube on Android TV, or ReVanced on mobile.",
+      toastEnabled: 'Ad block enabled',
+      toastDisabled: 'Ad block disabled',
+    },
     acme: {
       title: "Let's Encrypt (ACME)",
       subtitle: 'Issue a real TLS certificate for any domain that resolves to this VPS. Renews automatically every 30 days.',

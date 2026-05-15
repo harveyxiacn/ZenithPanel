@@ -22,6 +22,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/docker"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/adblock"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/audit"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/cert"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/monitor"
@@ -186,6 +187,15 @@ func main() {
 	// Best-effort; logs failures and tries again on the next tick.
 	stopCertRenewer := cert.StartRenewer(config.GetSetting)
 	_ = stopCertRenewer
+
+	// 5d-quater. Reconcile the ad-block routing rule against the persisted
+	// setting. Operators flipping the switch in the UI take a different
+	// path (see /api/v1/admin/adblock) that also restarts the engines; this
+	// boot-time reconcile only ensures DB state matches the toggle after a
+	// hand-edit of the settings table or a backup restore.
+	if err := adblock.Apply(config.DB, adblock.IsEnabled(config.GetSetting)); err != nil {
+		log.Printf("Warning: adblock reconcile at boot: %v", err)
+	}
 
 	// 5e. Telegram bot lifecycle: watches the enable flag every 30s and
 	// starts/stops the long-polling goroutine accordingly. Splitting the
