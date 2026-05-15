@@ -45,16 +45,21 @@ func Hash(plaintext string) string {
 
 // IsWellFormed reports whether s has the structural shape of a ZenithPanel
 // API token. Cheap pre-check before hitting the DB.
+//
+// The body uses base64 raw-url-encoding which means it can legitimately
+// contain `_` characters; we therefore split on the LAST underscore rather
+// than the first. An earlier version used `strings.Split(rest, "_")` which
+// rejected ~1 in 22 generated tokens at random.
 func IsWellFormed(s string) bool {
 	if !strings.HasPrefix(s, Prefix) {
 		return false
 	}
 	rest := s[len(Prefix):]
-	parts := strings.Split(rest, "_")
-	if len(parts) != 2 {
+	idx := strings.LastIndex(rest, "_")
+	if idx < 0 {
 		return false
 	}
-	body, sum := parts[0], parts[1]
+	body, sum := rest[:idx], rest[idx+1:]
 	if len(body) != 22 || len(sum) != 6 {
 		return false
 	}
