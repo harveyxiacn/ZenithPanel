@@ -2262,7 +2262,27 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			})
 
 			// Check server public network — reports the VPS exit IP regardless of proxy state.
-			proxyGroup.POST("/test-connection", func(c *gin.Context) {
+			// Inbound connectivity probe — defensive, panel-local check that
+		// confirms the engine is actually serving the inbound's port. See
+		// docs/cli_api_spec.md §2.5 and service/diagnostic.ProbeInbound for
+		// the staged result (not_bound → tcp → tls → ok) the prober returns.
+		proxyGroup.GET("/test/:inbound_id", func(c *gin.Context) {
+			idStr := c.Param("inbound_id")
+			id, err := strconv.ParseUint(idStr, 10, 32)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid inbound id"})
+				return
+			}
+			var in model.Inbound
+			if err := config.DB.First(&in, id).Error; err != nil {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Inbound not found"})
+				return
+			}
+			result := diagnostic.ProbeInbound(in)
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok", "data": result})
+		})
+
+		proxyGroup.POST("/test-connection", func(c *gin.Context) {
 				ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 				defer cancel()
 
