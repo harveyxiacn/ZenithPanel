@@ -183,9 +183,9 @@ type CertInput struct {
 // function is deterministic given the same probe + input (modulo the random
 // secrets it generates via crypto/rand for UUIDs, short-ids, and passwords).
 type Preset struct {
-	ID          string                                                 `json:"id"`
-	DisplayName map[string]string                                      `json:"display_name"` // locale -> display
-	Description map[string]string                                      `json:"description"`
-	Recommended bool                                                   `json:"recommended"`
+	ID          string                                                `json:"id"`
+	DisplayName map[string]string                                     `json:"display_name"` // locale -> display
+	Description map[string]string                                     `json:"description"`
+	Recommended bool                                                  `json:"recommended"`
 	Expander    func(probe ProbeResult, in Input) (DeployPlan, error) `json:"-"`
 }

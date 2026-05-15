@@ -195,7 +195,7 @@ func annotateSingboxError(configPath, output string) string {
 		return ""
 	}
 	var cfg struct {
-		Inbounds []map[string]interface{} `json:"inbounds"`
+		Inbounds []map[string]any `json:"inbounds"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return ""
@@ -207,7 +207,7 @@ func annotateSingboxError(configPath, output string) string {
 	tag, _ := ib["tag"].(string)
 	typ, _ := ib["type"].(string)
 	hint := fmt.Sprintf("Hint: the failing inbound is index %d — tag=%q, type=%q.", idx, tag, typ)
-	if tls, ok := ib["tls"].(map[string]interface{}); ok {
+	if tls, ok := ib["tls"].(map[string]any); ok {
 		if cp, _ := tls["certificate_path"].(string); cp != "" {
 			if _, err := os.Stat(cp); err != nil {
 				hint += fmt.Sprintf("\nCert file %q does not exist on disk — issue or upload the certificate, or switch the inbound to Reality.", cp)
@@ -307,7 +307,7 @@ func (c *BaseCore) Stop() error {
 }
 
 // PrettifyJSON takes any object and returns an indented JSON string
-func PrettifyJSON(v interface{}) (string, error) {
+func PrettifyJSON(v any) (string, error) {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return "", err

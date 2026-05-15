@@ -26,15 +26,15 @@ func TestFlattenSortsByLiveRateThenTotalThenEmail(t *testing.T) {
 
 func TestSkipNICFiltersNoise(t *testing.T) {
 	cases := map[string]bool{
-		"lo":          true,
-		"docker0":     true,
-		"br-abc":      true,
-		"veth1234":    true,
-		"cni0":        true,
-		"flannel.1":   true,
-		"eth0":        false,
-		"ens18":       false,
-		"wlp3s0":      false,
+		"lo":        true,
+		"docker0":   true,
+		"br-abc":    true,
+		"veth1234":  true,
+		"cni0":      true,
+		"flannel.1": true,
+		"eth0":      false,
+		"ens18":     false,
+		"wlp3s0":    false,
 	}
 	for name, want := range cases {
 		if got := skipNIC(name); got != want {

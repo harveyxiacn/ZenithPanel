@@ -103,15 +103,15 @@ func TestBuildThreeXUIInboundExportIncludesClientsAndStats(t *testing.T) {
 		t.Fatalf("expected 1 exported clientStat, got %d", len(exported.ClientStats))
 	}
 
-	var settings map[string]interface{}
+	var settings map[string]any
 	if err := json.Unmarshal([]byte(exported.Settings), &settings); err != nil {
 		t.Fatalf("unmarshal exported settings: %v", err)
 	}
-	clientsField, ok := settings["clients"].([]interface{})
+	clientsField, ok := settings["clients"].([]any)
 	if !ok || len(clientsField) != 1 {
 		t.Fatalf("expected settings.clients with 1 entry, got %#v", settings["clients"])
 	}
-	firstClient := clientsField[0].(map[string]interface{})
+	firstClient := clientsField[0].(map[string]any)
 	if firstClient["id"] != "21478515-473b-423b-adc8-37b2012d3c4b" {
 		t.Fatalf("expected exported client id, got %#v", firstClient["id"])
 	}

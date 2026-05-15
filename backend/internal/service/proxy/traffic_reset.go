@@ -17,7 +17,7 @@ func RunDailyTrafficReset(db *gorm.DB) int64 {
 	day := time.Now().Day()
 	result := db.Model(&model.Client{}).
 		Where("reset_day = ? AND reset_day > 0", day).
-		Updates(map[string]interface{}{"up_load": 0, "down_load": 0})
+		Updates(map[string]any{"up_load": 0, "down_load": 0})
 
 	if result.Error != nil {
 		log.Printf("[traffic-reset] DB update failed: %v", result.Error)

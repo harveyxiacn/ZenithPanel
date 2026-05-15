@@ -55,12 +55,12 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 	clientsByInbound := fetchClientsByInbound(inbounds)
 
 	// Build route rules: sniff first, then hijack-dns, then user rules
-	routeRules := []interface{}{
-		map[string]interface{}{
+	routeRules := []any{
+		map[string]any{
 			"action":  "sniff",
 			"timeout": "300ms",
 		},
-		map[string]interface{}{
+		map[string]any{
 			"protocol": "dns",
 			"action":   "hijack-dns",
 		},
@@ -109,11 +109,11 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 			if mbps < 1 {
 				mbps = 1
 			}
-			routeRules = append(routeRules, map[string]interface{}{
+			routeRules = append(routeRules, map[string]any{
 				"type": "logical",
 				"mode": "and",
-				"rules": []interface{}{
-					map[string]interface{}{
+				"rules": []any{
+					map[string]any{
 						"inbound":      []string{tag},
 						"inbound_user": []string{c.Email},
 					},
@@ -127,10 +127,10 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 	}
 
 	// System outbounds always present
-	outbounds := []interface{}{
-		map[string]interface{}{"type": "direct", "tag": "direct"},
-		map[string]interface{}{"type": "block", "tag": "block"},
-		map[string]interface{}{"type": "dns", "tag": "dns-out"},
+	outbounds := []any{
+		map[string]any{"type": "direct", "tag": "direct"},
+		map[string]any{"type": "block", "tag": "block"},
+		map[string]any{"type": "dns", "tag": "dns-out"},
 	}
 	// Append user-defined custom outbounds (e.g. WireGuard/WARP)
 	for _, ob := range customOutbounds {
@@ -141,22 +141,22 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 	}
 
 	primary, secondary := resolveDNSServers()
-	singboxConfig := map[string]interface{}{
-		"log": map[string]interface{}{
+	singboxConfig := map[string]any{
+		"log": map[string]any{
 			"level": "warn",
 		},
-		"dns": map[string]interface{}{
-			"servers": []interface{}{
-				map[string]interface{}{"tag": "dns-primary", "address": primary},
-				map[string]interface{}{"tag": "dns-secondary", "address": secondary},
-				map[string]interface{}{"tag": "dns-local", "address": "local"},
+		"dns": map[string]any{
+			"servers": []any{
+				map[string]any{"tag": "dns-primary", "address": primary},
+				map[string]any{"tag": "dns-secondary", "address": secondary},
+				map[string]any{"tag": "dns-local", "address": "local"},
 			},
 			"strategy": "prefer_ipv4",
 			"final":    "dns-primary",
 		},
-		"inbounds":  []interface{}{},
+		"inbounds":  []any{},
 		"outbounds": outbounds,
-		"route": map[string]interface{}{
+		"route": map[string]any{
 			"rules":                 routeRules,
 			"final":                 "direct",
 			"auto_detect_interface": true,
@@ -169,14 +169,14 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("build singbox inbound %q: %w", in.Tag, err)
 		}
-		singboxConfig["inbounds"] = append(singboxConfig["inbounds"].([]interface{}), inboundEntry)
+		singboxConfig["inbounds"] = append(singboxConfig["inbounds"].([]any), inboundEntry)
 	}
 
 	// `experimental.cache_file` is unconditional — sing-box uses it to cache
 	// downloaded rule_set bundles so a restart doesn't re-fetch them. Without
 	// the cache every restart re-downloads 1–5 MB of geosite/geoip data.
-	experimental := map[string]interface{}{
-		"cache_file": map[string]interface{}{
+	experimental := map[string]any{
+		"cache_file": map[string]any{
 			"enabled": true,
 			"path":    "data/singbox-cache.db",
 		},
@@ -187,7 +187,7 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 		if port == "" {
 			port = "9090"
 		}
-		experimental["clash_api"] = map[string]interface{}{
+		experimental["clash_api"] = map[string]any{
 			"external_controller": "127.0.0.1:" + port,
 			"secret":              "",
 		}
@@ -199,13 +199,13 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 
 // buildSingboxInbound constructs a sing-box inbound with users, TLS, and transport.
 // Clients are injected from the supplied list so the caller can batch-fetch them.
-func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]interface{}, error) {
+func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]any, error) {
 	listen := "::"
 	if in.Listen != "" {
 		listen = in.Listen
 	}
 
-	entry := map[string]interface{}{
+	entry := map[string]any{
 		"type":        in.Protocol,
 		"tag":         in.Tag,
 		"listen":      listen,
@@ -213,7 +213,7 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 	}
 
 	// Parse settings JSON for protocol-specific options
-	var settingsRaw map[string]interface{}
+	var settingsRaw map[string]any
 	if in.Settings != "" && in.Settings != "{}" {
 		if err := json.Unmarshal([]byte(in.Settings), &settingsRaw); err != nil {
 			return nil, fmt.Errorf("parse settings: %w", err)
@@ -222,9 +222,9 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 
 	switch in.Protocol {
 	case "vless":
-		users := make([]map[string]interface{}, 0, len(clients))
+		users := make([]map[string]any, 0, len(clients))
 		for _, c := range clients {
-			u := map[string]interface{}{
+			u := map[string]any{
 				"name": c.Email,
 				"uuid": c.UUID,
 			}
@@ -239,9 +239,9 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		entry["users"] = users
 
 	case "vmess":
-		users := make([]map[string]interface{}, 0, len(clients))
+		users := make([]map[string]any, 0, len(clients))
 		for _, c := range clients {
-			users = append(users, map[string]interface{}{
+			users = append(users, map[string]any{
 				"name":    c.Email,
 				"uuid":    c.UUID,
 				"alterId": 0,
@@ -250,9 +250,9 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		entry["users"] = users
 
 	case "trojan":
-		users := make([]map[string]interface{}, 0, len(clients))
+		users := make([]map[string]any, 0, len(clients))
 		for _, c := range clients {
-			users = append(users, map[string]interface{}{
+			users = append(users, map[string]any{
 				"name":     c.Email,
 				"password": c.UUID,
 			})
@@ -271,9 +271,9 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 				entry["password"] = password
 			}
 			if strings.HasPrefix(method, "2022-blake3") && len(clients) > 0 {
-				users := make([]map[string]interface{}, 0, len(clients))
+				users := make([]map[string]any, 0, len(clients))
 				for _, c := range clients {
-					users = append(users, map[string]interface{}{
+					users = append(users, map[string]any{
 						"name":     c.Email,
 						"password": c.UUID,
 					})
@@ -283,9 +283,9 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		}
 
 	case "hysteria2":
-		users := make([]map[string]interface{}, 0, len(clients))
+		users := make([]map[string]any, 0, len(clients))
 		for _, c := range clients {
-			users = append(users, map[string]interface{}{
+			users = append(users, map[string]any{
 				"name":     c.Email,
 				"password": c.UUID,
 			})
@@ -295,8 +295,8 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		// the subscription link advertises. Without this, clients negotiating
 		// salamander obfuscation or bandwidth hints would mismatch the server.
 		if settingsRaw != nil {
-			if obfs, ok := settingsRaw["obfs"].(map[string]interface{}); ok {
-				cleaned := map[string]interface{}{}
+			if obfs, ok := settingsRaw["obfs"].(map[string]any); ok {
+				cleaned := map[string]any{}
 				if t, ok := obfs["type"].(string); ok && t != "" {
 					cleaned["type"] = t
 				}
@@ -329,13 +329,13 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		// while preserving the legacy UUID-as-password behavior for inbounds
 		// created before this fix.
 		passwordByEmail := perUserPasswordsFromSettings(settingsRaw)
-		users := make([]map[string]interface{}, 0, len(clients))
+		users := make([]map[string]any, 0, len(clients))
 		for _, c := range clients {
 			pw := c.UUID
 			if v, ok := passwordByEmail[c.Email]; ok && v != "" {
 				pw = v
 			}
-			users = append(users, map[string]interface{}{
+			users = append(users, map[string]any{
 				"name":     c.Email,
 				"uuid":     c.UUID,
 				"password": pw,
@@ -360,7 +360,7 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 
 	// Parse and apply stream settings (TLS + transport)
 	if in.Stream != "" && in.Stream != "{}" {
-		var stream map[string]interface{}
+		var stream map[string]any
 		if err := json.Unmarshal([]byte(in.Stream), &stream); err != nil {
 			return nil, fmt.Errorf("parse stream: %w", err)
 		}
@@ -368,7 +368,7 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		// refuse to start (which would take the entire engine down).
 		if in.Protocol == "trojan" {
 			sec, _ := stream["security"].(string)
-			_, nativeTLS := stream["tls"].(map[string]interface{})
+			_, nativeTLS := stream["tls"].(map[string]any)
 			if sec != "tls" && sec != "reality" && !nativeTLS {
 				return nil, fmt.Errorf("trojan inbound %q requires TLS or Reality security (got %q) — "+
 					"set stream security to 'tls' or 'reality'", in.Tag, sec)
@@ -383,22 +383,22 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 		// supply one — admins can still override by setting tlsSettings.alpn
 		// explicitly.
 		if in.Protocol == "hysteria2" || in.Protocol == "tuic" {
-			if tlsBlock, ok := entry["tls"].(map[string]interface{}); ok {
+			if tlsBlock, ok := entry["tls"].(map[string]any); ok {
 				if _, hasALPN := tlsBlock["alpn"]; !hasALPN {
-					tlsBlock["alpn"] = []interface{}{"h3"}
+					tlsBlock["alpn"] = []any{"h3"}
 				}
 			}
 		}
 
 		// Optional connection multiplexing (smux/yamux/h2mux). Sing-box treats
 		// multiplex as a sibling of transport, so it lives directly on the inbound.
-		if mux, ok := stream["multiplex"].(map[string]interface{}); ok {
+		if mux, ok := stream["multiplex"].(map[string]any); ok {
 			if enabled, _ := mux["enabled"].(bool); enabled {
 				proto := "smux"
 				if p, ok := mux["protocol"].(string); ok && p != "" {
 					proto = p
 				}
-				entry["multiplex"] = map[string]interface{}{
+				entry["multiplex"] = map[string]any{
 					"enabled":         true,
 					"protocol":        proto,
 					"max_connections": 4,
@@ -414,7 +414,7 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 	// have no cleartext mode. Reject up-front when the resolved entry lacks
 	// any TLS block.
 	if in.Protocol == "hysteria2" || in.Protocol == "tuic" {
-		tls, _ := entry["tls"].(map[string]interface{})
+		tls, _ := entry["tls"].(map[string]any)
 		if tls == nil || tls["enabled"] != true {
 			return nil, fmt.Errorf("%s inbound %q requires TLS — open the inbound editor, set Security to TLS, then provide certificate and key files",
 				in.Protocol, in.Tag)
@@ -427,7 +427,7 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 	// the cryptic "initialize inbound[0]: missing certificate" error. This is
 	// engine-protocol-agnostic on purpose — VLESS/VMess/Shadowsocks with
 	// security=tls would also trip it without certs.
-	if tls, ok := entry["tls"].(map[string]interface{}); ok {
+	if tls, ok := entry["tls"].(map[string]any); ok {
 		if enabled, _ := tls["enabled"].(bool); enabled {
 			if err := validateSingboxTLSCredentials(tls, in.Protocol, in.Tag); err != nil {
 				return nil, err
@@ -446,11 +446,11 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]i
 //   - ACME: tls.acme is present (sing-box obtains the cert at runtime)
 //   - Files: certificate_path + key_path both non-empty
 //   - Inline: certificate + key both non-empty
-func validateSingboxTLSCredentials(tls map[string]interface{}, protocol, tag string) error {
-	if _, ok := tls["reality"].(map[string]interface{}); ok {
+func validateSingboxTLSCredentials(tls map[string]any, protocol, tag string) error {
+	if _, ok := tls["reality"].(map[string]any); ok {
 		return nil
 	}
-	if _, ok := tls["acme"].(map[string]interface{}); ok {
+	if _, ok := tls["acme"].(map[string]any); ok {
 		return nil
 	}
 	certPath, _ := tls["certificate_path"].(string)
@@ -474,8 +474,8 @@ func validateSingboxTLSCredentials(tls map[string]interface{}, protocol, tag str
 // hasNonEmptyStrings returns true when v is a non-empty []interface{} whose
 // every element is a non-empty string. Sing-box accepts inline PEM material
 // as either a single string or an array of strings.
-func hasNonEmptyStrings(v interface{}) bool {
-	arr, ok := v.([]interface{})
+func hasNonEmptyStrings(v any) bool {
+	arr, ok := v.([]any)
 	if !ok || len(arr) == 0 {
 		return false
 	}
@@ -517,17 +517,17 @@ func resolveDNSServers() (string, string) {
 // per-user password by email. Used by TUIC config generation so admins can
 // supply distinct secrets via the Web UI / API without a schema change.
 // Returns an empty map if settings is nil or has no clients array.
-func perUserPasswordsFromSettings(settings map[string]interface{}) map[string]string {
+func perUserPasswordsFromSettings(settings map[string]any) map[string]string {
 	out := map[string]string{}
 	if settings == nil {
 		return out
 	}
-	rawClients, ok := settings["clients"].([]interface{})
+	rawClients, ok := settings["clients"].([]any)
 	if !ok {
 		return out
 	}
 	for _, rc := range rawClients {
-		m, _ := rc.(map[string]interface{})
+		m, _ := rc.(map[string]any)
 		if m == nil {
 			continue
 		}
@@ -546,13 +546,13 @@ func perUserPasswordsFromSettings(settings map[string]interface{}) map[string]st
 //   - Sing-box-native (smart-deploy presets): {"tls": {...}, "transport": {...}}
 //
 // Native blocks are passed through verbatim; Xray-style blocks are translated.
-func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interface{}) {
+func applyStreamToSingbox(entry map[string]any, stream map[string]any) {
 	// Sing-box-native pass-through. Smart-deploy stores tls/transport in the
 	// shape sing-box already expects, so we forward them unchanged.
-	if nativeTLS, ok := stream["tls"].(map[string]interface{}); ok {
+	if nativeTLS, ok := stream["tls"].(map[string]any); ok {
 		entry["tls"] = nativeTLS
 	}
-	if nativeTransport, ok := stream["transport"].(map[string]interface{}); ok {
+	if nativeTransport, ok := stream["transport"].(map[string]any); ok {
 		entry["transport"] = nativeTransport
 	}
 
@@ -561,10 +561,10 @@ func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interf
 
 	// TLS settings
 	if security == "tls" {
-		tls := map[string]interface{}{
+		tls := map[string]any{
 			"enabled": true,
 		}
-		if tlsSettings, ok := stream["tlsSettings"].(map[string]interface{}); ok {
+		if tlsSettings, ok := stream["tlsSettings"].(map[string]any); ok {
 			if sn, ok := tlsSettings["serverName"].(string); ok && sn != "" {
 				tls["server_name"] = sn
 			}
@@ -575,8 +575,8 @@ func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interf
 				tls["key_path"] = keyPath
 			}
 			// Check certificates array (Xray format)
-			if certs, ok := tlsSettings["certificates"].([]interface{}); ok && len(certs) > 0 {
-				if cert, ok := certs[0].(map[string]interface{}); ok {
+			if certs, ok := tlsSettings["certificates"].([]any); ok && len(certs) > 0 {
+				if cert, ok := certs[0].(map[string]any); ok {
 					if cp, ok := cert["certificateFile"].(string); ok && cp != "" {
 						tls["certificate_path"] = cp
 					}
@@ -585,12 +585,12 @@ func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interf
 					}
 				}
 			}
-			if alpn, ok := tlsSettings["alpn"].([]interface{}); ok {
+			if alpn, ok := tlsSettings["alpn"].([]any); ok {
 				tls["alpn"] = alpn
 			}
 			// TLS fingerprint → uTLS block for browser-grade fingerprinting
 			if fp, ok := tlsSettings["fingerprint"].(string); ok && fp != "" {
-				tls["utls"] = map[string]interface{}{
+				tls["utls"] = map[string]any{
 					"enabled":     true,
 					"fingerprint": fp,
 				}
@@ -598,7 +598,7 @@ func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interf
 		}
 		entry["tls"] = tls
 	} else if security == "reality" {
-		tls := map[string]interface{}{
+		tls := map[string]any{
 			"enabled": true,
 		}
 		// Sing-box 1.11+ requires the inner reality block to set enabled:true
@@ -607,10 +607,10 @@ func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interf
 		// "missing certificate" — because it then tries plain TLS without
 		// a cert path. Set this unconditionally; turning Reality off means
 		// switching security mode at the inbound level.
-		reality := map[string]interface{}{
+		reality := map[string]any{
 			"enabled": true,
 		}
-		if rs, ok := stream["realitySettings"].(map[string]interface{}); ok {
+		if rs, ok := stream["realitySettings"].(map[string]any); ok {
 			info := ReadRealityStreamInfo(stream)
 			if pk, ok := rs["privateKey"].(string); ok && pk != "" {
 				reality["private_key"] = pk
@@ -623,7 +623,7 @@ func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interf
 			}
 			// sing-box requires separate server and server_port for handshake
 			if info.Target != "" {
-				handshake := map[string]interface{}{}
+				handshake := map[string]any{}
 				host, portStr, err := net.SplitHostPort(info.Target)
 				if err == nil {
 					handshake["server"] = host
@@ -645,24 +645,24 @@ func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interf
 	// Transport settings
 	switch network {
 	case "ws":
-		transport := map[string]interface{}{
+		transport := map[string]any{
 			"type": "ws",
 		}
-		if ws, ok := stream["wsSettings"].(map[string]interface{}); ok {
+		if ws, ok := stream["wsSettings"].(map[string]any); ok {
 			if path, ok := ws["path"].(string); ok && path != "" {
 				transport["path"] = path
 			}
-			if headers, ok := ws["headers"].(map[string]interface{}); ok {
+			if headers, ok := ws["headers"].(map[string]any); ok {
 				transport["headers"] = headers
 			}
 		}
 		entry["transport"] = transport
 
 	case "grpc":
-		transport := map[string]interface{}{
+		transport := map[string]any{
 			"type": "grpc",
 		}
-		if grpc, ok := stream["grpcSettings"].(map[string]interface{}); ok {
+		if grpc, ok := stream["grpcSettings"].(map[string]any); ok {
 			if sn, ok := grpc["serviceName"].(string); ok && sn != "" {
 				transport["service_name"] = sn
 			}
@@ -670,24 +670,24 @@ func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interf
 		entry["transport"] = transport
 
 	case "h2", "http":
-		transport := map[string]interface{}{
+		transport := map[string]any{
 			"type": "http",
 		}
-		if h2, ok := stream["httpSettings"].(map[string]interface{}); ok {
+		if h2, ok := stream["httpSettings"].(map[string]any); ok {
 			if path, ok := h2["path"].(string); ok && path != "" {
 				transport["path"] = path
 			}
-			if host, ok := h2["host"].([]interface{}); ok {
+			if host, ok := h2["host"].([]any); ok {
 				transport["host"] = host
 			}
 		}
 		entry["transport"] = transport
 
 	case "httpupgrade":
-		transport := map[string]interface{}{
+		transport := map[string]any{
 			"type": "httpupgrade",
 		}
-		if hu, ok := stream["httpupgradeSettings"].(map[string]interface{}); ok {
+		if hu, ok := stream["httpupgradeSettings"].(map[string]any); ok {
 			if path, ok := hu["path"].(string); ok && path != "" {
 				transport["path"] = path
 			}
@@ -716,7 +716,7 @@ const (
 // generated config is stable and diffable. download_detour is pinned to
 // "direct" — fetching a rule-set through a proxy outbound that isn't yet
 // configured would deadlock the boot path.
-func buildSingboxRuleSets(usedSite, usedGeoIP map[string]bool) []interface{} {
+func buildSingboxRuleSets(usedSite, usedGeoIP map[string]bool) []any {
 	if len(usedSite) == 0 && len(usedGeoIP) == 0 {
 		return nil
 	}
@@ -728,7 +728,7 @@ func buildSingboxRuleSets(usedSite, usedGeoIP map[string]bool) []interface{} {
 		tags = append(tags, t)
 	}
 	sort.Strings(tags)
-	out := make([]interface{}, 0, len(tags))
+	out := make([]any, 0, len(tags))
 	for _, tag := range tags {
 		var url string
 		switch {
@@ -739,7 +739,7 @@ func buildSingboxRuleSets(usedSite, usedGeoIP map[string]bool) []interface{} {
 		default:
 			continue
 		}
-		out = append(out, map[string]interface{}{
+		out = append(out, map[string]any{
 			"tag":             tag,
 			"type":            "remote",
 			"format":          "binary",
@@ -762,8 +762,8 @@ func buildSingboxRuleSets(usedSite, usedGeoIP map[string]bool) []interface{} {
 // Returns the rule map plus the (geosite, geoip) rule-set tags that the
 // caller needs to declare so this rule can resolve. Tags are returned with
 // the sing-box prefix already attached (`geosite-cn`, `geoip-private`, …).
-func buildSingboxRoutingRule(r model.RoutingRule) (map[string]interface{}, []string, []string) {
-	ruleMap := map[string]interface{}{
+func buildSingboxRoutingRule(r model.RoutingRule) (map[string]any, []string, []string) {
+	ruleMap := map[string]any{
 		"action":   "route",
 		"outbound": r.OutboundTag,
 	}
@@ -861,15 +861,15 @@ func buildSingboxRoutingRule(r model.RoutingRule) (map[string]interface{}, []str
 
 // buildSingboxOutbound converts a DB Outbound record to the sing-box JSON format.
 // Returns nil for unknown/unsupported protocols (skipped silently).
-func buildSingboxOutbound(ob model.Outbound) map[string]interface{} {
+func buildSingboxOutbound(ob model.Outbound) map[string]any {
 	switch ob.Protocol {
 	case "wireguard":
-		entry := map[string]interface{}{
+		entry := map[string]any{
 			"type": "wireguard",
 			"tag":  ob.Tag,
 		}
 		if ob.Config != "" {
-			var cfg map[string]interface{}
+			var cfg map[string]any
 			if err := json.Unmarshal([]byte(ob.Config), &cfg); err == nil {
 				// WARPConfig fields → sing-box WireGuard fields
 				if pk, ok := cfg["private_key"].(string); ok && pk != "" {
@@ -899,12 +899,12 @@ func buildSingboxOutbound(ob model.Outbound) map[string]interface{} {
 		return entry
 
 	case "socks5":
-		entry := map[string]interface{}{
+		entry := map[string]any{
 			"type": "socks",
 			"tag":  ob.Tag,
 		}
 		if ob.Config != "" {
-			var cfg map[string]interface{}
+			var cfg map[string]any
 			if err := json.Unmarshal([]byte(ob.Config), &cfg); err == nil {
 				if server, ok := cfg["server"].(string); ok {
 					entry["server"] = server
@@ -923,12 +923,12 @@ func buildSingboxOutbound(ob model.Outbound) map[string]interface{} {
 		return entry
 
 	case "http":
-		entry := map[string]interface{}{
+		entry := map[string]any{
 			"type": "http",
 			"tag":  ob.Tag,
 		}
 		if ob.Config != "" {
-			var cfg map[string]interface{}
+			var cfg map[string]any
 			if err := json.Unmarshal([]byte(ob.Config), &cfg); err == nil {
 				if server, ok := cfg["server"].(string); ok {
 					entry["server"] = server

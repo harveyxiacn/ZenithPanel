@@ -65,8 +65,8 @@ type Snapshot struct {
 	Processes  []ProcessSample   `json:"processes"`
 	// Source-level errors are surfaced so the UI can show "Clash API not
 	// running" without the whole snapshot looking broken.
-	ProxyError   string `json:"proxy_error,omitempty"`
-	SystemError  string `json:"system_error,omitempty"`
+	ProxyError  string `json:"proxy_error,omitempty"`
+	SystemError string `json:"system_error,omitempty"`
 }
 
 const (

@@ -26,7 +26,7 @@ func TestBuildSingboxInboundForwardsHysteria2Obfs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
-	obfs, ok := entry["obfs"].(map[string]interface{})
+	obfs, ok := entry["obfs"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected obfs map on hysteria2 inbound, got %#v", entry["obfs"])
 	}
@@ -179,7 +179,7 @@ func TestUniqueRoutingRulesSkipsEquivalentEntries(t *testing.T) {
 }
 
 func TestNormalizeXrayStreamSettingsRealityCompatibility(t *testing.T) {
-	stream := map[string]interface{}{}
+	stream := map[string]any{}
 	if err := json.Unmarshal([]byte(`{
 		"network": "tcp",
 		"security": "reality",
@@ -202,7 +202,7 @@ func TestNormalizeXrayStreamSettingsRealityCompatibility(t *testing.T) {
 	}
 
 	got := NormalizeXrayStreamSettings(stream)
-	reality, ok := got["realitySettings"].(map[string]interface{})
+	reality, ok := got["realitySettings"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected realitySettings map")
 	}
@@ -229,7 +229,7 @@ func TestNormalizeXrayStreamSettingsRealityCompatibility(t *testing.T) {
 
 func TestNormalizeXrayStreamSettingsRealityFromTarget(t *testing.T) {
 	// Test that "target" from frontend is also normalized to "dest"
-	stream := map[string]interface{}{}
+	stream := map[string]any{}
 	if err := json.Unmarshal([]byte(`{
 		"network": "tcp",
 		"security": "reality",
@@ -244,7 +244,7 @@ func TestNormalizeXrayStreamSettingsRealityFromTarget(t *testing.T) {
 	}
 
 	got := NormalizeXrayStreamSettings(stream)
-	reality := got["realitySettings"].(map[string]interface{})
+	reality := got["realitySettings"].(map[string]any)
 	if reality["dest"] != "www.microsoft.com:443" {
 		t.Fatalf("expected dest=www.microsoft.com:443, got %v", reality["dest"])
 	}

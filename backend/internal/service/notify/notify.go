@@ -6,6 +6,7 @@
 //	cfg := loadNotifyConfig()   // read from DB settings
 //	notify.Send(cfg, notify.Event{Type: notify.EventProxyCoreCrashed, Message: "..."})
 //	notify.RunClientChecks(db)  // called periodically from a background goroutine
+//
 // a user-configured generic webhook. All delivery errors are logged and
 // silently discarded so notification failures never affect core operations.
 package notify
@@ -45,11 +46,11 @@ type Config struct {
 	WebhookURL     string // generic HTTP POST endpoint
 
 	// per-event toggles (all enabled by default when non-empty)
-	EnableExpiringSoon  bool
-	EnableExpired       bool
-	EnableTrafficLimit  bool
-	EnableProxyCrashed  bool
-	EnableCertExpiry    bool
+	EnableExpiringSoon bool
+	EnableExpired      bool
+	EnableTrafficLimit bool
+	EnableProxyCrashed bool
+	EnableCertExpiry   bool
 }
 
 // Send dispatches an event according to the supplied config. Errors are logged
@@ -137,7 +138,7 @@ func sendTelegram(token, chatID, text string) error {
 }
 
 func sendWebhook(webhookURL string, ev Event) error {
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload, _ := json.Marshal(map[string]any{
 		"event":   string(ev.Type),
 		"message": ev.Message,
 		"ts":      time.Now().Unix(),

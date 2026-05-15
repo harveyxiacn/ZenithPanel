@@ -220,7 +220,7 @@ func (b *BotPoller) cmdResetTraffic(email string) string {
 	if err := b.db.Where("email = ?", email).First(&client).Error; err != nil {
 		return fmt.Sprintf("No client found with email `%s`.", email)
 	}
-	if err := b.db.Model(&client).Updates(map[string]interface{}{"up_load": 0, "down_load": 0}).Error; err != nil {
+	if err := b.db.Model(&client).Updates(map[string]any{"up_load": 0, "down_load": 0}).Error; err != nil {
 		return fmt.Sprintf("Failed to reset traffic: %v", err)
 	}
 	if b.onMutate != nil {

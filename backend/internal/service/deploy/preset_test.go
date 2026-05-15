@@ -12,9 +12,9 @@ func baseProbe() ProbeResult {
 	return ProbeResult{
 		RootCheck: RootCheckResult{OK: true, UID: 0},
 		Kernel: KernelResult{
-			Version: "5.15.0",
-			Major:   5,
-			Minor:   15,
+			Version:  "5.15.0",
+			Major:    5,
+			Minor:    15,
 			Features: KernelFeatures{BBR: true, FQ: true, FQCodel: true, TFO: true},
 		},
 		Distro:   DistroResult{ID: "debian", VersionID: "12"},
@@ -237,7 +237,7 @@ func TestExpandStableEgressSkipsExistingInboundPorts(t *testing.T) {
 }
 
 func TestUDPBufferParamsScalesWithNIC(t *testing.T) {
-	slow := udpBufferParams(100) // 100 Mbps
+	slow := udpBufferParams(100)   // 100 Mbps
 	fast := udpBufferParams(10000) // 10 Gbps
 
 	if slow["rmem_max"] == fast["rmem_max"] {

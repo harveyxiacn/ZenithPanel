@@ -58,7 +58,7 @@ func parseStream(streamJSON string) streamInfo {
 	if streamJSON == "" || streamJSON == "{}" {
 		return si
 	}
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(streamJSON), &raw); err != nil {
 		return si
 	}
@@ -76,11 +76,11 @@ func parseStream(streamJSON string) streamInfo {
 		si.Security = v
 	}
 
-	if tls, ok := raw["tlsSettings"].(map[string]interface{}); ok {
+	if tls, ok := raw["tlsSettings"].(map[string]any); ok {
 		if v, ok := tls["serverName"].(string); ok {
 			si.SNI = v
 		}
-		if alpn, ok := tls["alpn"].([]interface{}); ok {
+		if alpn, ok := tls["alpn"].([]any); ok {
 			parts := make([]string, 0, len(alpn))
 			for _, a := range alpn {
 				if s, ok := a.(string); ok {
@@ -97,7 +97,7 @@ func parseStream(streamJSON string) streamInfo {
 		}
 	}
 
-	if _, ok := raw["realitySettings"].(map[string]interface{}); ok {
+	if _, ok := raw["realitySettings"].(map[string]any); ok {
 		info := proxyservice.ReadRealityStreamInfo(raw)
 		if info.PublicKey != "" {
 			si.RealityPBK = info.PublicKey
@@ -119,35 +119,35 @@ func parseStream(streamJSON string) streamInfo {
 		}
 	}
 
-	if ws, ok := raw["wsSettings"].(map[string]interface{}); ok {
+	if ws, ok := raw["wsSettings"].(map[string]any); ok {
 		if v, ok := ws["path"].(string); ok {
 			si.WSPath = v
 		}
-		if headers, ok := ws["headers"].(map[string]interface{}); ok {
+		if headers, ok := ws["headers"].(map[string]any); ok {
 			if v, ok := headers["Host"].(string); ok {
 				si.WSHost = v
 			}
 		}
 	}
 
-	if grpc, ok := raw["grpcSettings"].(map[string]interface{}); ok {
+	if grpc, ok := raw["grpcSettings"].(map[string]any); ok {
 		if v, ok := grpc["serviceName"].(string); ok {
 			si.GRPCServiceName = v
 		}
 	}
 
-	if h2, ok := raw["httpSettings"].(map[string]interface{}); ok {
+	if h2, ok := raw["httpSettings"].(map[string]any); ok {
 		if v, ok := h2["path"].(string); ok {
 			si.H2Path = v
 		}
-		if hosts, ok := h2["host"].([]interface{}); ok && len(hosts) > 0 {
+		if hosts, ok := h2["host"].([]any); ok && len(hosts) > 0 {
 			if v, ok := hosts[0].(string); ok {
 				si.H2Host = v
 			}
 		}
 	}
 
-	if hu, ok := raw["httpupgradeSettings"].(map[string]interface{}); ok {
+	if hu, ok := raw["httpupgradeSettings"].(map[string]any); ok {
 		if v, ok := hu["path"].(string); ok {
 			si.HTTPUpgradePath = v
 		}
@@ -164,7 +164,7 @@ func parseSettingsFlow(settingsJSON string) string {
 	if settingsJSON == "" || settingsJSON == "{}" {
 		return ""
 	}
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(settingsJSON), &raw); err != nil {
 		return ""
 	}
@@ -180,11 +180,11 @@ func parseHysteria2Extras(settingsJSON string) hysteria2Extras {
 	if settingsJSON == "" || settingsJSON == "{}" {
 		return h
 	}
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(settingsJSON), &raw); err != nil {
 		return h
 	}
-	if obfs, ok := raw["obfs"].(map[string]interface{}); ok {
+	if obfs, ok := raw["obfs"].(map[string]any); ok {
 		if t, ok := obfs["type"].(string); ok {
 			h.ObfsType = t
 		}
@@ -209,7 +209,7 @@ func parseSSPlugin(settingsJSON string) (pluginName, pluginOpts string) {
 	if settingsJSON == "" || settingsJSON == "{}" {
 		return
 	}
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(settingsJSON), &raw); err != nil {
 		return
 	}
@@ -848,7 +848,7 @@ func buildVLESSLink(in model.Inbound, client model.Client, server string, si str
 
 // buildVMessLink generates a vmess:// share link (V2RayN JSON format).
 func buildVMessLink(in model.Inbound, client model.Client, server string, si streamInfo) string {
-	vmessObj := map[string]interface{}{
+	vmessObj := map[string]any{
 		"v":    "2",
 		"ps":   in.Tag,
 		"add":  server,
@@ -1010,7 +1010,7 @@ func parseTUICExtras(settingsJSON string) (congestion, udpRelay string, zeroRTT 
 	if settingsJSON == "" || settingsJSON == "{}" {
 		return
 	}
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(settingsJSON), &raw); err != nil {
 		return
 	}
@@ -1097,7 +1097,7 @@ func parseSSSettings(settingsJSON string) (method, password string) {
 	if settingsJSON == "" || settingsJSON == "{}" {
 		return
 	}
-	var raw map[string]interface{}
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(settingsJSON), &raw); err != nil {
 		return
 	}

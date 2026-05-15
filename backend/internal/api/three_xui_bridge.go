@@ -128,7 +128,7 @@ func prettyJSONString(raw string) (string, error) {
 	if raw == "" {
 		return "", nil
 	}
-	var parsed interface{}
+	var parsed any
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		return "", err
 	}
@@ -249,7 +249,7 @@ func importThreeXUIInbound(tx *gorm.DB, src threeXUIInboundImportPayload) (model
 }
 
 func buildThreeXUIInboundExport(inbound model.Inbound, clients []model.Client) (threeXUIInboundExportPayload, error) {
-	settingsMap := map[string]interface{}{}
+	settingsMap := map[string]any{}
 	if strings.TrimSpace(inbound.Settings) != "" && inbound.Settings != "{}" {
 		if err := json.Unmarshal([]byte(inbound.Settings), &settingsMap); err != nil {
 			return threeXUIInboundExportPayload{}, err

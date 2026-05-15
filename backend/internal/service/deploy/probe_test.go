@@ -186,21 +186,21 @@ func TestParseSystemdVersion(t *testing.T) {
 // fakeRunner is a configurable Runner for testing. All fields are optional;
 // unset fields return zero values (or simulate "missing" appropriately).
 type fakeRunner struct {
-	files         map[string][]byte // ReadFile + FileExists results
-	execResults   map[string]fakeExecResult
-	lookPathSet   map[string]bool
-	portFreeSet   map[int]bool
-	uid           int
-	ipv4          string
-	ipv4Err       error
-	ipv6          string
-	ipv6Err       error
-	inboundPorts  []int
-	cpuCores      int
-	ramBytes      int64
-	swapBytes     int64
-	nicName       string
-	nicSpeedMbps  int
+	files        map[string][]byte // ReadFile + FileExists results
+	execResults  map[string]fakeExecResult
+	lookPathSet  map[string]bool
+	portFreeSet  map[int]bool
+	uid          int
+	ipv4         string
+	ipv4Err      error
+	ipv6         string
+	ipv6Err      error
+	inboundPorts []int
+	cpuCores     int
+	ramBytes     int64
+	swapBytes    int64
+	nicName      string
+	nicSpeedMbps int
 }
 
 type fakeExecResult struct {
@@ -245,8 +245,8 @@ func (f *fakeRunner) FetchPublicIPv6(_ context.Context) (string, error) {
 	return f.ipv6, f.ipv6Err
 }
 func (f *fakeRunner) InboundPortsFromDB() ([]int, error) { return f.inboundPorts, nil }
-func (f *fakeRunner) CPUCores() (int, error)              { return f.cpuCores, nil }
-func (f *fakeRunner) MemInfo() (int64, int64, error)      { return f.ramBytes, f.swapBytes, nil }
+func (f *fakeRunner) CPUCores() (int, error)             { return f.cpuCores, nil }
+func (f *fakeRunner) MemInfo() (int64, int64, error)     { return f.ramBytes, f.swapBytes, nil }
 func (f *fakeRunner) PrimaryNIC() (string, int, error) {
 	if f.nicName == "" {
 		return "", 0, errors.New("no nic")
@@ -278,8 +278,8 @@ func TestProbeDetectRoot(t *testing.T) {
 func TestProbeDetectPortAvail(t *testing.T) {
 	r := &fakeRunner{
 		portFreeSet: map[int]bool{
-			443: false, // taken
-			80:  true,
+			443:  false, // taken
+			80:   true,
 			8443: true,
 		},
 	}
@@ -341,18 +341,18 @@ func TestProbeDetectDockerRunning(t *testing.T) {
 func TestProbeRunCompletesWithinBudget(t *testing.T) {
 	r := &fakeRunner{
 		files: map[string][]byte{
-			"/proc/version":                                  []byte("Linux version 5.15.0"),
+			"/proc/version": []byte("Linux version 5.15.0"),
 			"/proc/sys/net/ipv4/tcp_available_congestion_control": []byte("bbr cubic"),
-			"/proc/sys/net/ipv4/tcp_fastopen":                []byte("3"),
-			"/etc/os-release":                                []byte("ID=debian\nVERSION_ID=\"12\"\n"),
-			"/run/systemd/system":                            []byte(""),
+			"/proc/sys/net/ipv4/tcp_fastopen":                     []byte("3"),
+			"/etc/os-release":                                     []byte("ID=debian\nVERSION_ID=\"12\"\n"),
+			"/run/systemd/system":                                 []byte(""),
 		},
 		lookPathSet: map[string]bool{"timedatectl": true, "docker": true, "ufw": true},
 		execResults: map[string]fakeExecResult{
-			"systemctl --version":                                 {out: []byte("systemd 252\n")},
-			"timedatectl show --property=NTP,NTPSynchronized":     {out: []byte("NTP=yes\nNTPSynchronized=yes\n")},
-			"ufw status":                                          {out: []byte("Status: active\n")},
-			"docker version --format {{.Server.Version}}":         {out: []byte("24.0.7\n")},
+			"systemctl --version":                             {out: []byte("systemd 252\n")},
+			"timedatectl show --property=NTP,NTPSynchronized": {out: []byte("NTP=yes\nNTPSynchronized=yes\n")},
+			"ufw status": {out: []byte("Status: active\n")},
+			"docker version --format {{.Server.Version}}": {out: []byte("24.0.7\n")},
 		},
 		uid:          0,
 		ipv4:         "1.2.3.4",

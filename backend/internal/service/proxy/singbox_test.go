@@ -34,15 +34,15 @@ func TestSingboxRealityHandshakeSplitsDest(t *testing.T) {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
 
-	tls, ok := entry["tls"].(map[string]interface{})
+	tls, ok := entry["tls"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected tls block, got %T: %v", entry["tls"], entry["tls"])
 	}
-	reality, ok := tls["reality"].(map[string]interface{})
+	reality, ok := tls["reality"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected reality block in tls, got %T: %v", tls["reality"], tls["reality"])
 	}
-	handshake, ok := reality["handshake"].(map[string]interface{})
+	handshake, ok := reality["handshake"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected handshake in reality, got %T: %v", reality["handshake"], reality["handshake"])
 	}
@@ -87,7 +87,7 @@ func TestSingboxH2TransportMapping(t *testing.T) {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
 
-	transport, ok := entry["transport"].(map[string]interface{})
+	transport, ok := entry["transport"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected transport block, got %T: %v", entry["transport"], entry["transport"])
 	}
@@ -123,11 +123,11 @@ func TestSingboxTLSFingerprintToUTLS(t *testing.T) {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
 
-	tls, ok := entry["tls"].(map[string]interface{})
+	tls, ok := entry["tls"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected tls block, got %T", entry["tls"])
 	}
-	utls, ok := tls["utls"].(map[string]interface{})
+	utls, ok := tls["utls"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected utls block in tls, got %T: %v", tls["utls"], tls["utls"])
 	}
@@ -162,7 +162,7 @@ func TestSingboxNoUTLSWhenNoFingerprint(t *testing.T) {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
 
-	tls, ok := entry["tls"].(map[string]interface{})
+	tls, ok := entry["tls"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected tls block")
 	}
@@ -234,7 +234,7 @@ func TestSingboxHysteria2WithCertAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
-	tls, ok := entry["tls"].(map[string]interface{})
+	tls, ok := entry["tls"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected tls block on entry")
 	}
@@ -314,7 +314,7 @@ func TestSingboxNativeTLSStreamPassthrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
-	tls, ok := entry["tls"].(map[string]interface{})
+	tls, ok := entry["tls"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected tls block on entry, got %T: %v", entry["tls"], entry["tls"])
 	}
@@ -351,11 +351,11 @@ func TestTUICDefaultsALPNToH3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
-	tls, ok := entry["tls"].(map[string]interface{})
+	tls, ok := entry["tls"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected tls block, got %T", entry["tls"])
 	}
-	alpn, ok := tls["alpn"].([]interface{})
+	alpn, ok := tls["alpn"].([]any)
 	if !ok || len(alpn) == 0 {
 		t.Fatalf("expected alpn=[\"h3\"], got %v", tls["alpn"])
 	}
@@ -385,8 +385,8 @@ func TestTUICHonorsExplicitALPN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
-	tls := entry["tls"].(map[string]interface{})
-	alpn := tls["alpn"].([]interface{})
+	tls := entry["tls"].(map[string]any)
+	alpn := tls["alpn"].([]any)
 	if got, _ := alpn[0].(string); got != "h3-29" {
 		t.Errorf("expected explicit alpn to be preserved, got %q", got)
 	}
@@ -413,7 +413,7 @@ func TestTUICPerUserPasswordOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
-	users := entry["users"].([]map[string]interface{})
+	users := entry["users"].([]map[string]any)
 	if users[0]["password"] != "alice-secret" {
 		t.Errorf("alice: expected password override 'alice-secret', got %v", users[0]["password"])
 	}
@@ -439,8 +439,8 @@ func TestHysteria2DefaultsALPNToH3(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildSingboxInbound: %v", err)
 	}
-	tls := entry["tls"].(map[string]interface{})
-	alpn, ok := tls["alpn"].([]interface{})
+	tls := entry["tls"].(map[string]any)
+	alpn, ok := tls["alpn"].([]any)
 	if !ok || len(alpn) == 0 {
 		t.Fatalf("expected alpn default for hysteria2, got %v", tls["alpn"])
 	}
@@ -550,7 +550,7 @@ func TestBuildSingboxRuleSetsEmitsRemoteEntries(t *testing.T) {
 		t.Fatalf("expected 3 rule_set entries, got %d: %v", len(out), out)
 	}
 	// First entry should be geoip-cn (sorted alphabetically before geosite-*).
-	first, _ := out[0].(map[string]interface{})
+	first, _ := out[0].(map[string]any)
 	if first["tag"] != "geoip-cn" {
 		t.Errorf("expected first entry to be geoip-cn (sorted), got %v", first["tag"])
 	}
@@ -566,7 +566,7 @@ func TestBuildSingboxRuleSetsEmitsRemoteEntries(t *testing.T) {
 	}
 	// And the geosite entries must point at sing-geosite.
 	for _, ent := range out[1:] {
-		m := ent.(map[string]interface{})
+		m := ent.(map[string]any)
 		if url, _ := m["url"].(string); !strings.Contains(url, "sing-geosite") {
 			t.Errorf("geosite url wrong: %q", url)
 		}
@@ -588,22 +588,22 @@ func TestSingboxConfigIsValidJSON(t *testing.T) {
 	sm := NewSingboxManager()
 	// GenerateConfig calls config.DB which may be nil in tests.
 	// Directly build with empty slices instead.
-	cfg := map[string]interface{}{
-		"log": map[string]interface{}{"level": "warn"},
-		"dns": map[string]interface{}{
-			"servers": []interface{}{},
+	cfg := map[string]any{
+		"log": map[string]any{"level": "warn"},
+		"dns": map[string]any{
+			"servers": []any{},
 			"final":   "dns-remote",
 		},
-		"inbounds":  []interface{}{},
-		"outbounds": []interface{}{},
-		"route":     map[string]interface{}{"rules": []interface{}{}, "final": "direct"},
+		"inbounds":  []any{},
+		"outbounds": []any{},
+		"route":     map[string]any{"rules": []any{}, "final": "direct"},
 	}
 	_ = sm // confirm sm is usable
 	raw, err := PrettifyJSON(cfg)
 	if err != nil {
 		t.Fatalf("PrettifyJSON: %v", err)
 	}
-	var out interface{}
+	var out any
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		t.Fatalf("output is not valid JSON: %v\n%s", err, raw)
 	}

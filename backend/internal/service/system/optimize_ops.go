@@ -159,12 +159,12 @@ func revertFile(_ context.Context, snap Snapshot) error {
 // ─────────────────────────────────────────────────────────────────────────
 
 const (
-	pathBBRFQ          = "/etc/sysctl.d/99-zenith-bbr.conf"
-	pathQdiscCake      = "/etc/sysctl.d/99-zenith-cake.conf"
-	pathSysctlNetwork  = "/etc/sysctl.d/99-zenith-network.conf"
-	pathUDPBuffers     = "/etc/sysctl.d/99-zenith-udpbuf.conf"
-	pathTFOFull        = "/etc/sysctl.d/99-zenith-tfo.conf"
-	pathSystemdNofile  = "/etc/systemd/system.conf.d/99-zenith-nofile.conf"
+	pathBBRFQ         = "/etc/sysctl.d/99-zenith-bbr.conf"
+	pathQdiscCake     = "/etc/sysctl.d/99-zenith-cake.conf"
+	pathSysctlNetwork = "/etc/sysctl.d/99-zenith-network.conf"
+	pathUDPBuffers    = "/etc/sysctl.d/99-zenith-udpbuf.conf"
+	pathTFOFull       = "/etc/sysctl.d/99-zenith-tfo.conf"
+	pathSystemdNofile = "/etc/systemd/system.conf.d/99-zenith-nofile.conf"
 )
 
 func applyBBRFQ(ctx context.Context, _ map[string]string) (Snapshot, error) {

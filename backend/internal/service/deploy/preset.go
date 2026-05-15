@@ -24,8 +24,8 @@ var portFallbacks = []int{443, 8443, 2053, 2083, 2087, 2096, 10443, 20443}
 // tuning op names used in TuneSpec.OpName. The system tuner package owns
 // the catalog; keeping the identifiers centralized here avoids drift.
 const (
-	TuneBBRFQ          = "bbr_fq"
-	TuneSysctlNetwork  = "sysctl_network"
+	TuneBBRFQ           = "bbr_fq"
+	TuneSysctlNetwork   = "sysctl_network"
 	TuneUDPBuffersLarge = "udp_buffers_large"
 	TuneTCPFastOpenFull = "tcp_fastopen_full"
 	TuneSystemdNofile   = "systemd_nofile"
@@ -94,15 +94,15 @@ func expandStableEgress(probe ProbeResult, in Input) (DeployPlan, error) {
 			"network":  "tcp",
 			"security": "reality",
 			"realitySettings": map[string]any{
-				"show":          false,
-				"dest":          realityTarget + ":443",
-				"serverNames":   []string{realityTarget},
-				"privateKey":    priv,
-				"publicKey":     pub,
-				"shortIds":      []string{shortID},
-				"fingerprint":   "chrome",
-				"minClientVer":  "1.8.0",
-				"maxTimeDiff":   70,
+				"show":         false,
+				"dest":         realityTarget + ":443",
+				"serverNames":  []string{realityTarget},
+				"privateKey":   priv,
+				"publicKey":    pub,
+				"shortIds":     []string{shortID},
+				"fingerprint":  "chrome",
+				"minClientVer": "1.8.0",
+				"maxTimeDiff":  70,
 			},
 		},
 		Remark: "Smart Deploy — stable egress (Reality)",
