@@ -144,3 +144,136 @@ ZenithPanel 支持 4 种语言：
 - **日本語**（日语）
 
 切换语言请点击侧边栏底部的语言选择器。您的偏好会自动保存，跨会话持久化。首次访问时面板会自动检测浏览器语言。
+
+---
+
+## 🖥️ 无头 CLI（`zenithctl`）
+
+Web UI 上能做的所有事情，命令行同样可以完成。适用于自动化脚本、故障排查、
+Web UI 不可达时的应急救援，以及通过 SSH 驱动面板的 AI 代理。
+
+### 面板宿主机一次性配置
+
+```bash
+# 命名 CLI 入口
+ln -sf /opt/zenithpanel/zenithpanel /usr/local/bin/zenithctl
+
+# 自助创建一个长生命周期 token，并写入 profile。仅 root 可执行——它使用
+# 0600 权限的 /run/zenithpanel.sock。
+zenithctl token bootstrap
+```
+
+`token bootstrap` 后会打印类似：
+
+```
+Token created and saved to /root/.config/zenithctl/config.toml
+Name:   local-root-1778819000
+Token:  ztk_AbCd…_4f9b21
+Keep this token safe — it grants full panel access.
+```
+
+后续以 root 身份再次运行时会自动走 unix socket，无需任何凭证。从非 root
+shell 或另一台机器调用，需要显式传 token：
+
+```bash
+zenithctl --host https://panel.example.com --token ztk_AbCd…_4f9b21 status
+```
+
+也可以在 `~/.config/zenithctl/config.toml` 加 profile：
+
+```toml
+default = "prod"
+
+[profile.prod]
+host       = "https://panel.example.com"
+token      = "ztk_AbCd…_4f9b21"
+verify_tls = true
+```
+
+### 日常命令
+
+```bash
+zenithctl status                                # ping 面板 + 版本快照
+zenithctl inbound list                          # 入站 JSON dump
+zenithctl client add --inbound 1 --email alice  # 新增用户
+zenithctl client list --inbound 1
+zenithctl proxy status                          # 引擎运行状态
+zenithctl proxy apply                           # 双引擎重载
+zenithctl proxy test 1                          # 探活入站 #1
+zenithctl proxy test all                        # 探活所有启用的入站
+zenithctl firewall list
+zenithctl backup export --out backup.zip
+zenithctl raw GET /api/v1/health                # 调用任意 API 的逃生口
+```
+
+默认输出 JSON；加 `-q` 只输出 `data` 字段，便于管道传递。
+
+### 通过 Web UI 管理 Token
+
+进入 **Settings → API Tokens** 也可创建/吊销 token。每个 token 有名称、
+可选作用域、可选有效期。明文 token **只在创建时显示一次**——请立即复制。
+
+| 作用域        | 授予                                          |
+|---            |---                                            |
+| `read`        | 所有 `GET` 端点                                |
+| `write`       | 入站/客户端/路由规则的变更                      |
+| `proxy:apply` | 通过 `/proxy/apply` 重启引擎                   |
+| `system`      | BBR / swap / sysctl / 清理                     |
+| `firewall`    | iptables 规则                                  |
+| `backup`      | 导出与恢复                                     |
+| `admin`       | 包含 token CRUD、2FA、密码的所有管理端点        |
+| `*`           | 全部（`token bootstrap` 的默认）                |
+
+被吊销的 token 立即失效，但记录保留供审计。通过 unix socket bootstrap 出来
+的 token 是全权限的。
+
+---
+
+## ⚡ 双引擎模式
+
+ZenithPanel 默认 **Xray** 与 **Sing-box** 同时运行。当你调用
+`POST /api/v1/proxy/apply` 不带 `engine=` 参数时（Web UI 的 *Apply* 按钮
+与 `zenithctl proxy apply` 都走这条路径），面板会自动分区：
+
+| 引擎      | 协议                                            |
+|---        |---                                              |
+| Xray      | VLESS、VMess、Trojan、Shadowsocks（TCP/WS+TLS） |
+| Sing-box  | Hysteria2、TUIC（QUIC 类协议）                  |
+
+两个进程并行运行，绑定不同端口。操作员通过 `?engine=xray` 或
+`?engine=singbox` 强制单引擎仍然可用——主要用于排障。
+
+**Proxy** 页头部在双引擎模式下会显示一个 🌌 *双引擎* 徽章，外加 🔀
+*N 个由 Sing-box 接管* 芯片，列出 Sing-box 承担的协议。原本的琥珀色
+"协议被跳过"警告仅在用户主动选择单引擎时出现。
+
+---
+
+## 🔍 服务端入站探活
+
+**入站节点** 表格每行都有一个 **探活** 按钮。点击后面板会在本机做一次
+连通性检查：
+
+1. 读 `/proc/net/{tcp,udp}{,6}`，确认监听器已绑定。
+2. TCP 类入站（VLESS / VMess / Trojan / SS）：连接 `127.0.0.1:port`，
+   若 `stream.security: tls` 则继续做 TLS 握手。
+3. QUIC 类入站（Hysteria2 / TUIC）：打开一个连接的 UDP socket 并发送
+   16 字节哨兵；ECONNREFUSED 表示引擎不在。
+
+按钮会变成芯片：`✓ 73ms`（成功）或 `✗ tcp/tls/udp`（失败阶段）。点击芯片
+重新探活。同一检查通过 `GET /api/v1/proxy/test/:inbound_id` 暴露给 CLI
+与自动化使用。
+
+> ⚠ 探活只能确认面板托管的引擎正在本机监听端口。它**不能**证明该入站
+> 从公网可达——后者需要用真实客户端从外部测试。
+
+---
+
+## 📡 协议连通性测试脚本
+
+面板宿主机上 `scripts/proto_sweep_dual.sh` 会为每个协议起一个 sing-box
+客户端，依次通过 SOCKS5 curl 公网 URL。输出按入站逐行 PASS/FAIL，适合
+升级或路由规则变更后的烟雾测试。
+
+最新的协议矩阵与复现步骤见
+[protocol_connectivity_report.md](protocol_connectivity_report.md)。

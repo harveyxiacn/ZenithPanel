@@ -144,3 +144,147 @@ ZenithPanel supports 4 languages:
 - **日本語** (Japanese)
 
 To switch language, click the language selector at the bottom of the sidebar. Your preference is saved automatically and persists across sessions. The panel auto-detects your browser language on first visit.
+
+---
+
+## 🖥️ Headless CLI (`zenithctl`)
+
+Everything available in the Web UI is also reachable from a shell — useful
+for automation, debugging, recovery when the UI is unreachable, and AI
+agents that drive the panel via SSH.
+
+### One-time setup on the panel host
+
+```bash
+# Make the CLI conveniently named
+ln -sf /opt/zenithpanel/zenithpanel /usr/local/bin/zenithctl
+
+# Mint a long-lived API token, write the profile, no password prompts.
+# Only root can run this — it uses /run/zenithpanel.sock which is 0600.
+zenithctl token bootstrap
+```
+
+After `token bootstrap` you'll see something like:
+
+```
+Token created and saved to /root/.config/zenithctl/config.toml
+Name:   local-root-1778819000
+Token:  ztk_AbCd…_4f9b21
+Keep this token safe — it grants full panel access.
+```
+
+Subsequent invocations as root use the unix socket automatically, no
+credentials needed. From a non-root shell on the same host, or from a
+different machine, pass the token explicitly:
+
+```bash
+zenithctl --host https://panel.example.com --token ztk_AbCd…_4f9b21 status
+```
+
+Or add a profile to `~/.config/zenithctl/config.toml`:
+
+```toml
+default = "prod"
+
+[profile.prod]
+host       = "https://panel.example.com"
+token      = "ztk_AbCd…_4f9b21"
+verify_tls = true
+```
+
+### Daily commands
+
+```bash
+zenithctl status                                # ping panel + version snapshot
+zenithctl inbound list                          # JSON dump of every inbound
+zenithctl client add --inbound 1 --email alice  # provision a new user
+zenithctl client list --inbound 1
+zenithctl proxy status                          # which engines are running
+zenithctl proxy apply                           # dual-engine reload
+zenithctl proxy test 1                          # server-side probe of inbound #1
+zenithctl proxy test all                        # probe every enabled inbound
+zenithctl firewall list
+zenithctl backup export --out backup.zip
+zenithctl raw GET /api/v1/health                # escape hatch — call any endpoint
+```
+
+JSON is the default output; pass `-q` to print only the `data` field so
+shell pipelines can consume it cleanly.
+
+### Token management via Web UI
+
+Tokens can also be created and revoked from **Settings → API Tokens**.
+Each token has a name, optional scopes, and an optional expiry. The
+plaintext is shown **once** at creation time — copy it immediately.
+
+| Scope         | Grants                                           |
+|---            |---                                               |
+| `read`        | All `GET` endpoints                              |
+| `write`       | Mutations on inbounds/clients/routing rules      |
+| `proxy:apply` | Restart engines via `/proxy/apply`               |
+| `system`      | BBR / swap / sysctl / cleanup                    |
+| `firewall`    | iptables rules                                   |
+| `backup`      | Export and restore                               |
+| `admin`       | Admin endpoints incl. token CRUD, 2FA, password  |
+| `*`           | Everything (default for `token bootstrap`)       |
+
+A revoked token is rejected immediately and the row stays in the table
+for audit. Bootstrap tokens issued via the unix socket are full-scope.
+
+---
+
+## ⚡ Dual-Engine Mode
+
+ZenithPanel runs **Xray** and **Sing-box** concurrently by default. When
+you call `POST /api/v1/proxy/apply` without an `engine=` query parameter
+(which is what the Web UI's *Apply* button and `zenithctl proxy apply`
+do), the panel partitions enabled inbounds across the two engines:
+
+| Engine    | Protocols                                       |
+|---        |---                                              |
+| Xray      | VLESS, VMess, Trojan, Shadowsocks (TCP & WS+TLS)|
+| Sing-box  | Hysteria2, TUIC (QUIC-only protocols)           |
+
+Both processes run side-by-side, each bound to disjoint ports. Operators
+forcing a single engine via `?engine=xray` or `?engine=singbox` get the
+legacy behavior — useful for diagnostics.
+
+The **Proxy** page header shows a 🌌 *Dual engines* badge when partitioning
+is active, plus a 🔀 *N served by Sing-box* chip listing the protocols
+Sing-box owns. The previous amber "skipped" warning only appears when an
+operator deliberately runs single-engine.
+
+---
+
+## 🔍 Server-Side Inbound Probe
+
+Each row in the **Inbound Nodes** table has a **Probe** button. Clicking
+it runs a panel-local check that confirms the engine is actually serving
+the port:
+
+1. Reads `/proc/net/{tcp,udp}{,6}` to confirm the listener is bound.
+2. For TCP-style inbounds (VLESS, VMess, Trojan, SS): connects to
+   `127.0.0.1:port`, then drives a TLS handshake if `stream.security: tls`.
+3. For QUIC-style inbounds (Hysteria2, TUIC): opens a connected UDP socket
+   and sends a 16-byte sentinel; ECONNREFUSED means the engine isn't there.
+
+The button turns into a chip showing either `✓ 73ms` (success) or
+`✗ tcp/tls/udp` (the failing stage). Click the chip to re-probe. The
+same check is exposed at `GET /api/v1/proxy/test/:inbound_id` for CLI
+and automation use.
+
+> ⚠ The probe only confirms that the panel-managed engine is serving the
+> port from inside the host. It does **not** prove the inbound is reachable
+> from the public Internet — for that, use a real client from outside.
+
+---
+
+## 📡 Protocol Connectivity Test Harness
+
+`scripts/proto_sweep_dual.sh` on the panel host spins up one sing-box
+client per protocol and curls the public Internet through each in turn.
+Output is a PASS/FAIL line per inbound — useful as a smoke test after
+upgrades or routing-rule changes.
+
+See [protocol_connectivity_report.md](protocol_connectivity_report.md)
+for the latest verified protocol matrix and reproduction steps.
