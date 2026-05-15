@@ -126,6 +126,11 @@ See the [Proxy Setup Guide](proxy-setup-guide.md) for detailed JSON examples per
 
 ## 📱 QR Codes for Subscription
 
+> For a step-by-step walkthrough (Clash Meta / V2RayN scan flow + tips on
+> replacing the self-signed test cert with a real Let's Encrypt one), see
+> [qr_setup_guide.md](qr_setup_guide.md).
+
+
 Each client in the **Users & Subs** tab has a **QR Code** button that generates scannable QR codes for mobile clients:
 
 - **V2Ray / V2RayN** format: Generates a Base64 subscription QR code for V2RayN, V2RayNG, and Shadowrocket.
