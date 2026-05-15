@@ -2,6 +2,7 @@ package system
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,8 +46,8 @@ func EnableBBR() error {
 		return fmt.Errorf("cannot read available congestion controls: %w", err)
 	}
 	if !strings.Contains(string(avail), "bbr") {
-		// Try loading the module
-		exec.Command("modprobe", "tcp_bbr").Run()
+		// Try loading the module — best-effort, the re-check below decides.
+		_ = exec.Command("modprobe", "tcp_bbr").Run()
 		// Re-check
 		avail, _ = os.ReadFile("/proc/sys/net/ipv4/tcp_available_congestion_control")
 		if !strings.Contains(string(avail), "bbr") {
@@ -72,9 +73,10 @@ func EnableBBR() error {
 func DisableBBR() error {
 	os.Remove(bbrSysctlFile)
 
-	// Revert to cubic (Linux default)
-	exec.Command("sysctl", "-w", "net.core.default_qdisc=fq_codel").Run()
-	exec.Command("sysctl", "-w", "net.ipv4.tcp_congestion_control=cubic").Run()
+	// Revert to cubic (Linux default). Best-effort — if sysctl is missing or
+	// permission-denied, the next reboot picks up the file change anyway.
+	_ = exec.Command("sysctl", "-w", "net.core.default_qdisc=fq_codel").Run()
+	_ = exec.Command("sysctl", "-w", "net.ipv4.tcp_congestion_control=cubic").Run()
 	return nil
 }
 
@@ -160,8 +162,10 @@ func CreateSwap(sizeMB int) error {
 		entry := fmt.Sprintf("\n%s none swap sw 0 0\n", defaultSwapFile)
 		f, err := os.OpenFile("/etc/fstab", os.O_APPEND|os.O_WRONLY, 0644)
 		if err == nil {
-			f.WriteString(entry)
-			f.Close()
+			if _, werr := f.WriteString(entry); werr != nil {
+				log.Printf("write /etc/fstab: %v", werr)
+			}
+			_ = f.Close()
 		}
 	}
 
@@ -169,8 +173,10 @@ func CreateSwap(sizeMB int) error {
 }
 
 func RemoveSwap() error {
-	// Disable swap
-	exec.Command("swapoff", defaultSwapFile).Run()
+	// Disable swap. Best-effort — `swapoff` returns non-zero when the swap
+	// wasn't on, which is the common case when the user is removing a stale
+	// file we never actually mounted.
+	_ = exec.Command("swapoff", defaultSwapFile).Run()
 
 	// Remove file
 	os.Remove(defaultSwapFile)
@@ -185,7 +191,9 @@ func RemoveSwap() error {
 				newLines = append(newLines, line)
 			}
 		}
-		os.WriteFile("/etc/fstab", []byte(strings.Join(newLines, "\n")), 0644)
+		if err := os.WriteFile("/etc/fstab", []byte(strings.Join(newLines, "\n")), 0644); err != nil {
+			log.Printf("rewrite /etc/fstab: %v", err)
+		}
 	}
 
 	return nil
@@ -259,8 +267,9 @@ func EnableSysctlTuning() error {
 func DisableSysctlTuning() error {
 	os.Remove(sysctlTuningFile)
 
-	// Reload default sysctl
-	exec.Command("sysctl", "--system").Run()
+	// Reload default sysctl — best-effort, the kernel re-reads sysctl on
+	// next boot regardless.
+	_ = exec.Command("sysctl", "--system").Run()
 	return nil
 }
 
@@ -364,15 +373,17 @@ func RunCleanup() CleanupResult {
 
 	// Clean package cache
 	// Try apt first
+	// Package-manager cache cleanup is best-effort. Failures (no privilege,
+	// already-clean cache, locked manager) don't change the reported result.
 	if _, err := exec.LookPath("apt-get"); err == nil {
-		exec.Command("apt-get", "clean").Run()
-		exec.Command("apt-get", "autoremove", "-y").Run()
+		_ = exec.Command("apt-get", "clean").Run()
+		_ = exec.Command("apt-get", "autoremove", "-y").Run()
 		result.PackageFreed = "cleaned"
 	} else if _, err := exec.LookPath("yum"); err == nil {
-		exec.Command("yum", "clean", "all").Run()
+		_ = exec.Command("yum", "clean", "all").Run()
 		result.PackageFreed = "cleaned"
 	} else if _, err := exec.LookPath("dnf"); err == nil {
-		exec.Command("dnf", "clean", "all").Run()
+		_ = exec.Command("dnf", "clean", "all").Run()
 		result.PackageFreed = "cleaned"
 	} else {
 		result.PackageFreed = "N/A"

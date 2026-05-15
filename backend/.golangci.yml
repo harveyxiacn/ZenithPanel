@@ -18,15 +18,13 @@ run:
 linters:
   default: none
   enable:
+    - errcheck       # unchecked errors — paired with explicit `_ = …` for
+                     # cases where dropping the error is genuinely safe (cleanup
+                     # paths, fire-and-forget audit/telemetry, etc.)
     - govet          # printf, copy-by-value, etc.
     - ineffassign    # writes that are immediately overwritten
     - staticcheck    # canonical Go correctness checks
     - unused         # dead code (subject to deliberate //nolint markers)
-  # errcheck is intentionally NOT enabled in this first pass: the existing
-  # codebase has many deferred Close() and one-shot rand.Read calls without
-  # error handling. Enabling it would flood CI with pre-existing noise that
-  # has no realistic exploit path. The next sweep will turn errcheck on and
-  # add explicit handlers or //nolint markers in the same commit.
   settings:
     staticcheck:
       # Drop the QFxxxx "quick-fix" suggestions and the STxxxx stylecheck
@@ -41,8 +39,45 @@ linters:
         - "-ST1005"  # error strings should not be capitalized
         - "-ST1000"  # every file should have a package comment (existing code rarely does)
         - "-ST1003"  # naming conventions (TLS vs Tls etc — pre-existing patterns)
+    errcheck:
+      # Functions whose error returns we explicitly accept dropping. These
+      # are not "we forgot to check" cases — they are "the error is genuinely
+      # non-actionable in this context". Adding a function here is a design
+      # decision; do it only if every call site can ignore the error safely.
+      exclude-functions:
+        # Cleanup / resource-release errors. A failed Close on a read-only
+        # handle just means the kernel already cleaned up; logging would add
+        # noise without helping anyone.
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*net.TCPConn).Close
+        - (*net.UDPConn).Close
+        - (net.Conn).Close
+        - (net.Listener).Close
+        - (*crypto/tls.Conn).Close
+        - (*github.com/gorilla/websocket.Conn).Close
+        # crypto/rand.Read is documented as "always returns len(p), nil" on
+        # every supported platform; we use it for fixed-size buffers.
+        - crypto/rand.Read
+        # io.Copy/io.WriteString to discard sinks (typical pattern for
+        # consuming an HTTP body before close).
+        - io.Copy
+        # Cleanup paths where we don't care whether the file existed.
+        - os.Remove
+        - os.RemoveAll
+        # Audit/notify hooks fire-and-forget; failures are logged elsewhere.
+        - (database/sql.Result).LastInsertId
   exclusions:
-    rules: []
+    rules:
+      # Tests sometimes intentionally drop errors to drive a fast path.
+      - path: _test\.go
+        linters:
+          - errcheck
+      # The single-file recover() in audit.go uses the legacy idiom
+      # `defer func() { recover() }()` — refactoring it would require
+      # auditing every caller, so we suppress the one violation in-place.
+      - path: internal/api/audit\.go
+        text: "recover"
 
 issues:
   max-issues-per-linter: 0

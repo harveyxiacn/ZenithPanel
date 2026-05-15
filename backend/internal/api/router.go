@@ -327,6 +327,17 @@ func applyInboundPayload(target *model.Inbound, payload inboundPayload) {
 	}
 }
 
+// setSetting wraps config.SetSetting with a logged failure path. The handlers
+// that call it are already past their validation — they accepted the user's
+// request — so a SQLite write failure shouldn't 500 the response, but it
+// must be surfaced to whoever is tailing the logs (almost always a sign
+// that the panel data directory is read-only or out of space).
+func setSetting(key, value string) {
+	if err := config.SetSetting(key, value); err != nil {
+		log.Printf("config.SetSetting(%q): %v", key, err)
+	}
+}
+
 // partitionInboundEngines splits a list of enabled inbounds into the two
 // engines that will serve them in dual-engine mode. Used by the proxy/apply
 // endpoint and by startup auto-recovery to decide which engines to spin up.
@@ -2175,12 +2186,12 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 			// Clash API toggle + connections proxy (Sing-box experimental.clash_api)
 			proxyGroup.POST("/clash-api/enable", func(c *gin.Context) {
-				config.SetSetting("singbox_clash_api_enabled", "true")
+				setSetting("singbox_clash_api_enabled", "true")
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Clash API enabled. Re-apply Sing-box config to take effect."})
 			})
 
 			proxyGroup.POST("/clash-api/disable", func(c *gin.Context) {
-				config.SetSetting("singbox_clash_api_enabled", "false")
+				setSetting("singbox_clash_api_enabled", "false")
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Clash API disabled. Re-apply Sing-box config to take effect."})
 			})
 
@@ -2620,7 +2631,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			changed := false
 			if req.PanelPath != nil {
-				config.SetSetting("panel_path", *req.PanelPath)
+				setSetting("panel_path", *req.PanelPath)
 				changed = true
 			}
 			if req.Port != nil && *req.Port != "" {
@@ -2630,15 +2641,15 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Port must be 1-65535"})
 					return
 				}
-				config.SetSetting("port", *req.Port)
+				setSetting("port", *req.Port)
 				changed = true
 			}
 			if req.UsageProfile != nil {
-				config.SetSetting("usage_profile", normalizeUsageProfile(*req.UsageProfile))
+				setSetting("usage_profile", normalizeUsageProfile(*req.UsageProfile))
 				changed = true
 			}
 			if req.IPWhitelist != nil {
-				config.SetSetting("panel_ip_whitelist", strings.TrimSpace(*req.IPWhitelist))
+				setSetting("panel_ip_whitelist", strings.TrimSpace(*req.IPWhitelist))
 				changed = true
 			}
 			msg := "Settings saved."
@@ -2700,7 +2711,11 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 			// Save to data/tls/
 			tlsDir := "data/tls"
-			os.MkdirAll(tlsDir, 0700)
+			if err := os.MkdirAll(tlsDir, 0700); err != nil {
+				log.Printf("MkdirAll(%s): %v", tlsDir, err)
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to create TLS directory"})
+				return
+			}
 			certDst := filepath.Join(tlsDir, "cert.pem")
 			keyDst := filepath.Join(tlsDir, "key.pem")
 			if err := os.WriteFile(certDst, certData, 0600); err != nil {
@@ -2712,8 +2727,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 
-			config.SetSetting("tls_cert_path", certDst)
-			config.SetSetting("tls_key_path", keyDst)
+			setSetting("tls_cert_path", certDst)
+			setSetting("tls_key_path", keyDst)
 
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "TLS certificates uploaded. Restart panel to enable HTTPS."})
 		})
@@ -2721,8 +2736,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.DELETE("/admin/tls", func(c *gin.Context) {
 			os.Remove("data/tls/cert.pem")
 			os.Remove("data/tls/key.pem")
-			config.SetSetting("tls_cert_path", "")
-			config.SetSetting("tls_key_path", "")
+			setSetting("tls_cert_path", "")
+			setSetting("tls_key_path", "")
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "TLS disabled. Restart panel to apply."})
 		})
 
@@ -2732,11 +2747,19 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		authGroup.GET("/admin/audit-log", func(c *gin.Context) {
 			limit := 50
 			offset := 0
+			// Sscanf failure leaves the destination at its zero value, which
+			// would silently flip limit to 0 (i.e. "return nothing"). Capture
+			// the count return so a bad query string falls back to defaults
+			// instead of breaking the audit log view.
 			if v := c.Query("limit"); v != "" {
-				fmt.Sscanf(v, "%d", &limit)
+				if n, _ := fmt.Sscanf(v, "%d", &limit); n != 1 {
+					limit = 50
+				}
 			}
 			if v := c.Query("offset"); v != "" {
-				fmt.Sscanf(v, "%d", &offset)
+				if n, _ := fmt.Sscanf(v, "%d", &offset); n != 1 {
+					offset = 0
+				}
 			}
 			if limit > 200 {
 				limit = 200
@@ -2817,13 +2840,13 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					c.JSON(400, gin.H{"code": 400, "msg": "dns_mode must be 'plain' or 'doh'"})
 					return
 				}
-				config.SetSetting("dns_mode", mode)
+				setSetting("dns_mode", mode)
 			}
 			if req.DNSPrimary != nil {
-				config.SetSetting("dns_primary", strings.TrimSpace(*req.DNSPrimary))
+				setSetting("dns_primary", strings.TrimSpace(*req.DNSPrimary))
 			}
 			if req.DNSSecondary != nil {
-				config.SetSetting("dns_secondary", strings.TrimSpace(*req.DNSSecondary))
+				setSetting("dns_secondary", strings.TrimSpace(*req.DNSSecondary))
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Saved. Re-apply proxy config to take effect."})
 		})
@@ -2840,7 +2863,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			for k, v := range payload {
 				if allowed[k] {
-					config.SetSetting(k, v)
+					setSetting(k, v)
 				}
 			}
 			c.JSON(200, gin.H{"code": 200, "msg": "Saved"})

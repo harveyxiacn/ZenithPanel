@@ -20,9 +20,12 @@ func recordAudit(c *gin.Context, action, detail string) {
 		}
 	}
 	ip := c.ClientIP()
-	// Run in background so audit failures never affect the main request
+	// Run in background so audit failures never affect the main request.
+	// Recover (and explicitly drop the panic value with `_`) so a panicking
+	// audit write — caused by, say, a closed DB during shutdown — can't take
+	// the goroutine pool down with it.
 	go func() {
-		defer func() { recover() }()
+		defer func() { _ = recover() }()
 		config.DB.Create(&model.AuditLog{
 			Username: principal,
 			Action:   action,

@@ -95,7 +95,9 @@ func HandleTerminalWebSocket(c *gin.Context) {
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		ws.WriteMessage(websocket.TextMessage, []byte("\r\n\x1b[31mFailed to start shell: "+err.Error()+"\x1b[0m\r\n"))
+		// Best-effort error notification to the browser; if the write itself
+		// fails the socket is dead and we're returning anyway.
+		_ = ws.WriteMessage(websocket.TextMessage, []byte("\r\n\x1b[31mFailed to start shell: "+err.Error()+"\x1b[0m\r\n"))
 		return
 	}
 	defer func() {
@@ -110,11 +112,16 @@ func HandleTerminalWebSocket(c *gin.Context) {
 		for {
 			n, err := ptmx.Read(buf)
 			if err != nil {
-				ws.WriteMessage(websocket.TextMessage, []byte("\r\n\x1b[31m[Session ended]\x1b[0m\r\n"))
-				ws.Close()
+				// PTY closed — notify the browser if it's still listening,
+				// then drop the socket. Both writes are best-effort.
+				_ = ws.WriteMessage(websocket.TextMessage, []byte("\r\n\x1b[31m[Session ended]\x1b[0m\r\n"))
+				_ = ws.Close()
 				return
 			}
-			ws.WriteMessage(websocket.BinaryMessage, buf[:n])
+			// Output stream is heavy and per-keystroke. Logging every failed
+			// frame would drown out real errors; the next read iteration
+			// surfaces a hard disconnect.
+			_ = ws.WriteMessage(websocket.BinaryMessage, buf[:n])
 		}
 	}()
 
@@ -134,22 +141,27 @@ func HandleTerminalWebSocket(c *gin.Context) {
 					setTermSize(ptmx, msg.Cols, msg.Rows)
 				}
 			case "heartbeat":
-				// echo back
-				ws.WriteMessage(websocket.TextMessage, p)
+				// echo back — fire-and-forget; the next read failure will
+				// detect a dead socket.
+				_ = ws.WriteMessage(websocket.TextMessage, p)
 			case "cmd":
-				ptmx.Write([]byte(msg.Data))
+				// PTY write failures are surfaced by the readback goroutine
+				// going EOF; logging here would double-report.
+				_, _ = ptmx.Write([]byte(msg.Data))
 			}
 			continue
 		}
 
 		// Raw terminal input (plain text from xterm.js)
-		ptmx.Write(p)
+		_, _ = ptmx.Write(p)
 	}
 }
 
-// setTermSize sets the terminal window size on the PTY.
+// setTermSize sets the terminal window size on the PTY. Errors are ignored —
+// a failed resize just means the PTY closed under us and the next read will
+// surface that.
 func setTermSize(f *os.File, cols, rows int) {
-	pty.Setsize(f, &pty.Winsize{
+	_ = pty.Setsize(f, &pty.Winsize{
 		Rows: uint16(rows),
 		Cols: uint16(cols),
 	})
