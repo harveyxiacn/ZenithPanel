@@ -3099,11 +3099,19 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		// re-applies the managed routing rule, and triggers a proxy re-apply
 		// so both engines pick up the change immediately.
 		authGroup.GET("/admin/adblock", func(c *gin.Context) {
+			if !middleware.HasScope(c, "admin") {
+				c.JSON(http.StatusForbidden, gin.H{"code": 403, "msg": "Scope 'admin' required"})
+				return
+			}
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok", "data": gin.H{
 				"enabled": adblock.IsEnabled(config.GetSetting),
 			}})
 		})
 		authGroup.PUT("/admin/adblock", func(c *gin.Context) {
+			if !middleware.HasScope(c, "admin") {
+				c.JSON(http.StatusForbidden, gin.H{"code": 403, "msg": "Scope 'admin' required"})
+				return
+			}
 			var req struct {
 				Enabled bool `json:"enabled"`
 			}
@@ -3120,19 +3128,28 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
 				return
 			}
-			// Trigger an apply on whichever engine is currently active so the
-			// route table reloads with the new rule set. Best-effort: a
-			// failed apply still leaves the DB consistent for the next
-			// manual apply.
-			if xm.IsDualMode() || sm.IsDualMode() {
-				// Dual mode: nudge both. Errors are logged but not surfaced
-				// — the caller already accepted the toggle.
-				_ = xm.Restart()
-				_ = sm.Restart()
-			} else if xm.Status() {
-				_ = xm.Restart()
-			} else if sm.Status() {
-				_ = sm.Restart()
+			// Restart whichever engine(s) are running so the new routing rule
+			// materializes. Dual mode runs both restarts concurrently — they
+			// touch different binaries and config files, and serially they'd
+			// double the toggle latency on the slow path. Failures are logged
+			// (the UI toggle has already been persisted; next manual apply
+			// will pick up the rule).
+			restartEngine := func(name string, restart func() error) {
+				if err := restart(); err != nil {
+					log.Printf("adblock: %s restart failed: %v", name, err)
+				}
+			}
+			switch {
+			case xm.IsDualMode() || sm.IsDualMode():
+				var wg sync.WaitGroup
+				wg.Add(2)
+				go func() { defer wg.Done(); restartEngine("xray", xm.Restart) }()
+				go func() { defer wg.Done(); restartEngine("singbox", sm.Restart) }()
+				wg.Wait()
+			case xm.Status():
+				restartEngine("xray", xm.Restart)
+			case sm.Status():
+				restartEngine("singbox", sm.Restart)
 			}
 			recordAudit(c, "adblock.toggle", val)
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Ad-block " + val, "data": gin.H{"enabled": req.Enabled}})

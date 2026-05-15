@@ -73,16 +73,23 @@ func (m *Manager) Reload() error {
 func (m *Manager) Stop() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	// Best-effort close on shutdown. http.Server.Close returns whatever the
-	// underlying Listener returned, which during shutdown is usually
-	// "use of closed network connection" — non-actionable.
+	m.closeListenersLocked()
+	m.running = false
+}
+
+// closeListenersLocked tears down both HTTP servers and nils the pointers so
+// the next reload re-creates them from scratch. Caller must hold m.mu. Close
+// errors are non-actionable (the listener is usually already gone) so we
+// drop them.
+func (m *Manager) closeListenersLocked() {
 	if m.srv80 != nil {
 		_ = m.srv80.Close()
+		m.srv80 = nil
 	}
 	if m.srv443 != nil {
 		_ = m.srv443.Close()
+		m.srv443 = nil
 	}
-	m.running = false
 }
 
 // reload must be called with m.mu held.
@@ -140,14 +147,7 @@ func (m *Manager) reload() error {
 	// first Site, this path runs again via the /sites POST handler and
 	// brings the listeners up.
 	if len(sites) == 0 {
-		if m.srv80 != nil {
-			_ = m.srv80.Close()
-			m.srv80 = nil
-		}
-		if m.srv443 != nil {
-			_ = m.srv443.Close()
-			m.srv443 = nil
-		}
+		m.closeListenersLocked()
 		return nil
 	}
 

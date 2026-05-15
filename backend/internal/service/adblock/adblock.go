@@ -55,7 +55,6 @@ func Apply(db *gorm.DB, enabled bool) error {
 			return fmt.Errorf("create adblock rule: %w", err)
 		}
 	case enabled && found && !existing.Enable:
-		// Row exists but was disabled manually; re-enable.
 		existing.Enable = true
 		if err := db.Save(&existing).Error; err != nil {
 			return fmt.Errorf("re-enable adblock rule: %w", err)

@@ -633,41 +633,61 @@ func runInboundSetPort(c *Client, args []string, gf globalFlags) int {
 		fmt.Fprintln(os.Stderr, "usage: zenithctl inbound set-port <id> <port> [--sync-firewall]")
 		return 1
 	}
-	id := rest[0]
+	idNum, err := strconv.Atoi(rest[0])
+	if err != nil || idNum <= 0 {
+		fmt.Fprintln(os.Stderr, "id must be a positive integer")
+		return 1
+	}
 	newPort, err := strconv.Atoi(rest[1])
 	if err != nil || newPort <= 0 || newPort > 65535 {
 		fmt.Fprintln(os.Stderr, "port must be an integer in [1, 65535]")
 		return 1
 	}
 
-	// Fetch the full inbound list and pick out the target row. Avoids
-	// needing a dedicated GET-by-id route (the list endpoint already
-	// returns everything we need).
-	env, _, err := c.Do("GET", "/api/v1/inbounds", nil)
-	if err != nil || env == nil {
+	// No GET-by-id endpoint exists; fetch the full list and filter. Decode
+	// into a typed slice so we can compare IDs as integers and read port /
+	// protocol without going through interface{} casts.
+	listEnv, _, err := c.Do("GET", "/api/v1/inbounds", nil)
+	if err != nil || listEnv == nil {
 		fmt.Fprintln(os.Stderr, "list inbounds:", err)
 		return 1
 	}
-	var rows []map[string]any
-	if err := json.Unmarshal(env.Data, &rows); err != nil {
+	type inboundLite struct {
+		ID       int    `json:"id"`
+		Port     int    `json:"port"`
+		Protocol string `json:"protocol"`
+	}
+	var rowsLite []inboundLite
+	if err := json.Unmarshal(listEnv.Data, &rowsLite); err != nil {
 		fmt.Fprintln(os.Stderr, "decode inbounds:", err)
 		return 1
 	}
+	var oldPort int
+	var proto string
+	found := false
+	for _, r := range rowsLite {
+		if r.ID == idNum {
+			oldPort, proto, found = r.Port, r.Protocol, true
+			break
+		}
+	}
+	if !found {
+		fmt.Fprintf(os.Stderr, "no inbound with id %d\n", idNum)
+		return 2
+	}
+	// Re-decode the same payload into a generic map for the PUT — the server
+	// expects every field round-tripped, not just the few we typed above.
+	var rows []map[string]any
+	_ = json.Unmarshal(listEnv.Data, &rows)
 	var target map[string]any
 	for _, r := range rows {
-		// IDs are float64 after JSON decode; print/compare via string for safety.
-		if fmt.Sprintf("%v", r["id"]) == id {
+		if fmt.Sprintf("%v", r["id"]) == rest[0] {
 			target = r
 			break
 		}
 	}
-	if target == nil {
-		fmt.Fprintf(os.Stderr, "no inbound with id %s\n", id)
-		return 2
-	}
-	oldPort, _ := target["port"].(float64)
-	proto, _ := target["protocol"].(string)
 	target["port"] = newPort
+	id := rest[0]
 
 	// PUT the full row back. The handler enforces the port-uniqueness check,
 	// so a collision returns 4xx with a clear message.
@@ -676,7 +696,7 @@ func runInboundSetPort(c *Client, args []string, gf globalFlags) int {
 		return exitFromEnvelope(st, putEnv, err, gf)
 	}
 	fmt.Fprintf(os.Stderr, "inbound %s: port %d -> %d (apply with `zenithctl proxy apply` to take effect)\n",
-		id, int(oldPort), newPort)
+		id, oldPort, newPort)
 
 	if *syncFw {
 		fwProto := "tcp"
@@ -684,7 +704,6 @@ func runInboundSetPort(c *Client, args []string, gf globalFlags) int {
 		if proto == "hysteria2" || proto == "tuic" {
 			fwProto = "udp"
 		}
-		// Open new port.
 		openEnv, openSt, err := c.Do("POST", "/api/v1/firewall/rules", map[string]any{
 			"port": strconv.Itoa(newPort), "protocol": fwProto, "action": "ACCEPT",
 		})
@@ -697,7 +716,7 @@ func runInboundSetPort(c *Client, args []string, gf globalFlags) int {
 		// numbers shift as rules are added/removed). We surface the
 		// suggestion as a hint instead of doing it automatically.
 		fmt.Fprintf(os.Stderr, "(old port %d/%s left in firewall; remove it manually if no other inbound uses it: `ufw delete allow %d/%s`)\n",
-			int(oldPort), fwProto, int(oldPort), fwProto)
+			oldPort, fwProto, oldPort, fwProto)
 	}
 
 	// Re-apply so the engines pick up the new port without a manual call.
