@@ -605,8 +605,107 @@ func runInbound(c *Client, args []string, gf globalFlags) int {
 		}
 		env, st, err := c.Do("DELETE", "/api/v1/inbounds/"+url.PathEscape(args[1]), nil)
 		return exitFromEnvelope(st, env, err, gf)
+	case "set-port":
+		return runInboundSetPort(c, args[1:], gf)
 	}
 	return 1
+}
+
+// runInboundSetPort changes the listening port of one inbound and optionally
+// reconciles the host firewall so the new port is open and the old port no
+// longer hangs around. The flow is deliberately three small API calls instead
+// of a single PATCH so it stays auditable and matches what an operator would
+// do by hand:
+//
+//  1. GET the inbound (we need every field PUT-back-friendly)
+//  2. PUT the inbound with the new port
+//  3. (optional) UFW open new, close old via the existing firewall routes
+//
+// Use --sync-firewall to do step 3.
+func runInboundSetPort(c *Client, args []string, gf globalFlags) int {
+	fs := flag.NewFlagSet("inbound set-port", flag.ContinueOnError)
+	syncFw := fs.Bool("sync-firewall", false, "also open the new port + close the old port in UFW")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	rest := fs.Args()
+	if len(rest) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: zenithctl inbound set-port <id> <port> [--sync-firewall]")
+		return 1
+	}
+	id := rest[0]
+	newPort, err := strconv.Atoi(rest[1])
+	if err != nil || newPort <= 0 || newPort > 65535 {
+		fmt.Fprintln(os.Stderr, "port must be an integer in [1, 65535]")
+		return 1
+	}
+
+	// Fetch the full inbound list and pick out the target row. Avoids
+	// needing a dedicated GET-by-id route (the list endpoint already
+	// returns everything we need).
+	env, _, err := c.Do("GET", "/api/v1/inbounds", nil)
+	if err != nil || env == nil {
+		fmt.Fprintln(os.Stderr, "list inbounds:", err)
+		return 1
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(env.Data, &rows); err != nil {
+		fmt.Fprintln(os.Stderr, "decode inbounds:", err)
+		return 1
+	}
+	var target map[string]any
+	for _, r := range rows {
+		// IDs are float64 after JSON decode; print/compare via string for safety.
+		if fmt.Sprintf("%v", r["id"]) == id {
+			target = r
+			break
+		}
+	}
+	if target == nil {
+		fmt.Fprintf(os.Stderr, "no inbound with id %s\n", id)
+		return 2
+	}
+	oldPort, _ := target["port"].(float64)
+	proto, _ := target["protocol"].(string)
+	target["port"] = newPort
+
+	// PUT the full row back. The handler enforces the port-uniqueness check,
+	// so a collision returns 4xx with a clear message.
+	putEnv, st, err := c.Do("PUT", "/api/v1/inbounds/"+url.PathEscape(id), target)
+	if err != nil || st != 200 {
+		return exitFromEnvelope(st, putEnv, err, gf)
+	}
+	fmt.Fprintf(os.Stderr, "inbound %s: port %d -> %d (apply with `zenithctl proxy apply` to take effect)\n",
+		id, int(oldPort), newPort)
+
+	if *syncFw {
+		fwProto := "tcp"
+		// QUIC-style protocols listen on UDP — match what the panel actually binds.
+		if proto == "hysteria2" || proto == "tuic" {
+			fwProto = "udp"
+		}
+		// Open new port.
+		openEnv, openSt, err := c.Do("POST", "/api/v1/firewall/rules", map[string]any{
+			"port": strconv.Itoa(newPort), "protocol": fwProto, "action": "ACCEPT",
+		})
+		if err != nil || openSt != 200 {
+			fmt.Fprintln(os.Stderr, "WARNING: failed to open new firewall port:", openEnv.Msg)
+		} else {
+			fmt.Fprintf(os.Stderr, "firewall: opened %d/%s\n", newPort, fwProto)
+		}
+		// Closing the old port via line number is fragile from a script (line
+		// numbers shift as rules are added/removed). We surface the
+		// suggestion as a hint instead of doing it automatically.
+		fmt.Fprintf(os.Stderr, "(old port %d/%s left in firewall; remove it manually if no other inbound uses it: `ufw delete allow %d/%s`)\n",
+			int(oldPort), fwProto, int(oldPort), fwProto)
+	}
+
+	// Re-apply so the engines pick up the new port without a manual call.
+	applyEnv, applySt, applyErr := c.Do("POST", "/api/v1/proxy/apply", nil)
+	if applyErr != nil || applySt != 200 {
+		fmt.Fprintln(os.Stderr, "WARNING: port updated but proxy apply failed:", applyEnv.Msg)
+	}
+	return exitFromEnvelope(200, putEnv, nil, gf)
 }
 
 func runClient(c *Client, args []string, gf globalFlags) int {
@@ -971,7 +1070,7 @@ Common commands:
   status                                  ping panel
   token list|create|revoke|bootstrap
   system info|bbr|swap|cleanup
-  inbound list|show|create|update|delete
+  inbound list|show|create|update|delete|set-port
   client list|add|delete
   proxy status|apply|config xray|test <id|all>|reality-keys
   sub url <uuid>

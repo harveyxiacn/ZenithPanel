@@ -192,6 +192,13 @@ func PerformUpdate(_ context.Context) error {
 	// 3. Prepare new container config with updated image.
 	// Clear runtime-only fields that Docker sets during creation and that
 	// would conflict or be meaningless on a brand-new container.
+	//
+	// We deliberately keep info.HostConfig (and thus its Binds) verbatim so
+	// the panel's data volume (/opt/zenithpanel/data) carries over: SQLite
+	// rows, generated configs, ACME certs, and audit logs all live there.
+	// This is the contract that lets operators change inbound ports through
+	// the UI and trust those ports to survive the next OTA — see
+	// docs/qr_setup_guide.md.
 	newConfig := info.Config
 	newConfig.Image = DefaultImage
 	newConfig.Hostname = ""
