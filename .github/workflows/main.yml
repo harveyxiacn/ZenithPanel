@@ -99,12 +99,77 @@ jobs:
       - name: Run frontend production build
         run: npm run build
 
+  docker-smoke:
+    # End-to-end smoke of the published Docker image: build locally with the
+    # same Dockerfile as the publish job, start the container, wait for the
+    # health endpoint to flip to 200, then exercise zenithctl via docker
+    # exec. Catches regressions where the image builds but the panel can't
+    # actually boot inside Alpine (missing libc, broken paths, etc.) before
+    # we ship it to ghcr.io.
+    runs-on: ubuntu-latest
+    needs:
+      - backend-verify
+      - frontend-verify
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4.0.0
+
+      - name: Build image locally (no push)
+        uses: docker/build-push-action@v7.0.0
+        with:
+          context: .
+          load: true
+          tags: zenithpanel:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start container
+        run: |
+          docker run -d \
+            --name zsmoke \
+            -p 18080:8080 \
+            -e ZENITH_PORT=8080 \
+            zenithpanel:smoke
+          # Tiny startup grace; the polling loop covers slow boots.
+          sleep 2
+
+      - name: Wait for /api/v1/health → 200
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:18080/api/v1/health > /tmp/health.json; then
+              echo "Panel responded after ${i}s:"
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Panel never returned 200 on /health"
+          docker logs zsmoke | tail -50
+          exit 1
+
+      - name: Exercise zenithctl inside the container
+        run: |
+          docker exec zsmoke /opt/zenithpanel/zenithpanel ctl version
+          docker exec zsmoke /opt/zenithpanel/zenithpanel ctl status
+
+      - name: Dump tail of panel logs (for the record)
+        if: always()
+        run: docker logs zsmoke 2>&1 | tail -40
+
+      - name: Tear down
+        if: always()
+        run: docker rm -f zsmoke || true
+
   build-and-push-image:
     runs-on: ubuntu-latest
     needs:
       - backend-lint
       - backend-verify
       - frontend-verify
+      - docker-smoke
     permissions:
       contents: read
       packages: write
