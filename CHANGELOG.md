@@ -3,6 +3,65 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — 2026-05-15 (QR-ready production rollout)
+
+### Added
+
+- **One-click ACME / Let's Encrypt** via Web UI (Settings → Let's Encrypt)
+  and CLI (`zenithctl cert issue --domain X --email Y`). Background
+  renewer ticks every 12 hours and re-issues any cert within 30 days of
+  expiry. Panel webserver yields :80 to lego during the HTTP-01 challenge
+  via a `PortBouncer` hook in `service/cert`.
+- **Ad-block toggle** at Settings → Ad block. When on, the panel inserts
+  a managed routing rule (`geosite:category-ads-all → block`) and
+  restarts both engines in parallel. When off, the rule is removed.
+  Admin-scope gated; CLI surface: `zenithctl raw PUT /api/v1/admin/adblock`.
+- **CLI `zenithctl inbound set-port <id> <port> [--sync-firewall]`** —
+  one-shot port change with auto-apply and optional UFW open.
+- **CLI `zenithctl backup restore --file backup.zip`** — closes the
+  previously-stubbed restore path.
+- **CLI `zenithctl token rotate <name>`** — mints a fresh same-name-v2
+  token, revokes the old one, **updates the active profile in place**
+  so the rotating session doesn't 401 mid-flight.
+- **CLI `zenithctl proxy test all`** — drives the server-side prober
+  across every enabled inbound; honors `--output table` and exits
+  non-zero on any failure.
+- **Per-client traffic counters** in `/api/v1/metrics`
+  (`zenithpanel_client_traffic_bytes{email,inbound,direction}`), plus
+  engine uptime gauges (`zenithpanel_xray_uptime_seconds`,
+  `zenithpanel_singbox_uptime_seconds`).
+- **`/api/v1/health` enrichment**: `xray_uptime_seconds`,
+  `singbox_uptime_seconds`, `last_apply_unix`. All accessible
+  pre-setup so external monitors keep working on fresh installs.
+
+### Changed
+
+- **Webserver lazy-bind.** The vhost reverse-proxy no longer holds
+  :80/:443 when zero sites are configured — idle binding was blocking
+  ACME's HTTP-01 challenge and presenting a 404 listener for nothing.
+  First Site creation triggers a Reload that re-acquires the ports.
+
+### Fixed
+
+- **TUIC password mismatch.** A previous round added a per-user TUIC
+  password override on the server, but the subscription URL generator
+  still emitted `UUID:UUID` — every TUIC client failed auth silently
+  and looked "slow / unable to load YouTube". Reverted the override:
+  TUIC users now always use UUID as the password, matching the share
+  link. Regression: `TestTUICPasswordIsAlwaysUUID`.
+- **SS-2022 multi-user password.** Subscription URL & Clash YAML now
+  emit `serverPSK:userPSK` (joined by `:`) when the cipher is
+  `2022-blake3-*`. Pre-fix the SS-2022 inbound silently rejected every
+  client because the share link only carried the server PSK.
+- **`inferTransport` mis-classified rewritten streams.** The probe
+  result's `transport` field was a substring match against canonical
+  Go JSON (no whitespace); streams round-tripped through tools that
+  add `": "` spacing showed up as `tcp` instead of `ws+tls`/`tcp+tls`.
+  Now uses real `json.Unmarshal`.
+- **Xray sniff drops the dead `fakedns` destOverride.** The panel
+  doesn't wire a fakedns outbound; listing it in sniff per inbound
+  added a no-op DNS sniff per connection (~tens of ms each).
+
 ## [Unreleased] — 2026-05-15 (sing-box rule-sets + Probe All)
 
 ### Changed

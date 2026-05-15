@@ -253,6 +253,21 @@ ZenithPanel 默认 **Xray** 与 **Sing-box** 同时运行。当你调用
 
 ---
 
+## 🛡️ 广告拦截（路由层）
+
+**设置 → 广告拦截** 一键开关：开启后面板自动插入一条 managed 路由规则，
+把 `geosite:category-ads-all` 流量送进 `block` 出口。两个引擎自动重载，
+立即生效，无需手动 *应用配置*。
+
+> 路由层广告拦截**无法剥离 YouTube 视频中的服务端拼接广告**——广告与
+> 视频走同一个 `googlevideo.com` CDN。要彻底去除 YouTube 广告需要 DOM
+> 级方案：浏览器装 uBlock Origin、Android TV 用 SmartTube、手机用
+> ReVanced。
+
+CLI 控制：`zenithctl raw PUT /api/v1/admin/adblock --data '{"enabled":true}'`。
+
+---
+
 ## 🔍 服务端入站探活
 
 **入站节点** 表格每行都有一个 **探活** 按钮。点击后面板会在本机做一次

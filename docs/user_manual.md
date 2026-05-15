@@ -261,6 +261,23 @@ operator deliberately runs single-engine.
 
 ---
 
+## 🛡️ Ad Block (Routing-Layer)
+
+A one-click toggle in **Settings → Ad block** inserts a managed routing
+rule that sends `geosite:category-ads-all` traffic to the panel's `block`
+outbound. Both engines reload automatically — the change takes effect
+immediately, no manual *Apply Configuration* required.
+
+> Routing-layer ad-blocking can't strip server-side-inserted ads inside
+> YouTube videos (the ad and the video share the same `googlevideo.com`
+> CDN). For DOM-level YouTube ad-stripping, pair the panel toggle with
+> uBlock Origin in your browser, SmartTube on Android TV, or ReVanced on
+> mobile.
+
+CLI control: `zenithctl raw PUT /api/v1/admin/adblock --data '{"enabled":true}'`.
+
+---
+
 ## 🔍 Server-Side Inbound Probe
 
 Each row in the **Inbound Nodes** table has a **Probe** button. Clicking
