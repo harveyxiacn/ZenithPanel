@@ -257,6 +257,9 @@ export default {
       probe: '接続確認',
       probeTooltip: 'サーバー側でこのインバウンドの接続性をチェックします',
       probeRecheck: 'クリックで再チェック',
+      probeAll: '一括確認',
+      probingAll: '確認中…',
+      probeAllTooltip: '有効なすべてのインバウンドを順に確認し、結果を各行にインライン表示します',
     },
     routing: {
       title: 'ルーティングルール',
