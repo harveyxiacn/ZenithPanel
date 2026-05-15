@@ -22,6 +22,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/docker"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/audit"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/monitor"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/notify"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
@@ -168,6 +169,13 @@ func main() {
 			monitor.PersistHourlySnapshot(config.DB)
 		}
 	}()
+
+	// 5d-bis. Audit-log retention: daily prune of rows older than the
+	// configured window (default 90 days). The first prune runs immediately
+	// so a long-offline panel catches up on boot. Cleanup hook returned so
+	// graceful shutdown can stop the loop.
+	stopAuditRetention := audit.Start(config.DB, config.GetSetting)
+	_ = stopAuditRetention // shutdown is process-exit so no explicit teardown needed
 
 	// 5e. Telegram bot lifecycle: watches the enable flag every 30s and
 	// starts/stops the long-polling goroutine accordingly. Splitting the
