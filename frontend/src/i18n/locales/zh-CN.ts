@@ -254,6 +254,9 @@ export default {
       ssMethod: '加密方法',
       ssPassword: '密码',
       addUser: '添加用户',
+      probe: '探活',
+      probeTooltip: '从服务端对此入站做一次连通性检查',
+      probeRecheck: '点击重新检测',
     },
     routing: {
       title: '路由规则',

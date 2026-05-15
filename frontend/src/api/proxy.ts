@@ -118,3 +118,22 @@ export function enableClashApi() {
 export function disableClashApi() {
   return apiClient.post('/v1/proxy/clash-api/disable')
 }
+
+// Inbound connectivity probe — calls the server-side prober. See
+// docs/cli_api_spec.md §2.5 and service/diagnostic.ProbeInbound for the
+// shape of `data`.
+export interface InboundProbeResult {
+  inbound_id: number
+  tag: string
+  protocol: string
+  transport: string
+  port: number
+  ok: boolean
+  stage?: string
+  elapsed_ms: number
+  err?: string
+}
+
+export function probeInbound(id: number) {
+  return apiClient.get<{ code: number; msg: string; data: InboundProbeResult }>(`/v1/proxy/test/${id}`)
+}

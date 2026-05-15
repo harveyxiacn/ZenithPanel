@@ -261,6 +261,9 @@ export default {
       ssMethod: 'Encryption Method',
       ssPassword: 'Password',
       addUser: 'Add User',
+      probe: 'Probe',
+      probeTooltip: 'Run a server-side connectivity check on this inbound',
+      probeRecheck: 'click to re-check',
     },
     routing: {
       title: 'Routing Rules',
