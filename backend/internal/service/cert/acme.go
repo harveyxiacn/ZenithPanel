@@ -48,6 +48,24 @@ func IssueCertificate(domain string, email string) error {
 	return nil
 }
 
+// PortBouncer is anything that can briefly free :80 so lego's HTTP-01
+// challenge server can bind it, then put itself back. The panel's
+// webserver manager satisfies this; tests pass a no-op.
+//
+// Set via SetPortBouncer at startup so the cert package doesn't have to
+// import the webserver package (which would create a cycle).
+type PortBouncer interface {
+	Stop()
+	Start() error
+}
+
+var portBouncer PortBouncer
+
+// SetPortBouncer registers the running webserver so ACME issuance can hand
+// off port 80 cleanly. Safe to call with nil (disables the dance — used in
+// tests and on hosts where no other process holds :80).
+func SetPortBouncer(b PortBouncer) { portBouncer = b }
+
 // ObtainCert runs the full ACME HTTP-01 flow and returns the on-disk cert/key paths.
 func ObtainCert(domain string, email string) (certPath, keyPath string, err error) {
 	if !domainRe.MatchString(domain) || len(domain) > 253 {
@@ -72,8 +90,24 @@ func ObtainCert(domain string, email string) (certPath, keyPath string, err erro
 		return "", "", fmt.Errorf("create ACME client: %w", err)
 	}
 
-	// HTTP-01 challenge: lego starts a temporary server on :80 to serve the token.
-	// Requires port 80 to be accessible from the internet.
+	// HTTP-01 challenge: lego starts a temporary server on :80 to serve the
+	// token. The panel's webserver also wants :80 for vhost reverse-proxy.
+	// To avoid "address already in use", briefly hand the port to lego.
+	// Re-takeover happens via defer so we always restart the webserver even
+	// if the challenge errors out.
+	if portBouncer != nil {
+		portBouncer.Stop()
+		defer func() {
+			if rerr := portBouncer.Start(); rerr != nil {
+				// Restart failure is logged at the caller; we can't unwind
+				// the cert issuance, just surface it alongside the original
+				// (possibly nil) err.
+				if err == nil {
+					err = fmt.Errorf("ACME succeeded but webserver restart failed: %w", rerr)
+				}
+			}
+		}()
+	}
 	if err := client.Challenge.SetHTTP01Provider(http01.NewProviderServer("", "80")); err != nil {
 		return "", "", fmt.Errorf("set HTTP-01 provider: %w", err)
 	}
