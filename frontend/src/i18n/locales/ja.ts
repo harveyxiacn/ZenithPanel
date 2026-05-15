@@ -446,6 +446,14 @@ export default {
       confirmTitle: 'バックアップから復元しますか？',
       confirmRestore: '現在の入站、クライアント、ルーティングルール、Cron ジョブはすべてアーカイブの内容で置き換えられます。続行しますか？',
     },
+    adblock: {
+      title: '広告ブロック',
+      subtitle: '広告ネットワークとトラッキングドメインを両エンジンの block 出口へルーティング。',
+      howItWorks: '有効化すると、パネルが geosite:category-ads-all トラフィックを block 出口へ送るルーティングルールを追加し、両エンジンが自動的にリロードされます。',
+      youtubeCaveat: '注: YouTube は動画内広告を本編と同じ CDN（サーバーサイド挿入）から配信するため、本機能では除去できません。完全に広告を除去したい場合は、ブラウザの uBlock Origin、Android TV の SmartTube、モバイルの ReVanced などをお使いください。',
+      toastEnabled: '広告ブロックを有効化しました',
+      toastDisabled: '広告ブロックを無効化しました',
+    },
     acme: {
       title: "Let's Encrypt (ACME)",
       subtitle: 'この VPS を指す任意のドメインに正式な TLS 証明書を発行。30日ごとに自動更新。',

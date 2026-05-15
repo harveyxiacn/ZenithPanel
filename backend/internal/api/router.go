@@ -33,6 +33,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/docker"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/adblock"
 	backupsvc "github.com/harveyxiacn/ZenithPanel/backend/internal/service/backup"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/cert"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/diagnostic"
@@ -3093,6 +3094,49 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		// Smart Deploy — preset-driven one-click egress with reversible
 		// tuning. See docs/superpowers/specs/2026-04-21-smart-deploy-design.md.
 		RegisterDeployRoutes(authGroup)
+
+		// Ad-block toggle: GET reports current state; PUT flips the setting,
+		// re-applies the managed routing rule, and triggers a proxy re-apply
+		// so both engines pick up the change immediately.
+		authGroup.GET("/admin/adblock", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok", "data": gin.H{
+				"enabled": adblock.IsEnabled(config.GetSetting),
+			}})
+		})
+		authGroup.PUT("/admin/adblock", func(c *gin.Context) {
+			var req struct {
+				Enabled bool `json:"enabled"`
+			}
+			if err := c.ShouldBindJSON(&req); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid parameters"})
+				return
+			}
+			val := "false"
+			if req.Enabled {
+				val = "true"
+			}
+			setSetting(adblock.SettingKey, val)
+			if err := adblock.Apply(config.DB, req.Enabled); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
+				return
+			}
+			// Trigger an apply on whichever engine is currently active so the
+			// route table reloads with the new rule set. Best-effort: a
+			// failed apply still leaves the DB consistent for the next
+			// manual apply.
+			if xm.IsDualMode() || sm.IsDualMode() {
+				// Dual mode: nudge both. Errors are logged but not surfaced
+				// — the caller already accepted the toggle.
+				_ = xm.Restart()
+				_ = sm.Restart()
+			} else if xm.Status() {
+				_ = xm.Restart()
+			} else if sm.Status() {
+				_ = sm.Restart()
+			}
+			recordAudit(c, "adblock.toggle", val)
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Ad-block " + val, "data": gin.H{"enabled": req.Enabled}})
+		})
 
 		// API token CRUD for CLI / headless automation. See docs/cli_api_spec.md.
 		registerAPITokenRoutes(authGroup)

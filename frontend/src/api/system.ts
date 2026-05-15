@@ -196,6 +196,14 @@ export interface ApiTokenCreateResponse extends ApiTokenRow {
   token: string // plaintext — shown to user once and never persisted client-side
 }
 
+export function getAdBlockStatus() {
+  return apiClient.get<{ code: number; msg: string; data: { enabled: boolean } }>('/v1/admin/adblock')
+}
+
+export function setAdBlockEnabled(enabled: boolean) {
+  return apiClient.put<{ code: number; msg: string; data: { enabled: boolean } }>('/v1/admin/adblock', { enabled })
+}
+
 export function listApiTokens() {
   return apiClient.get<{ code: number; msg: string; data: ApiTokenRow[] }>('/v1/admin/api-tokens')
 }

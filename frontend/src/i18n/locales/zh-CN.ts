@@ -446,6 +446,14 @@ export default {
       confirmTitle: '确认从备份恢复？',
       confirmRestore: '这将用归档内容替换当前所有入站、客户端、路由规则和 Cron 任务。继续？',
     },
+    adblock: {
+      title: '广告拦截',
+      subtitle: '把广告联盟与追踪器域名在路由层送进 block 出口，两个引擎同时生效。',
+      howItWorks: '开启后面板会自动插入一条 panel-managed 的路由规则，把 geosite:category-ads-all 流量送到 block 出口；代理引擎随后自动重载。',
+      youtubeCaveat: '提示：YouTube 视频内插广告与正常视频走同一个 CDN（服务器端拼接），路由层无法剥离。要彻底跳过 YouTube 广告，需要浏览器端 uBlock Origin、Android TV 上 SmartTube、或手机端 ReVanced。',
+      toastEnabled: '广告拦截已开启',
+      toastDisabled: '广告拦截已关闭',
+    },
     acme: {
       title: "Let's Encrypt 证书 (ACME)",
       subtitle: '为已解析到本 VPS 的任意域名一键申请正式 TLS 证书；每 30 天自动续期。',
