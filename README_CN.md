@@ -115,6 +115,22 @@ docker run -d \
 docker logs zenithpanel
 ```
 
+### 可选：为 Hysteria2 / TUIC / WS-TLS 配 TLS 证书
+
+QUIC 类协议（Hysteria2、TUIC）和 `ws+tls` 等变体都需要 TLS 证书。
+两条路：
+
+- **不配域名** — 面板自动回退到自签证书（CN = 服务器 IP）。快速配置里
+  把"域名"留空即可；生成的订阅 URL 会自动带 `insecure=1`，客户端
+  跳过证书校验。最省事，但失去严格 TLS 校验，证书指纹也容易被
+  DPI 识别。
+- **配域名** — 面板内置 ACME 流程会自动签 Let's Encrypt 证书并接到
+  入站上。如果主机 80 端口被占用（反向代理、隧道等），改走
+  `acme.sh + DNS-01 via DDNS`，详见
+  [docs/qr_setup_guide_CN.md §3](docs/qr_setup_guide_CN.md#3-申请正式-lets-encrypt-证书)。
+  acme.sh 支持的所有 DNS 服务商都能用（DuckDNS、Cloudflare、
+  DNSPod 等）。
+
 ### 从源码构建
 
 ```bash

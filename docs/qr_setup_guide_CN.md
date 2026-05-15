@@ -103,6 +103,65 @@ ACME 只产出文件，还要让入站用上：
 下的 `.crt`，**到期前 30 天**的会用首次申请时记下的 `acme_email` 自动
 重新申请。**无需手动续期**。
 
+### 备选：DNS-01 via DDNS（80 端口被占用时）
+
+面板内嵌的 lego 走 HTTP-01 挑战时需要临时绑定 `:80`。如果你的 80 端口
+被别的服务长期占用（反向代理、ingress 控制器、`tunwg` 这类隧道守护
+进程等），HTTP-01 会失败，又不可能每次续期都停掉它。
+
+干净的做法是改走 **DNS-01**，通过有 API 的动态 DNS 服务商完成挑战。
+acme.sh 内置支持很多服务商——例如 **DuckDNS、Cloudflare、DNSPod、
+阿里云 DNS、Namecheap、He.net** 等，凡是
+[acme.sh dnsapi 列表][acme-dnsapi]里的都能用。
+
+[acme-dnsapi]: https://github.com/acmesh-official/acme.sh/wiki/dnsapi
+
+**操作步骤**（这里以 DuckDNS 为举例，其他服务商对应的环境变量名
+请参考上面 dnsapi 页面）：
+
+```bash
+# 1. 安装 acme.sh
+curl https://get.acme.sh | sh -s email=you@example.com
+
+# 2. 服务商 API 凭据（此例为 DuckDNS）。
+#    用 Cloudflare 时则设置 CF_Token / CF_Account_ID，依此类推。
+export DuckDNS_Token='<你的服务商 token>'
+
+# 3. 用解析到本 VPS 的域名签发
+~/.acme.sh/acme.sh --issue --dns dns_duckdns \
+  -d your-subdomain.duckdns.org \
+  --server letsencrypt
+
+# 4. 安装到面板证书目录，并设置续期后自动 reload sing-box。
+#    Xray 每次连接动态读取证书，sing-box 启动时一次性读，
+#    所以续期后必须 proxy apply 才会让新证书生效。
+~/.acme.sh/acme.sh --install-cert -d your-subdomain.duckdns.org --ecc \
+  --fullchain-file /opt/zenithpanel/data/certs/fullchain.pem \
+  --key-file       /opt/zenithpanel/data/certs/privkey.pem \
+  --reloadcmd      'docker exec zenithpanel /opt/zenithpanel/zenithpanel ctl proxy apply >/dev/null 2>&1'
+```
+
+acme.sh 在安装时自动创建 cron，到期前约 60 天会自动重新签发；
+`--reloadcmd` 保证 sing-box 加载新证书。token 持久化在
+`~/.acme.sh/account.conf`（权限 600）。
+
+#### 可选：让 DDNS 域名跟着 IP 变更自动更新
+
+如果你的 VPS 公网 IP 可能变（重装、迁移、ISP 轮换），加一行 cron
+让 DDNS 记录跟随主机。DuckDNS 为例：
+
+```bash
+( crontab -l 2>/dev/null; echo "*/5 * * * * curl -fsS 'https://www.duckdns.org/update?domains=your-subdomain&token=<TOKEN>' >/dev/null" ) | crontab -
+```
+
+其他服务商有对应的更新 URL 或 CLI（如 `cloudflare-ddns`、
+`cf-ddns.sh`），按你用的服务商挑一个。
+
+> **为什么不直接默认 Cloudflare / DNSPod？** 这些其实和上面一样
+> 跑得通——acme.sh 的 `--dns dns_cf`、`--dns dns_dp` 是
+> `dns_duckdns` 的等价替换。这里用 DuckDNS 举例只是因为它免费、
+> 注册即用，你按自己情况换就行。
+
 ---
 
 ## 4. 排障
