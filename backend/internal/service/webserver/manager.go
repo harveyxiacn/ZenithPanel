@@ -134,7 +134,24 @@ func (m *Manager) reload() error {
 	}
 	m.certs = newCerts
 
-	// HTTP :80 — always start; redirects non-TLS sites or handles TLS-less ones
+	// Lazy bind: with no enabled sites, don't hold :80/:443. Idle binding
+	// blocks ACME's HTTP-01 challenge, conflicts with other services, and
+	// presents a 404 listener that's pure noise. When the user creates the
+	// first Site, this path runs again via the /sites POST handler and
+	// brings the listeners up.
+	if len(sites) == 0 {
+		if m.srv80 != nil {
+			_ = m.srv80.Close()
+			m.srv80 = nil
+		}
+		if m.srv443 != nil {
+			_ = m.srv443.Close()
+			m.srv443 = nil
+		}
+		return nil
+	}
+
+	// HTTP :80 — only when we have at least one site that wants it.
 	if m.srv80 != nil {
 		m.srv80.Handler = mux80
 	} else {
