@@ -609,12 +609,13 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 
 		case "shadowsocks":
 			method, password := parseSSSettings(in.Settings)
+			clientPSK := ssClientPassword(method, password, client.UUID)
 			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
 			sb.WriteString("    type: ss\n")
 			fmt.Fprintf(sb, "    server: %s\n", publicServer)
 			fmt.Fprintf(sb, "    port: %d\n", in.Port)
 			fmt.Fprintf(sb, "    cipher: %s\n", method)
-			fmt.Fprintf(sb, "    password: %s\n", password)
+			fmt.Fprintf(sb, "    password: %s\n", clientPSK)
 			sb.WriteString("    udp: true\n")
 
 		case "tuic":
@@ -785,7 +786,7 @@ func buildBase64Links(inbounds []model.Inbound, client model.Client, serverAddr 
 		case "trojan":
 			link = buildTrojanLink(in, client, publicServer, si, remark)
 		case "shadowsocks":
-			link = buildSSLink(in, publicServer, remark)
+			link = buildSSLink(in, client, publicServer, remark)
 		case "hysteria2":
 			link = buildHysteria2Link(in, client, publicServer, si, remark)
 		case "tuic":
@@ -982,13 +983,14 @@ func appendTransportParams(params url.Values, si streamInfo) {
 }
 
 // buildSSLink generates a ss:// share link per SIP002. Supports plugin hints.
-func buildSSLink(in model.Inbound, server string, remark string) string {
+func buildSSLink(in model.Inbound, client model.Client, server string, remark string) string {
 	method, password := parseSSSettings(in.Settings)
 	if method == "" || password == "" {
 		return ""
 	}
+	clientPSK := ssClientPassword(method, password, client.UUID)
 	// SIP002: userinfo is base64url(method:password) without padding.
-	userInfo := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + password))
+	userInfo := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + clientPSK))
 	base := fmt.Sprintf("ss://%s@%s:%d", userInfo, server, in.Port)
 
 	pluginName, pluginOpts := parseSSPlugin(in.Settings)
@@ -1091,6 +1093,24 @@ func buildHysteria2Link(in model.Inbound, client model.Client, server string, si
 }
 
 // parseSSSettings extracts method and password from Shadowsocks settings JSON.
+// ssClientPassword returns the password the CLIENT should send for a given
+// Shadowsocks inbound. For modern 2022-blake3-* ciphers running in multi-user
+// mode (the panel's default when there's a non-empty client UUID), the spec
+// requires the client to authenticate with `serverPSK:userPSK` joined by a
+// colon — xray-core decrypts the server PSK, then resolves the user from the
+// per-user PSK. For legacy ciphers (aes-256-gcm, chacha20-ietf-poly1305,
+// etc.) there is no multi-user concept and the single server password is
+// what the client sends.
+//
+// Pre-fix the panel was emitting only the server PSK for every cipher,
+// which made SS-2022 inbounds silently fail to authenticate any client.
+func ssClientPassword(method, serverPSK, userPSK string) string {
+	if strings.HasPrefix(method, "2022-blake3") && userPSK != "" {
+		return serverPSK + ":" + userPSK
+	}
+	return serverPSK
+}
+
 func parseSSSettings(settingsJSON string) (method, password string) {
 	method = "aes-256-gcm"
 	password = ""

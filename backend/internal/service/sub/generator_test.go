@@ -373,6 +373,43 @@ func TestBuildHysteria2LinkRespectsObfsAndInsecureFlag(t *testing.T) {
 	}
 }
 
+// TestBuildSSLinkSS2022CombinesServerAndUserPSK pins the multi-user-mode
+// password format: clients must authenticate with `serverPSK:userPSK`.
+// Pre-fix the share URL was emitting only the server PSK, so SS-2022
+// inbounds silently rejected every client.
+func TestBuildSSLinkSS2022CombinesServerAndUserPSK(t *testing.T) {
+	in := model.Inbound{
+		Tag: "ss-2022", Protocol: "shadowsocks", Port: 31404,
+		Settings: `{"method":"2022-blake3-aes-128-gcm","password":"SERVER-PSK"}`,
+	}
+	client := model.Client{UUID: "USER-PSK", Email: "u"}
+	link := buildSSLink(in, client, "1.2.3.4", "ss-2022")
+
+	at := strings.Index(link, "@")
+	if at < 0 {
+		t.Fatalf("malformed ss link: %s", link)
+	}
+	userInfoB64 := link[len("ss://"):at]
+	decoded, err := base64.RawURLEncoding.DecodeString(userInfoB64)
+	if err != nil {
+		t.Fatalf("userinfo not base64-url decodable: %v", err)
+	}
+	want := "2022-blake3-aes-128-gcm:SERVER-PSK:USER-PSK"
+	if string(decoded) != want {
+		t.Errorf("userinfo = %q, want %q", string(decoded), want)
+	}
+}
+
+// TestSSClientPasswordLegacyCipherIsServerOnly: for legacy non-2022 ciphers
+// there is no multi-user mode, so the client password is just the server PSK
+// regardless of any UUID set on the row.
+func TestSSClientPasswordLegacyCipherIsServerOnly(t *testing.T) {
+	got := ssClientPassword("aes-256-gcm", "server-pw", "user-pw")
+	if got != "server-pw" {
+		t.Errorf("legacy cipher: want server-only password, got %q", got)
+	}
+}
+
 func TestBuildSSLinkUsesRawURLEncodingAndPlugin(t *testing.T) {
 	in := model.Inbound{
 		Tag: "ss", Protocol: "shadowsocks", Port: 8388,
@@ -383,7 +420,7 @@ func TestBuildSSLinkUsesRawURLEncodingAndPlugin(t *testing.T) {
 			"plugin_opts": "obfs=tls;obfs-host=www.bing.com"
 		}`,
 	}
-	link := buildSSLink(in, "1.2.3.4", "ss-node")
+	link := buildSSLink(in, model.Client{}, "1.2.3.4", "ss-node")
 
 	if !strings.HasPrefix(link, "ss://") {
 		t.Fatalf("expected ss:// prefix, got: %s", link)
