@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -65,13 +65,26 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 			"action":   "hijack-dns",
 		},
 	}
+	// Collect unique rule-set tags as we walk the routing rules so we can
+	// declare them once in route.rule_set[] below. Sing-box 1.13 removed the
+	// in-line `geosite`/`geoip` syntax; the new shape is "reference a named
+	// rule_set". We pin every site/ip tag the user mentioned so missing-set
+	// failures surface at apply time instead of in proxied traffic.
+	usedSite := map[string]bool{}
+	usedGeoIP := map[string]bool{}
 	for _, r := range rules {
 		if !r.Enable {
 			continue
 		}
-		ruleMap := buildSingboxRoutingRule(r)
+		ruleMap, siteTags, ipTags := buildSingboxRoutingRule(r)
 		if ruleMap != nil {
 			routeRules = append(routeRules, ruleMap)
+		}
+		for _, t := range siteTags {
+			usedSite[t] = true
+		}
+		for _, t := range ipTags {
+			usedGeoIP[t] = true
 		}
 	}
 
@@ -147,6 +160,7 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 			"rules":                 routeRules,
 			"final":                 "direct",
 			"auto_detect_interface": true,
+			"rule_set":              buildSingboxRuleSets(usedSite, usedGeoIP),
 		},
 	}
 
@@ -158,19 +172,27 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 		singboxConfig["inbounds"] = append(singboxConfig["inbounds"].([]interface{}), inboundEntry)
 	}
 
-	// Enable Clash API for real-time connection inspection if toggled in settings.
+	// `experimental.cache_file` is unconditional — sing-box uses it to cache
+	// downloaded rule_set bundles so a restart doesn't re-fetch them. Without
+	// the cache every restart re-downloads 1–5 MB of geosite/geoip data.
+	experimental := map[string]interface{}{
+		"cache_file": map[string]interface{}{
+			"enabled": true,
+			"path":    "data/singbox-cache.db",
+		},
+	}
+	// Clash API toggle layers on top of the cache_file block.
 	if config.GetSetting("singbox_clash_api_enabled") == "true" {
 		port := config.GetSetting("singbox_clash_api_port")
 		if port == "" {
 			port = "9090"
 		}
-		singboxConfig["experimental"] = map[string]interface{}{
-			"clash_api": map[string]interface{}{
-				"external_controller": "127.0.0.1:" + port,
-				"secret":              "",
-			},
+		experimental["clash_api"] = map[string]interface{}{
+			"external_controller": "127.0.0.1:" + port,
+			"secret":              "",
 		}
 	}
+	singboxConfig["experimental"] = experimental
 
 	return PrettifyJSON(singboxConfig)
 }
@@ -677,23 +699,89 @@ func applyStreamToSingbox(entry map[string]interface{}, stream map[string]interf
 	}
 }
 
-// buildSingboxRoutingRule converts a DB routing rule to sing-box route rule format.
-func buildSingboxRoutingRule(r model.RoutingRule) map[string]interface{} {
+// SingboxRuleSetBase is the upstream that hosts the binary rule-sets
+// (`.srs` files) that sing-box 1.13+ expects to see referenced by name.
+// The SagerNet repos ship one file per geosite/geoip category and update
+// weekly; cache files land under `data/singbox-cache/` (configured in
+// experimental.cache_file) so a panel restart doesn't re-download.
+//
+// Overridable for testing via the proxy_rule_set_base setting.
+const (
+	defaultGeositeBase = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set"
+	defaultGeoipBase   = "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set"
+)
+
+// buildSingboxRuleSets renders the route.rule_set[] block declaring every
+// geosite/geoip tag the routing rules referenced. Tags are sorted so the
+// generated config is stable and diffable. download_detour is pinned to
+// "direct" — fetching a rule-set through a proxy outbound that isn't yet
+// configured would deadlock the boot path.
+func buildSingboxRuleSets(usedSite, usedGeoIP map[string]bool) []interface{} {
+	if len(usedSite) == 0 && len(usedGeoIP) == 0 {
+		return nil
+	}
+	tags := make([]string, 0, len(usedSite)+len(usedGeoIP))
+	for t := range usedSite {
+		tags = append(tags, t)
+	}
+	for t := range usedGeoIP {
+		tags = append(tags, t)
+	}
+	sort.Strings(tags)
+	out := make([]interface{}, 0, len(tags))
+	for _, tag := range tags {
+		var url string
+		switch {
+		case strings.HasPrefix(tag, "geosite-"):
+			url = defaultGeositeBase + "/" + tag + ".srs"
+		case strings.HasPrefix(tag, "geoip-"):
+			url = defaultGeoipBase + "/" + tag + ".srs"
+		default:
+			continue
+		}
+		out = append(out, map[string]interface{}{
+			"tag":             tag,
+			"type":            "remote",
+			"format":          "binary",
+			"url":             url,
+			"download_detour": "direct",
+			// Weekly refresh is plenty; the upstream files only change on
+			// CIDR-bundle updates.
+			"update_interval": "168h0m0s",
+		})
+	}
+	return out
+}
+
+// buildSingboxRoutingRule converts a DB routing rule to sing-box route rule
+// format. Geosite/geoip references (`geosite:cn`, `geoip:private`, …) are
+// translated into rule_set tags so we can declare them once at the top of
+// the config — sing-box 1.13 removed the bundled-geosite legacy syntax,
+// and the official replacement is "remote rule-sets" loaded over HTTPS.
+//
+// Returns the rule map plus the (geosite, geoip) rule-set tags that the
+// caller needs to declare so this rule can resolve. Tags are returned with
+// the sing-box prefix already attached (`geosite-cn`, `geoip-private`, …).
+func buildSingboxRoutingRule(r model.RoutingRule) (map[string]interface{}, []string, []string) {
 	ruleMap := map[string]interface{}{
 		"action":   "route",
 		"outbound": r.OutboundTag,
 	}
 
 	hasContent := false
+	var geositeTags, geoipTags []string
+	var ruleSetTags []string
 
 	if r.Domain != "" {
 		domains := splitAndTrimCSV(r.Domain)
 		if len(domains) > 0 {
-			// Separate geosite references from domain suffixes
-			var geosites, domainSuffixes []string
+			// Separate geosite references from raw domain suffixes
+			var domainSuffixes []string
 			for _, d := range domains {
 				if strings.HasPrefix(d, "geosite:") {
-					geosites = append(geosites, strings.TrimPrefix(d, "geosite:"))
+					tag := "geosite-" + strings.TrimPrefix(d, "geosite:")
+					geositeTags = append(geositeTags, tag)
+					ruleSetTags = append(ruleSetTags, tag)
 				} else {
 					domainSuffixes = append(domainSuffixes, d)
 				}
@@ -702,34 +790,42 @@ func buildSingboxRoutingRule(r model.RoutingRule) map[string]interface{} {
 				ruleMap["domain_suffix"] = domainSuffixes
 				hasContent = true
 			}
-			if len(geosites) > 0 {
-				ruleMap["geosite"] = geosites
-				hasContent = true
-			}
 		}
 	}
 
 	if r.IP != "" {
 		ips := splitAndTrimCSV(r.IP)
 		if len(ips) > 0 {
-			// Separate geoip references from CIDR
-			var geoips, cidrs []string
+			// Separate geoip references from raw CIDR. `geoip:private` is
+			// special-cased to the sing-box built-in `ip_is_private` flag —
+			// the SagerNet sing-geoip repo doesn't ship a private.srs file,
+			// and trying to fetch one 404s the engine at boot.
+			var cidrs []string
 			for _, ip := range ips {
-				if strings.HasPrefix(ip, "geoip:") {
-					geoips = append(geoips, strings.TrimPrefix(ip, "geoip:"))
-				} else {
+				if !strings.HasPrefix(ip, "geoip:") {
 					cidrs = append(cidrs, ip)
+					continue
 				}
+				code := strings.TrimPrefix(ip, "geoip:")
+				if code == "private" {
+					ruleMap["ip_is_private"] = true
+					hasContent = true
+					continue
+				}
+				tag := "geoip-" + code
+				geoipTags = append(geoipTags, tag)
+				ruleSetTags = append(ruleSetTags, tag)
 			}
 			if len(cidrs) > 0 {
 				ruleMap["ip_cidr"] = cidrs
 				hasContent = true
 			}
-			if len(geoips) > 0 {
-				ruleMap["geoip"] = geoips
-				hasContent = true
-			}
 		}
+	}
+
+	if len(ruleSetTags) > 0 {
+		ruleMap["rule_set"] = ruleSetTags
+		hasContent = true
 	}
 
 	if r.Port != "" {
@@ -758,9 +854,9 @@ func buildSingboxRoutingRule(r model.RoutingRule) map[string]interface{} {
 	}
 
 	if !hasContent {
-		return nil
+		return nil, nil, nil
 	}
-	return ruleMap
+	return ruleMap, geositeTags, geoipTags
 }
 
 // buildSingboxOutbound converts a DB Outbound record to the sing-box JSON format.
@@ -861,11 +957,6 @@ func (s *SingboxManager) Start() error {
 	}
 
 	cmd := exec.Command(s.BinaryPath, "run", "-c", s.ConfigPath)
-	// sing-box ≥1.11 deprecated the geosite database; without this opt-in the
-	// process refuses to load configs that reference it (panel currently emits
-	// geosite-backed routing rules). Migrating to rule-sets is tracked
-	// separately; this env var keeps the deprecated path alive in the meantime.
-	cmd.Env = append(os.Environ(), "ENABLE_DEPRECATED_GEOSITE=true")
 	return s.startAndVerify(cmd)
 }
 

@@ -466,6 +466,122 @@ func TestIsXraySupportedPartition(t *testing.T) {
 	}
 }
 
+// TestBuildSingboxRoutingRuleEmitsRuleSetTags verifies that a routing rule
+// referencing `geosite:cn` / `geoip:cn` is translated into a
+// `rule_set: ["geosite-cn", "geoip-cn"]` form (sing-box 1.13+ shape)
+// and that the returned tag lists tell the caller what to declare at the
+// route.rule_set[] level.
+func TestBuildSingboxRoutingRuleEmitsRuleSetTags(t *testing.T) {
+	r := model.RoutingRule{
+		RuleTag:     "cn-direct",
+		Domain:      "geosite:cn,example.com",
+		IP:          "geoip:cn,10.0.0.0/8",
+		OutboundTag: "direct",
+		Enable:      true,
+	}
+	ruleMap, siteTags, ipTags := buildSingboxRoutingRule(r)
+	if ruleMap == nil {
+		t.Fatalf("expected a non-nil ruleMap")
+	}
+	rs, ok := ruleMap["rule_set"].([]string)
+	if !ok {
+		t.Fatalf("expected rule_set []string in ruleMap, got %T: %v", ruleMap["rule_set"], ruleMap["rule_set"])
+	}
+	wantTags := map[string]bool{"geosite-cn": true, "geoip-cn": true}
+	if len(rs) != 2 {
+		t.Errorf("expected 2 rule_set tags, got %v", rs)
+	}
+	for _, tag := range rs {
+		if !wantTags[tag] {
+			t.Errorf("unexpected rule_set tag %q", tag)
+		}
+	}
+	if len(siteTags) != 1 || siteTags[0] != "geosite-cn" {
+		t.Errorf("siteTags = %v, want [geosite-cn]", siteTags)
+	}
+	if len(ipTags) != 1 || ipTags[0] != "geoip-cn" {
+		t.Errorf("ipTags = %v, want [geoip-cn]", ipTags)
+	}
+	// Raw suffixes / CIDRs are kept on the rule alongside the tags.
+	if got, ok := ruleMap["domain_suffix"].([]string); !ok || len(got) != 1 || got[0] != "example.com" {
+		t.Errorf("domain_suffix not preserved: %v", ruleMap["domain_suffix"])
+	}
+	if got, ok := ruleMap["ip_cidr"].([]string); !ok || len(got) != 1 || got[0] != "10.0.0.0/8" {
+		t.Errorf("ip_cidr not preserved: %v", ruleMap["ip_cidr"])
+	}
+}
+
+// TestBuildSingboxRoutingRuleGeoipPrivateMapsToIsPrivate pins the special-
+// case: SagerNet doesn't ship a geoip-private.srs (the v2ray-style "private"
+// IP bucket doesn't map cleanly to a country code), so the migration is to
+// use the sing-box built-in `ip_is_private: true` attribute. Pre-fix the
+// engine 404'd at boot trying to fetch the missing rule-set.
+func TestBuildSingboxRoutingRuleGeoipPrivateMapsToIsPrivate(t *testing.T) {
+	r := model.RoutingRule{
+		RuleTag:     "block-private",
+		IP:          "geoip:private",
+		OutboundTag: "block",
+		Enable:      true,
+	}
+	ruleMap, _, ipTags := buildSingboxRoutingRule(r)
+	if ruleMap == nil {
+		t.Fatalf("expected non-nil ruleMap")
+	}
+	if got, ok := ruleMap["ip_is_private"].(bool); !ok || !got {
+		t.Errorf("expected ip_is_private: true, got %v", ruleMap["ip_is_private"])
+	}
+	if _, has := ruleMap["rule_set"]; has {
+		t.Errorf("rule_set should not be set for geoip:private, got %v", ruleMap["rule_set"])
+	}
+	if len(ipTags) != 0 {
+		t.Errorf("private should not contribute to ipTags, got %v", ipTags)
+	}
+}
+
+// TestBuildSingboxRuleSetsEmitsRemoteEntries pins the shape of the rule_set[]
+// block: a sorted list of {tag,type=remote,format=binary,url,download_detour=direct,
+// update_interval} entries for every tag the rules referenced.
+func TestBuildSingboxRuleSetsEmitsRemoteEntries(t *testing.T) {
+	out := buildSingboxRuleSets(
+		map[string]bool{"geosite-cn": true, "geosite-google": true},
+		map[string]bool{"geoip-cn": true},
+	)
+	if len(out) != 3 {
+		t.Fatalf("expected 3 rule_set entries, got %d: %v", len(out), out)
+	}
+	// First entry should be geoip-cn (sorted alphabetically before geosite-*).
+	first, _ := out[0].(map[string]interface{})
+	if first["tag"] != "geoip-cn" {
+		t.Errorf("expected first entry to be geoip-cn (sorted), got %v", first["tag"])
+	}
+	if first["type"] != "remote" || first["format"] != "binary" {
+		t.Errorf("entry shape wrong: %v", first)
+	}
+	if first["download_detour"] != "direct" {
+		t.Errorf("download_detour: expected 'direct', got %v", first["download_detour"])
+	}
+	// URL must point at the geoip repo, not geosite.
+	if url, _ := first["url"].(string); !strings.Contains(url, "sing-geoip") {
+		t.Errorf("geoip url should reference sing-geoip repo: %q", url)
+	}
+	// And the geosite entries must point at sing-geosite.
+	for _, ent := range out[1:] {
+		m := ent.(map[string]interface{})
+		if url, _ := m["url"].(string); !strings.Contains(url, "sing-geosite") {
+			t.Errorf("geosite url wrong: %q", url)
+		}
+	}
+}
+
+// TestBuildSingboxRuleSetsEmptyReturnsNil ensures empty input doesn't add an
+// empty rule_set[] block to the config (sing-box would tolerate it but the
+// diff churn is annoying).
+func TestBuildSingboxRuleSetsEmptyReturnsNil(t *testing.T) {
+	if got := buildSingboxRuleSets(nil, nil); got != nil {
+		t.Errorf("empty input should produce nil, got %v", got)
+	}
+}
+
 // TestSingboxConfigIsValidJSON verifies that GenerateConfig returns valid JSON
 // for a zero-inbound scenario (empty DB state).
 func TestSingboxConfigIsValidJSON(t *testing.T) {
