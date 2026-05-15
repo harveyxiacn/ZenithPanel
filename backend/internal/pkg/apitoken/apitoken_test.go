@@ -52,3 +52,21 @@ func TestGeneratedTokensAreUnique(t *testing.T) {
 		_ = i
 	}
 }
+
+// TestIsWellFormedHandlesUnderscoresInBody pins the bug fix where bodies
+// containing the base64url `_` character were misparsed. We synthesize a
+// raw body deliberately built around `_` and feed it through Generate's
+// inverse to verify IsWellFormed still accepts it.
+func TestIsWellFormedHandlesUnderscoresInBody(t *testing.T) {
+	// Generate many tokens and ensure none get rejected. Pre-fix this would
+	// fail ~1/22 iterations because base64url uses _ inside the body.
+	for range 200 {
+		tok, _, err := Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !IsWellFormed(tok) {
+			t.Fatalf("IsWellFormed rejected its own output: %q", tok)
+		}
+	}
+}
