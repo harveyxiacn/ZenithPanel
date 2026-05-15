@@ -322,23 +322,22 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]a
 		}
 
 	case "tuic":
-		// TUIC v5: each user has a UUID + password. The UUID always comes from
-		// the Client row; the password comes from settings.clients[].password
-		// (keyed by email) when supplied, otherwise falls back to the UUID.
-		// This lets admins set a distinct TUIC secret without a schema change,
-		// while preserving the legacy UUID-as-password behavior for inbounds
-		// created before this fix.
-		passwordByEmail := perUserPasswordsFromSettings(settingsRaw)
+		// TUIC v5: each user has a UUID + password. The subscription URL
+		// generator (service/sub) emits the UUID for BOTH username and
+		// password, so the server has to do the same — anything else creates
+		// an authentication mismatch the client can't recover from.
+		//
+		// A previous iteration honored a per-user password override from
+		// `settings.clients[].password`, but the share-link side was never
+		// updated to read it, so the override silently broke every TUIC
+		// client. Per-user passwords now require a schema/UI change before
+		// we can safely re-introduce them.
 		users := make([]map[string]any, 0, len(clients))
 		for _, c := range clients {
-			pw := c.UUID
-			if v, ok := passwordByEmail[c.Email]; ok && v != "" {
-				pw = v
-			}
 			users = append(users, map[string]any{
 				"name":     c.Email,
 				"uuid":     c.UUID,
-				"password": pw,
+				"password": c.UUID,
 			})
 		}
 		entry["users"] = users
@@ -511,33 +510,6 @@ func resolveDNSServers() (string, string) {
 		}
 	}
 	return primary, secondary
-}
-
-// perUserPasswordsFromSettings reads inbound.Settings.clients[] and indexes any
-// per-user password by email. Used by TUIC config generation so admins can
-// supply distinct secrets via the Web UI / API without a schema change.
-// Returns an empty map if settings is nil or has no clients array.
-func perUserPasswordsFromSettings(settings map[string]any) map[string]string {
-	out := map[string]string{}
-	if settings == nil {
-		return out
-	}
-	rawClients, ok := settings["clients"].([]any)
-	if !ok {
-		return out
-	}
-	for _, rc := range rawClients {
-		m, _ := rc.(map[string]any)
-		if m == nil {
-			continue
-		}
-		email, _ := m["email"].(string)
-		pw, _ := m["password"].(string)
-		if email != "" && pw != "" {
-			out[email] = pw
-		}
-	}
-	return out
 }
 
 // applyStreamToSingbox extracts TLS and transport config from the stored stream
