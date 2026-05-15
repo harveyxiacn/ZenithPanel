@@ -196,12 +196,16 @@ export interface ApiTokenCreateResponse extends ApiTokenRow {
   token: string // plaintext — shown to user once and never persisted client-side
 }
 
+// apiClient already unwraps the outer envelope (see api/client.ts), so the
+// generic should describe the wire body (`{code, msg, data: {...}}`); the
+// caller then reads `.data` once. Mirrors the typing of the surrounding
+// system-settings calls.
 export function getAdBlockStatus() {
-  return apiClient.get<{ code: number; msg: string; data: { enabled: boolean } }>('/v1/admin/adblock')
+  return apiClient.get('/v1/admin/adblock')
 }
 
 export function setAdBlockEnabled(enabled: boolean) {
-  return apiClient.put<{ code: number; msg: string; data: { enabled: boolean } }>('/v1/admin/adblock', { enabled })
+  return apiClient.put('/v1/admin/adblock', { enabled })
 }
 
 export function listApiTokens() {

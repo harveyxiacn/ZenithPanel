@@ -166,18 +166,19 @@ const adblockLoading = ref(false)
 
 async function loadAdBlockStatus() {
   try {
-    const res = await getAdBlockStatus()
-    adblockEnabled.value = !!res.data?.data?.enabled
+    const res = await getAdBlockStatus() as any
+    adblockEnabled.value = !!res.data?.enabled
   } catch {
-    // Silent — endpoint may not be available on older panels.
+    // Older panels without this endpoint just leave the toggle off.
   }
 }
 
 async function onToggleAdBlock(target: boolean) {
   adblockLoading.value = true
   try {
-    const res = await setAdBlockEnabled(target)
-    adblockEnabled.value = !!res.data?.data?.enabled
+    await setAdBlockEnabled(target)
+    // Server echoes the request; trust the local intent rather than round-trip.
+    adblockEnabled.value = target
     toast.success(target ? t('security.adblock.toastEnabled') : t('security.adblock.toastDisabled'))
   } catch (e: any) {
     toast.error(e?.response?.data?.msg || t('common.errorOccurred'))
