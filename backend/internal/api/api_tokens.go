@@ -121,7 +121,9 @@ func bootstrapAPIToken(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"code": 403, "msg": "bootstrap only available on unix socket"})
 		return
 	}
-	name := "local-root-" + strconv.FormatInt(time.Now().Unix(), 10)
+	// Use nanosecond precision so two bootstrap calls in the same second
+	// don't collide on the unique-name constraint.
+	name := "local-root-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	row, plaintext, err := mintToken(name, "*", 0)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to mint: " + err.Error()})
