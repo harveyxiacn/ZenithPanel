@@ -257,6 +257,9 @@ export default {
       probe: '探活',
       probeTooltip: '從伺服器端對此入站做一次連通性檢查',
       probeRecheck: '點擊重新檢測',
+      probeAll: '探活全部',
+      probingAll: '探活中…',
+      probeAllTooltip: '探活每個啟用的入站；結果按行內聯顯示',
     },
     routing: {
       title: '路由規則',

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon, SignalIcon, ArrowDownTrayIcon } from '@heroicons/vue/24/outline'
+import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon, SignalIcon, ArrowDownTrayIcon, BoltIcon } from '@heroicons/vue/24/outline'
 import { listInbounds, createInbound, updateInbound, deleteInbound, importThreeXUIInbounds, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig, bulkClientAction, getActiveConnections, getClashApiStatus, enableClashApi, disableClashApi, probeInbound, type InboundProbeResult } from '@/api/proxy'
 import apiClient from '@/api/client'
 import QRCode from 'qrcode'
@@ -86,6 +86,41 @@ async function onProbeInbound(id: number) {
   } catch (e: any) {
     probeResults.value = { ...probeResults.value, [id]: { inbound_id: id, tag: '', protocol: '', transport: '', port: 0, ok: false, stage: 'request', elapsed_ms: 0, err: e?.message || 'network' } }
   }
+}
+
+// Probe-all driver. Mark every row pending up front so the UI shows
+// progress, then fire probes with a small concurrency cap. We use Promise
+// chains keyed by id so a slow probe doesn't block faster ones. probeAllBusy
+// gates re-entry — a second click is a no-op until the wave finishes.
+const probeAllBusy = ref(false)
+
+async function onProbeAllInbounds() {
+  if (probeAllBusy.value || inbounds.value.length === 0) return
+  probeAllBusy.value = true
+  // Reset all probe states to 'pending'. We rebuild the object so Vue picks
+  // up the change in one tick.
+  const pending: Record<number, 'pending'> = {}
+  for (const ib of inbounds.value) pending[ib.id] = 'pending'
+  probeResults.value = { ...probeResults.value, ...pending }
+
+  // Run probes with a concurrency cap of 4 so a row of dead inbounds doesn't
+  // flood the panel with simultaneous timeouts.
+  const queue = [...inbounds.value]
+  const inFlight: Promise<void>[] = []
+  const startNext = (): Promise<void> | null => {
+    const ib = queue.shift()
+    if (!ib) return null
+    return onProbeInbound(ib.id).then(() => {
+      const next = startNext()
+      if (next) return next
+    })
+  }
+  for (let i = 0; i < Math.min(4, queue.length + inFlight.length); i++) {
+    const p = startNext()
+    if (p) inFlight.push(p)
+  }
+  await Promise.all(inFlight)
+  probeAllBusy.value = false
 }
 const showInboundForm = ref(false)
 const editingInbound = ref<any>(null)
@@ -1441,6 +1476,15 @@ watch(activeTab, (newTab) => {
           <div class="flex gap-2">
             <button @click="show3xuiImport = !show3xuiImport" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg font-medium transition flex items-center">
               <ArrowDownTrayIcon class="h-4 w-4 mr-1" /> Import 3x-ui
+            </button>
+            <button
+              @click="onProbeAllInbounds()"
+              :disabled="probeAllBusy || inbounds.length === 0"
+              class="text-sm bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 px-3 py-2 rounded-lg font-medium transition flex items-center"
+              :title="$t('proxy.inbounds.probeAllTooltip')"
+            >
+              <BoltIcon class="h-4 w-4 mr-1" />
+              {{ probeAllBusy ? $t('proxy.inbounds.probingAll') : $t('proxy.inbounds.probeAll') }}
             </button>
             <button @click="openQuickSetup()" class="text-sm bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 rounded-lg font-medium transition flex items-center">
               <SparklesIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.inbounds.quickSetup') }}

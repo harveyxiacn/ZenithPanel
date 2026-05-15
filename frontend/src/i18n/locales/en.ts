@@ -264,6 +264,9 @@ export default {
       probe: 'Probe',
       probeTooltip: 'Run a server-side connectivity check on this inbound',
       probeRecheck: 'click to re-check',
+      probeAll: 'Probe all',
+      probingAll: 'Probing…',
+      probeAllTooltip: 'Probe every enabled inbound; results appear inline per row',
     },
     routing: {
       title: 'Routing Rules',
