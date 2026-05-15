@@ -3,6 +3,49 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — 2026-05-15
+
+### Added
+
+- **Headless CLI** — `zenithpanel ctl …` (also `zenithctl` via symlink) is a
+  thin HTTP client over the panel API. On the panel host, root connects
+  without credentials via a new `/run/zenithpanel.sock` Unix socket; remote
+  hosts authenticate with an API token. Subcommands cover system / inbound /
+  client / proxy / firewall / backup / token / raw. See
+  [docs/cli_design.md](docs/cli_design.md) and
+  [docs/cli_api_spec.md](docs/cli_api_spec.md).
+- **API tokens** — new `api_tokens` table + endpoints
+  `GET/POST/DELETE /api/v1/admin/api-tokens` and a local-socket-only
+  `POST /api/v1/admin/api-tokens/bootstrap` for self-service token minting.
+  Tokens are stored as `sha256(plaintext)`; plaintext is shown exactly once.
+  Carry comma-separated scopes; `admin` scope gates token CRUD itself.
+- **Dual-engine mode** — Xray and Sing-box now run concurrently by default.
+  `POST /api/v1/proxy/apply` without an `engine=` query partitions enabled
+  inbounds (Xray handles vless/vmess/trojan/ss; Sing-box handles
+  hysteria2/tuic) and starts both processes. Explicit `?engine=xray|singbox`
+  keeps the legacy single-engine override.
+
+### Fixed
+
+- **sing-box 1.11 startup crash** — set `ENABLE_DEPRECATED_GEOSITE=true` on
+  the sing-box `exec.Cmd` so configs that reference geosite still load. The
+  proper migration to rule-sets is tracked separately.
+- **TUIC inbound missing ALPN** — the sing-box generator now defaults
+  `tls.alpn` to `["h3"]` for Hysteria2 and TUIC when the inbound doesn't
+  supply one. Pre-fix every TUIC client failed handshake with
+  `tls: server did not select an ALPN protocol`. Regression test:
+  `TestTUICDefaultsALPNToH3`.
+- **TUIC password not configurable** — generator now reads
+  `inbound.Settings.clients[].password` (keyed by email) and uses it as the
+  TUIC user's password, falling back to the UUID when none is supplied.
+  Regression test: `TestTUICPerUserPasswordOverride`.
+
+### Verified
+
+- All six protocols (VLESS+Reality, VMess+WS+TLS, Trojan+TLS, SS-2022,
+  Hysteria2, TUIC v5) pass end-to-end `curl --socks5 …` probes simultaneously
+  in dual-engine mode. See [docs/protocol_connectivity_report.md](docs/protocol_connectivity_report.md).
+
 ## [Unreleased] — 2026-05-07 (second batch)
 
 ### Added — Phase A–J feature sprint
