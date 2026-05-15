@@ -40,10 +40,10 @@ func TestClientDoSendsBearerForRemote(t *testing.T) {
 // raw body — also asserted here.
 func TestClientDoDecodesEnvelope(t *testing.T) {
 	cases := []struct {
-		name      string
-		body      string
-		wantCode  int
-		wantData  string
+		name     string
+		body     string
+		wantCode int
+		wantData string
 	}{
 		{"envelope", `{"code":200,"msg":"ok","data":{"x":1}}`, 200, `{"x":1}`},
 		{"raw json", `{"status":"ok","disk_free_gb":42}`, 200, `{"status":"ok","disk_free_gb":42}`},

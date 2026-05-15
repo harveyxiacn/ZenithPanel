@@ -120,10 +120,34 @@ func (c *Client) Do(method, path string, body any) (*Envelope, int, error) {
 var ErrTransport = errors.New("transport error")
 
 // Pretty marshals v as indented JSON, used by `--output json` (default).
+// When v is an *Envelope whose Data isn't valid JSON (Prometheus text,
+// backup zip, etc.), we print the raw body instead of the byte-array
+// gibberish that json.Marshal would emit. The text/json branching keeps
+// `zenithctl raw GET /api/v1/metrics` readable.
 func Pretty(v any) string {
+	if env, ok := v.(*Envelope); ok && env != nil && len(env.Data) > 0 && !isJSONLike(env.Data) {
+		return string(env.Data)
+	}
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Sprintf("%v", v)
 	}
 	return string(b)
+}
+
+// isJSONLike reports whether b looks like a JSON document (object, array,
+// string, number, or boolean). Cheap heuristic: skip whitespace, inspect
+// the first byte. Good enough for "should we try to pretty-print this?".
+func isJSONLike(b []byte) bool {
+	for _, c := range b {
+		switch c {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case '{', '[', '"', 't', 'f', 'n', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
