@@ -3,6 +3,33 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — 2026-06-10 (traffic egress logger)
+
+### Added
+
+- **Traffic egress logger + `/egress` page.** Per-(instance, user,
+  destination, direction) byte history in 5-minute hot buckets with an
+  hourly rollup (hot 7 d / hourly 90 d, configurable): time series
+  stacked by instance, top destinations / ASNs, per-instance and
+  per-user breakdowns, per-instance fidelity badges, in-page collection
+  settings. Sources: sing-box Clash per-destination deltas (domain +
+  user + bytes), an `ss`-based host-wide socket sampler that
+  auto-discovers listening proxy processes (IP-level bytes), and an
+  opt-in zenith-xray access-log tail (domains + users).
+- **Domain names for IP-only destinations (热门目的地).** New
+  `dest_rdns` enrichment — learned from the Clash tier's sniffed
+  (host, IP) pairs with PTR reverse-DNS fallback, async and cached.
+  The destination summary coalesces sniffed domain → rDNS → IP and
+  tags each row `domain`/`rdns`/`ip`; the UI badges rDNS guesses so
+  they're never mistaken for sniffed SNI.
+
+### Changed
+
+- **OTA swap now prunes dangling images.** After the new container
+  starts, the helper runs `docker image prune -f` (dangling only) so
+  the superseded panel image is reclaimed and repeated OTAs don't fill
+  small disks.
+
 ## [Unreleased] — 2026-05-15 (QR-ready production rollout)
 
 ### Added
