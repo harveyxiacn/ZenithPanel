@@ -682,6 +682,11 @@ A change you made through the Web UI or CLI in v1 will still be there in
 v2 without re-migration. The single way this breaks: someone deployed
 the original container without `-v /opt/zenithpanel/data:...`.
 
+After the swap the helper also runs `docker image prune -f` (dangling
+only, never `-a`): the superseded panel image — untagged once the new
+pull takes over `:main` — is reclaimed, so repeated OTAs don't fill
+small disks. Other containers' tagged images are untouched.
+
 ---
 
 ## 8. Observability for unattended operation

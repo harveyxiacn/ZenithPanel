@@ -45,6 +45,21 @@ func TestNewUpdateInfoNoUpdateWhenDigestsMatch(t *testing.T) {
 	}
 }
 
+func TestSwapScriptPrunesDanglingImagesAfterRemovingOldContainer(t *testing.T) {
+	s := swapScript("oldcontainer", "newcontainer")
+	rm := strings.Index(s, "docker rm oldcontainer")
+	prune := strings.Index(s, "docker image prune -f")
+	if rm == -1 || prune == -1 {
+		t.Fatalf("swap script missing rm or prune: %s", s)
+	}
+	if prune < rm {
+		t.Fatalf("prune must run after the old container is removed (its image is still referenced before): %s", s)
+	}
+	if strings.Contains(s, "prune -af") || strings.Contains(s, "prune -a") {
+		t.Fatalf("prune must be dangling-only, never -a: %s", s)
+	}
+}
+
 func TestBuildHelperContainerConfigUsesPanelImageWithoutApkInstall(t *testing.T) {
 	cfg, hostCfg := buildHelperContainerConfig(DefaultImage, "echo swap")
 
