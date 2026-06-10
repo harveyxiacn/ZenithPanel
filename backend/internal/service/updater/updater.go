@@ -109,6 +109,21 @@ func newUpdateInfo(currentImageID string, inspect registry.DistributionInspect) 
 	}
 }
 
+// swapScript builds the helper-container script that performs the actual
+// swap: stop old → start new → remove old container → prune dangling images.
+// The prune reclaims the superseded panel image (untagged once the new pull
+// took over the :main tag) so repeated OTAs don't slowly fill small disks.
+// `image prune` without -a removes ONLY dangling (untagged, unreferenced)
+// images, so other containers' tagged images are never touched. It must run
+// after `docker rm` — until the old container is gone its image is still
+// referenced and the prune would skip it.
+func swapScript(oldID, newID string) string {
+	return fmt.Sprintf(
+		`sleep 2; docker stop -t 10 %s 2>/dev/null; docker start %s; docker rm %s 2>/dev/null; docker image prune -f >/dev/null 2>&1; true`,
+		oldID, newID, oldID,
+	)
+}
+
 // buildHelperContainerConfig returns the container and host config for the
 // updater helper. Uses the panel image directly to avoid `apk add` at runtime.
 func buildHelperContainerConfig(image, swapScript string) (*container.Config, *container.HostConfig) {
@@ -240,11 +255,7 @@ func PerformUpdate(_ context.Context) error {
 
 	// 6. Spawn a helper container to orchestrate the swap using the panel image
 	// (already present locally). Avoids `apk add` at runtime and alpine dependency.
-	swapScript := fmt.Sprintf(
-		`sleep 2; docker stop -t 10 %s 2>/dev/null; docker start %s; docker rm %s 2>/dev/null; true`,
-		containerID, resp.ID, containerID,
-	)
-	helperCfg, helperHC := buildHelperContainerConfig(DefaultImage, swapScript)
+	helperCfg, helperHC := buildHelperContainerConfig(DefaultImage, swapScript(containerID, resp.ID))
 
 	helperResp, err := cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
 	if err != nil {
@@ -343,11 +354,7 @@ func RestartSelf(_ context.Context, newPort string) error {
 	log.Printf("Restart: created new container %s", resp.ID[:12])
 
 	// Helper container to swap, using the panel image (already local, no apk needed)
-	swapScript := fmt.Sprintf(
-		`sleep 2; docker stop -t 10 %s 2>/dev/null; docker start %s; docker rm %s 2>/dev/null; true`,
-		containerID, resp.ID, containerID,
-	)
-	helperCfg, helperHC := buildHelperContainerConfig(newConfig.Image, swapScript)
+	helperCfg, helperHC := buildHelperContainerConfig(newConfig.Image, swapScript(containerID, resp.ID))
 	helperResp, err := cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
 	if err != nil {
 		_ = cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
