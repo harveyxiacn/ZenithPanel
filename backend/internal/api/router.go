@@ -575,7 +575,7 @@ func findDuplicateRoutingRule(target model.RoutingRule, excludeID uint) (*model.
 }
 
 // SetupRoutes configures all the Gin routes.
-func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *proxy.SingboxManager, sched *scheduler.Scheduler, tm *traffic.Monitor) {
+func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *proxy.SingboxManager, sched *scheduler.Scheduler, tm *traffic.Monitor, eg *traffic.EgressCollector) {
 
 	// Security Headers
 	r.Use(func(c *gin.Context) {
@@ -948,6 +948,11 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			data := monitor.GetPersistedHistory(config.DB, since)
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": data})
 		})
+
+		// Egress logger — per-(instance, user, destination) traffic history with
+		// time-series, summaries, coverage badges, and config. Handlers live in
+		// traffic_egress.go to keep this file readable.
+		registerEgressRoutes(authGroup, eg)
 
 		// ======================================
 		// Docker Management

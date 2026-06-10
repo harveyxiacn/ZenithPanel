@@ -7,12 +7,28 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 )
+
+// egressActive is set by the EgressCollector from the traffic_egress_enabled
+// setting. When false the Clash poller skips accumulating per-destination
+// deltas (and any already-buffered ones are still drained by the collector so
+// the map can't grow unbounded), so the egress feature is truly zero-cost when
+// turned off.
+var egressActive atomic.Bool
+
+// destAggKey identifies one (user, destination) pair for per-destination egress
+// accounting. Host is the sniffed SNI/domain when available, IP is always set.
+type destAggKey struct {
+	user string
+	host string
+	ip   string
+}
 
 // clashConn is the subset of fields we need from Sing-box's Clash API response.
 // We keep the unmarshalling permissive — the Clash schema has drifted across
@@ -50,6 +66,7 @@ type proxyAggregator struct {
 	lastAt       time.Time
 	lastConn     map[string]clashConn // by connection id
 	pendingFlush map[string]pendingDelta
+	pendingDest  map[destAggKey]pendingDelta // per-(user,dest) deltas for egress logging
 	httpc        *http.Client
 }
 
@@ -64,6 +81,7 @@ func newProxyAggregator() *proxyAggregator {
 	return &proxyAggregator{
 		lastConn:     map[string]clashConn{},
 		pendingFlush: map[string]pendingDelta{},
+		pendingDest:  map[destAggKey]pendingDelta{},
 		// Short timeout: the Clash API is local; if it hangs longer than this
 		// the panel UI should see an error and we should not block the loop.
 		httpc: &http.Client{Timeout: 2 * time.Second},
@@ -77,6 +95,18 @@ func (a *proxyAggregator) drainPending() map[string]pendingDelta {
 	defer a.mu.Unlock()
 	out := a.pendingFlush
 	a.pendingFlush = map[string]pendingDelta{}
+	return out
+}
+
+// drainPendingDest returns the per-(user, destination) byte deltas accumulated
+// since the last call, clearing internal state. Drained by the EgressCollector
+// on the same 30 s cadence. Always safe to call even when egress logging is
+// off — draining bounds the map so it can't grow without an active consumer.
+func (a *proxyAggregator) drainPendingDest() map[destAggKey]pendingDelta {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := a.pendingDest
+	a.pendingDest = map[destAggKey]pendingDelta{}
 	return out
 }
 
@@ -127,24 +157,38 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager) ([]ProxyUserSample, e
 		}
 		us.ActiveConns = len(conns)
 		targets := map[string]struct{}{}
+		logDest := egressActive.Load()
 		var deltaUp, deltaDown uint64
 		for _, c := range conns {
 			if t := pickTarget(c); t != "" {
 				targets[t] = struct{}{}
 			}
 			if dt > 0 {
+				// Per-connection delta, so it can be attributed to this
+				// connection's destination for egress logging. Summed back into
+				// the per-user deltaUp/deltaDown exactly as before.
+				var cUp, cDown uint64
 				if old, ok := prev[c.ID]; ok {
 					if c.Upload >= old.Upload {
-						deltaUp += c.Upload - old.Upload
+						cUp = c.Upload - old.Upload
 					}
 					if c.Download >= old.Download {
-						deltaDown += c.Download - old.Download
+						cDown = c.Download - old.Download
 					}
 				} else {
 					// New connection — count whatever has already flowed since
 					// it opened. Better signal than zero on the first tick.
-					deltaUp += c.Upload
-					deltaDown += c.Download
+					cUp = c.Upload
+					cDown = c.Download
+				}
+				deltaUp += cUp
+				deltaDown += cDown
+				if logDest && (cUp > 0 || cDown > 0) {
+					dk := destAggKey{user: user, host: c.Metadata.Host, ip: c.Metadata.DestinationIP}
+					pd := a.pendingDest[dk]
+					pd.up += cUp
+					pd.down += cDown
+					a.pendingDest[dk] = pd
 				}
 			}
 		}

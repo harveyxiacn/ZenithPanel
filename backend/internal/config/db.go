@@ -75,6 +75,13 @@ func InitDB(dbPath string) {
 		log.Printf("Warning: failed to migrate ApiToken table: %v", err)
 	}
 
+	// Traffic-egress logging tables (hot 5-min buckets + hourly rollup). Non-fatal
+	// so the panel still boots if the migration fails on an older/exotic DB; the
+	// egress feature simply has nowhere to write until the table exists.
+	if err := database.AutoMigrate(&model.TrafficEgress{}, &model.TrafficEgressHourly{}); err != nil {
+		log.Printf("Warning: failed to migrate traffic-egress tables: %v", err)
+	}
+
 	DB = database
 	log.Println("Database initialized and migrated successfully")
 }

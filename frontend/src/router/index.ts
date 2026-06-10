@@ -65,6 +65,11 @@ const routes: RouteRecordRaw[] = [
         path: 'traffic',
         name: 'Traffic',
         component: () => import('@/views/TrafficView.vue')
+      },
+      {
+        path: 'egress',
+        name: 'Egress',
+        component: () => import('@/views/EgressView.vue')
       }
     ]
   }

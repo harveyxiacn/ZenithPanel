@@ -31,8 +31,10 @@ WORKDIR /opt/zenithpanel
 ARG XRAY_VERSION=v25.4.30
 ARG SINGBOX_VERSION=v1.11.0
 
-# Install basic runtime dependencies (ca-certificates for TLS, tzdata, etc)
-RUN apk add --no-cache ca-certificates tzdata sqlite-libs docker-cli bash iptables util-linux unzip
+# Install basic runtime dependencies (ca-certificates for TLS, tzdata, etc).
+# iproute2 provides `ss`, used by the traffic-egress socket sampler to attribute
+# host-wide outbound flows to proxy processes.
+RUN apk add --no-cache ca-certificates tzdata sqlite-libs docker-cli bash iptables iproute2 util-linux unzip
 
 # Download Xray-core binary + geodata
 RUN set -ex && \

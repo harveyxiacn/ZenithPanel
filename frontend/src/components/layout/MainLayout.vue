@@ -17,7 +17,8 @@ import {
   LanguageIcon,
   SunIcon,
   MoonIcon,
-  SignalIcon
+  SignalIcon,
+  ArrowTrendingUpIcon
 } from '@heroicons/vue/24/outline'
 import { useDarkMode } from '@/composables/useDarkMode'
 import { navigationForProfile, type NavigationIconKey } from '@/config/usage-profiles'
@@ -148,6 +149,21 @@ onMounted(() => {
             aria-hidden="true"
           />
           Traffic
+        </router-link>
+
+        <!-- Egress — per-instance / per-destination traffic history -->
+        <router-link
+          to="/egress"
+          @click="handleNavClick"
+          class="flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-300 group"
+          :class="[$route.path.startsWith('/egress') ? 'bg-primary-600/10 text-primary-400' : 'text-slate-400 hover:bg-slate-800 hover:text-white']"
+        >
+          <ArrowTrendingUpIcon
+            class="mr-3 h-5 w-5 transition-transform duration-300 group-hover:scale-110"
+            :class="[$route.path.startsWith('/egress') ? 'text-primary-400' : 'text-slate-500 group-hover:text-white']"
+            aria-hidden="true"
+          />
+          Egress
         </router-link>
       </div>
 
