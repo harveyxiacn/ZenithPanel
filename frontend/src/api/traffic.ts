@@ -49,3 +49,84 @@ export function getTrafficHistory(seconds = 120) {
     params: { seconds },
   })
 }
+
+// ---- Egress logger (per-instance / per-destination history) ----
+
+export interface EgressFilterParams {
+  start?: number
+  end?: number
+  instance?: string
+  user?: string
+  direction?: string
+  limit?: number
+}
+
+export interface EgressRow {
+  bucket: number
+  instance: string
+  user_email: string
+  dest_host: string
+  dest_ip: string
+  dest_rdns: string
+  asn: string
+  as_org: string
+  country: string
+  direction: string
+  bytes_up: number
+  bytes_down: number
+  hits: number
+}
+
+export interface EgressSummaryRow {
+  key: string
+  // "dest" dimension only: domain (sniffed) | rdns (reverse-DNS guess) | ip
+  kind?: string
+  as_org?: string
+  country?: string
+  bytes_up: number
+  bytes_down: number
+  bytes_total: number
+  hits: number
+}
+
+export interface EgressSeriesPoint {
+  bucket: number
+  instance?: string
+  bytes_up: number
+  bytes_down: number
+}
+
+export interface EgressCoverage {
+  instance: string
+  domain: boolean
+  per_user: boolean
+  bytes: boolean
+  source: string
+  note: string
+}
+
+export type EgressConfig = Record<string, string>
+
+export function getEgressList(params: EgressFilterParams) {
+  return apiClient.get<{ code: number; data: EgressRow[] }>('/v1/traffic/egress', { params })
+}
+
+export function getEgressSummary(params: EgressFilterParams & { group_by: string }) {
+  return apiClient.get<{ code: number; data: EgressSummaryRow[] }>('/v1/traffic/egress/summary', { params })
+}
+
+export function getEgressSeries(params: EgressFilterParams & { split?: string }) {
+  return apiClient.get<{ code: number; data: EgressSeriesPoint[] }>('/v1/traffic/egress/series', { params })
+}
+
+export function getEgressCoverage() {
+  return apiClient.get<{ code: number; data: EgressCoverage[] }>('/v1/traffic/egress/coverage')
+}
+
+export function getEgressConfig() {
+  return apiClient.get<{ code: number; data: EgressConfig }>('/v1/traffic/egress/config')
+}
+
+export function updateEgressConfig(body: EgressConfig) {
+  return apiClient.put<{ code: number; data: EgressConfig }>('/v1/traffic/egress/config', body)
+}

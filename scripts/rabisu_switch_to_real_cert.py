@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Switches rabisu's 5 TLS-using inbounds from the 7-day self-signed test
-cert to the real Let's Encrypt cert just issued for 136-175-83-32.nip.io.
+cert to the real Let's Encrypt cert just issued for 203-0-113-10.nip.io.
 
   - certificateFile/keyFile → the new ACME-managed paths
-  - serverName → 136-175-83-32.nip.io (so SNI matches the cert CN)
+  - serverName → 203-0-113-10.nip.io (so SNI matches the cert CN)
   - allowInsecure → removed (clients now verify the chain properly)
 
 After: proxy apply so both engines pick up the new cert paths.
@@ -11,9 +11,9 @@ After: proxy apply so both engines pick up the new cert paths.
 import json
 import subprocess
 
-CERT = "/opt/zenithpanel/data/certs/136-175-83-32.nip.io.crt"
-KEY = "/opt/zenithpanel/data/certs/136-175-83-32.nip.io.key"
-SERVER_NAME = "136-175-83-32.nip.io"
+CERT = "/opt/zenithpanel/data/certs/203-0-113-10.nip.io.crt"
+KEY = "/opt/zenithpanel/data/certs/203-0-113-10.nip.io.key"
+SERVER_NAME = "203-0-113-10.nip.io"
 
 # Only inbounds that actually do TLS; ss-2022 (id 5) and vless-reality (id 1)
 # don't carry a tlsSettings block.
