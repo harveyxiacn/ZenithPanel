@@ -265,11 +265,55 @@ func main() {
 	// captured for the live-rate view) and query Xray's StatsService over the
 	// internal API inbound; add both into Client.UpLoad/DownLoad so the
 	// per-user cumulative columns reflect actually-flowed bytes across engines.
-	tacct := traffic.NewAccountant(config.DB, xm, sm, tm.ProxyAggregator())
+	// 6c. Traffic egress logger — aggregates per-(instance, user, destination)
+	// bytes from the Clash poller plus an ss-based host-wide socket sampler (and
+	// an optional zenith-xray access-log tail) into time-bucketed tables that
+	// power the panel's Egress page. Sources start here; the per-flush write is
+	// driven by the accountant below so there is a single SQLite writer.
+	tegress := traffic.NewEgressCollector(config.DB, tm.ProxyAggregator())
+	tegress.Start(trafficCtx)
+
+	tacct := traffic.NewAccountant(config.DB, xm, sm, tm.ProxyAggregator(), tegress)
 	tacct.Start(trafficCtx)
 
+	// 6d. Egress maintenance: roll completed hot hours into the hourly table,
+	// then prune both past their retention windows. Runs once on boot to catch
+	// up, then daily at the configured local hour (staggered after the
+	// NetworkMetric prune to avoid SQLite lock contention).
+	go func() {
+		runEgressMaintenance := func() {
+			if err := tegress.RollupOnce(time.Now()); err != nil {
+				log.Printf("egress rollup: %v", err)
+			}
+			if n, err := tegress.PruneHot(time.Now()); err != nil {
+				log.Printf("egress prune hot: %v", err)
+			} else if n > 0 {
+				log.Printf("egress: pruned %d hot rows past retention", n)
+			}
+			if n, err := tegress.PruneHourly(time.Now()); err != nil {
+				log.Printf("egress prune hourly: %v", err)
+			} else if n > 0 {
+				log.Printf("egress: pruned %d hourly rows past retention", n)
+			}
+		}
+		runEgressMaintenance()
+		for {
+			now := time.Now()
+			next := time.Date(now.Year(), now.Month(), now.Day(), traffic.PruneHour(), 0, 0, 0, now.Location())
+			if !next.After(now) {
+				next = next.Add(24 * time.Hour)
+			}
+			select {
+			case <-trafficCtx.Done():
+				return
+			case <-time.After(time.Until(next)):
+				runEgressMaintenance()
+			}
+		}
+	}()
+
 	// 7. Setup API routes
-	api.SetupRoutes(r, dm, xm, sm, sched, tm)
+	api.SetupRoutes(r, dm, xm, sm, sched, tm, tegress)
 
 	// Resolve listen port (random on first run, persisted in DB)
 	port := config.EnsurePort()

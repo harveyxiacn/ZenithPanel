@@ -82,6 +82,7 @@ Thumbs.db
 # 忽略构建输出的 release 目录及各种包
 /release/
 zenithpanel-release.tar.gz
+/zenithpanel-egress
 task.md
 dev_log.md
 /backend/internal/api/dist/
