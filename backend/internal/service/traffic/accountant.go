@@ -35,6 +35,7 @@ type Accountant struct {
 	xm         *proxy.XrayManager
 	sm         *proxy.SingboxManager
 	agg        *proxyAggregator
+	egress     *EgressCollector
 	interval   time.Duration
 	mu         sync.RWMutex
 	lastFlush  time.Time
@@ -45,12 +46,14 @@ type Accountant struct {
 // NewAccountant wires the accountant to the running managers and the proxy
 // aggregator that already polls Clash API. db may be nil under unit tests;
 // the accountant treats nil as "no-op" and just exercises the polling code.
-func NewAccountant(db *gorm.DB, xm *proxy.XrayManager, sm *proxy.SingboxManager, agg *proxyAggregator) *Accountant {
+// egress may be nil — the per-destination egress flush is then skipped.
+func NewAccountant(db *gorm.DB, xm *proxy.XrayManager, sm *proxy.SingboxManager, agg *proxyAggregator, egress *EgressCollector) *Accountant {
 	return &Accountant{
 		db:       db,
 		xm:       xm,
 		sm:       sm,
 		agg:      agg,
+		egress:   egress,
 		interval: 30 * time.Second,
 	}
 }
@@ -78,6 +81,11 @@ func (a *Accountant) loop(ctx context.Context) {
 func (a *Accountant) flushOnce() {
 	a.flushSingbox()
 	a.flushXray()
+	// Per-destination egress aggregation rides the same 30s cadence so there is
+	// exactly one writer to the egress tables (no concurrent-writer lock churn).
+	if a.egress != nil {
+		a.egress.Flush()
+	}
 	a.mu.Lock()
 	a.lastFlush = time.Now()
 	a.mu.Unlock()

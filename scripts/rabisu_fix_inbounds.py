@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 
-TARGET_HOST = "136.175.83.32"
+TARGET_HOST = "203.0.113.10"
 TARGETS = {
     3: {"insecure": True},   # vmess+ws+tls
     4: {"insecure": True},   # trojan+tls

@@ -156,11 +156,11 @@ on :80 to verify domain ownership.
 A real domain pointed at the VPS is the standard. If the user doesn't
 own one, use the wildcard DNS service `nip.io`: the hostname
 `<ip-with-dashes>.nip.io` resolves to the corresponding IP without any
-DNS setup. For VPS `136.175.83.32`:
+DNS setup. For VPS `203.0.113.10`:
 
 ```bash
-export PUBLIC_IP=136.175.83.32
-export DOMAIN=136-175-83-32.nip.io
+export PUBLIC_IP=203.0.113.10
+export DOMAIN=203-0-113-10.nip.io
 
 # Confirm it resolves (should print PUBLIC_IP)
 dig +short "$DOMAIN"
@@ -558,10 +558,10 @@ It just doesn't have to be a domain you paid for. Three valid paths:
 | Path | When | `serverName` value | Cert |
 |---|---|---|---|
 | Real LE domain | You own `panel.example.com` | `panel.example.com` | `zenithctl cert issue --domain panel.example.com` |
-| nip.io / sslip.io | You only have a public IP | `136-175-83-32.nip.io` | `zenithctl cert issue --domain 136-175-83-32.nip.io` (real LE cert, $0) |
+| nip.io / sslip.io | You only have a public IP | `203-0-113-10.nip.io` | `zenithctl cert issue --domain 203-0-113-10.nip.io` (real LE cert, $0) |
 | Self-signed + insecure | Internal / testing | any string, e.g. `hysteria2.example.com` | `cert: self_signed`; client must set `insecure=1` |
 
-**Ground truth from the rabisu (136.175.83.32) walkthrough**, both
+**Ground truth from the rabisu (203.0.113.10) walkthrough**, both
 phases shipped Hy2 with TLS on and `serverName` populated:
 
 - **Phase 1 (self-signed):** `serverName="hysteria2.fanni-panda.com"`,
@@ -570,8 +570,8 @@ phases shipped Hy2 with TLS on and `serverName` populated:
   the cert CN didn't match the SNI — clients had to skip verification
   to connect.
 - **Phase 2 (real Let's Encrypt):** after `zenithctl cert issue --domain
-  136-175-83-32.nip.io`, the Hy2 inbound was edited to `serverName=
-  "136-175-83-32.nip.io"` pointing at the LE cert files, and
+  203-0-113-10.nip.io`, the Hy2 inbound was edited to `serverName=
+  "203-0-113-10.nip.io"` pointing at the LE cert files, and
   `allowInsecure` was dropped from the sub URL. `openssl s_client` then
   returned `Verify return code: 0 (ok)`.
 
@@ -581,7 +581,7 @@ panel will reject it on apply.
 
 **UI display (since this fix).** The inbounds table shows the SNI value
 under the Transport cell for every TLS/Reality inbound — so you can
-glance at a row and see e.g. `udp+tls / SNI: 136-175-83-32.nip.io`. The
+glance at a row and see e.g. `udp+tls / SNI: 203-0-113-10.nip.io`. The
 visual editor marks the SNI field with `*` for Hy2/TUIC and shows the
 "always require TLS" hint above the TLS field group. The network
 selector for Hy2/TUIC is locked to UDP and the security selector is
