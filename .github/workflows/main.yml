@@ -180,6 +180,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0 # full history + tags so `git describe` can name builds
 
       # Install the cosign tool except on PR
       - name: Install cosign
@@ -219,7 +221,7 @@ jobs:
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           else
-            echo "value=${{ github.ref_name }}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "value=$(git describe --tags --always --dirty 2>/dev/null || echo "${{ github.ref_name }}-${GITHUB_SHA::7}")" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push Docker image
