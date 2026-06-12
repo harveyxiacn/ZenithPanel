@@ -130,3 +130,12 @@ export function getEgressConfig() {
 export function updateEgressConfig(body: EgressConfig) {
   return apiClient.put<{ code: number; data: EgressConfig }>('/v1/traffic/egress/config', body)
 }
+
+// scope=detail -> per-bucket detail rows; scope=dest -> top-destination summary.
+// Streams a CSV file straight from the backend (auth flows through the axios
+// Authorization header), so it is not bound by the in-page row limits.
+export type EgressExportScope = 'detail' | 'dest'
+
+export function downloadEgressCSV(params: EgressFilterParams & { scope?: EgressExportScope }) {
+  return apiClient.get('/v1/traffic/egress/export', { params, responseType: 'blob', timeout: 60000 })
+}

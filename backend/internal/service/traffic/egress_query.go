@@ -112,6 +112,17 @@ func (e *EgressCollector) Query(f EgressFilter) []EgressRow {
 	return rows
 }
 
+// Export returns all detail rows matching the filter (no UI row cap), oldest
+// bucket first, for CSV download. Hard-bounded to avoid unbounded memory.
+func (e *EgressCollector) Export(f EgressFilter) []EgressRow {
+	if e == nil || e.db == nil {
+		return nil
+	}
+	var rows []EgressRow
+	e.base(f).Order("bucket asc").Limit(200000).Scan(&rows)
+	return rows
+}
+
 var summaryCols = map[string]string{
 	"domain":    "dest_host",
 	"host":      "dest_host",

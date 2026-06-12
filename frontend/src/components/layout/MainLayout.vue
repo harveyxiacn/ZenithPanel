@@ -133,7 +133,7 @@ onMounted(() => {
             :class="[$route.path.startsWith('/sites') ? 'text-primary-400' : 'text-slate-500 group-hover:text-white']"
             aria-hidden="true"
           />
-          Sites
+          {{ t('nav.sites') }}
         </router-link>
 
         <!-- Traffic — live observer for proxy users + system processes -->
@@ -148,7 +148,7 @@ onMounted(() => {
             :class="[$route.path.startsWith('/traffic') ? 'text-primary-400' : 'text-slate-500 group-hover:text-white']"
             aria-hidden="true"
           />
-          Traffic
+          {{ t('nav.traffic') }}
         </router-link>
 
         <!-- Egress — per-instance / per-destination traffic history -->
@@ -163,7 +163,7 @@ onMounted(() => {
             :class="[$route.path.startsWith('/egress') ? 'text-primary-400' : 'text-slate-500 group-hover:text-white']"
             aria-hidden="true"
           />
-          Egress
+          {{ t('nav.egress') }}
         </router-link>
       </div>
 
@@ -175,7 +175,7 @@ onMounted(() => {
         >
           <SunIcon v-if="isDark" class="mr-3 h-5 w-5" />
           <MoonIcon v-else class="mr-3 h-5 w-5" />
-          {{ isDark ? 'Light Mode' : 'Dark Mode' }}
+          {{ isDark ? t('common.lightMode') : t('common.darkMode') }}
         </button>
 
         <!-- Language Switcher -->

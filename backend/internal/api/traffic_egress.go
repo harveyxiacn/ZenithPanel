@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/csv"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -56,6 +58,35 @@ func registerEgressRoutes(rg *gin.RouterGroup, eg *traffic.EgressCollector) {
 		}
 		split := c.Query("split") == "instance"
 		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": eg.Series(egressFilterFromQuery(c), split)})
+	})
+
+	rg.GET("/traffic/egress/export", func(c *gin.Context) {
+		if !guard(c) {
+			return
+		}
+		scope := strings.TrimSpace(c.DefaultQuery("scope", "detail"))
+		f := egressFilterFromQuery(c)
+		filename := fmt.Sprintf("zenith-egress-%s-%s.csv", scope, time.Now().UTC().Format("20060102-150405"))
+		c.Header("Content-Type", "text/csv; charset=utf-8")
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+		c.Writer.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM so Excel renders CJK
+		w := csv.NewWriter(c.Writer)
+		n := 0
+		if scope == "dest" {
+			w.Write([]string{"key", "kind", "as_org", "country", "bytes_up", "bytes_down", "bytes_total", "hits"})
+			for _, r := range eg.Summary(f, "dest") {
+				w.Write([]string{r.Key, r.Kind, r.ASOrg, r.Country, strconv.FormatInt(r.BytesUp, 10), strconv.FormatInt(r.BytesDown, 10), strconv.FormatInt(r.BytesTotal, 10), strconv.FormatInt(r.Hits, 10)})
+				n++
+			}
+		} else {
+			w.Write([]string{"time", "bucket", "instance", "user_email", "dest_host", "dest_ip", "dest_rdns", "asn", "as_org", "country", "direction", "bytes_up", "bytes_down", "hits"})
+			for _, r := range eg.Export(f) {
+				w.Write([]string{time.Unix(r.Bucket, 0).UTC().Format(time.RFC3339), strconv.FormatInt(r.Bucket, 10), r.Instance, r.UserEmail, r.DestHost, r.DestIP, r.DestRDNS, r.ASN, r.ASOrg, r.Country, r.Direction, strconv.FormatInt(r.BytesUp, 10), strconv.FormatInt(r.BytesDown, 10), strconv.FormatInt(r.Hits, 10)})
+				n++
+			}
+		}
+		w.Flush()
+		recordAudit(c, "traffic.egress.export", fmt.Sprintf("scope=%s rows=%d", scope, n))
 	})
 
 	rg.GET("/traffic/egress/coverage", func(c *gin.Context) {
