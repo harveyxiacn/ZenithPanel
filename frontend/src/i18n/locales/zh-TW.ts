@@ -399,6 +399,7 @@ export default {
     update: {
       title: '面板更新',
       subtitle: '自動檢查並安裝更新',
+      currentVersion: '目前版本',
       currentImage: '目前映像檔',
       latestImage: '最新映像檔',
       available: '有新版本可用。點擊「立即更新」以套用。',

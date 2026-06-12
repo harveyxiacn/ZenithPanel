@@ -489,6 +489,7 @@ async function onToggleCF() {
 const updateChecking = ref(false)
 const updateAvailable = ref(false)
 const updateApplying = ref(false)
+const currentVersion = ref('')
 const currentImageID = ref('')
 const latestImageID = ref('')
 const updateError = ref('')
@@ -501,6 +502,7 @@ async function onCheckUpdate() {
     const res = await checkForUpdate() as any
     if (res.code === 200 && res.data) {
       updateAvailable.value = res.data.available
+      currentVersion.value = res.data.current_version || ''
       currentImageID.value = res.data.current_id
       latestImageID.value = res.data.latest_id
       updateChecked.value = true
@@ -1027,6 +1029,10 @@ onMounted(() => {
           </div>
           <div class="p-6 space-y-4">
             <div v-if="updateChecked" class="space-y-3">
+              <div v-if="currentVersion" class="flex items-center justify-between text-sm">
+                <span class="text-slate-500">{{ $t('security.update.currentVersion') }}</span>
+                <code class="bg-slate-100 px-2 py-0.5 rounded text-xs text-primary-700 font-semibold">{{ currentVersion }}</code>
+              </div>
               <div class="flex items-center justify-between text-sm">
                 <span class="text-slate-500">{{ $t('security.update.currentImage') }}</span>
                 <code class="bg-slate-100 px-2 py-0.5 rounded text-xs text-slate-700">{{ currentImageID }}</code>

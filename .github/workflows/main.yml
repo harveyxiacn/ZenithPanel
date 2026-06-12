@@ -213,12 +213,23 @@ jobs:
             type=ref,event=pr,prefix=pr-
             type=raw,value=latest,enable={{is_default_branch}}
 
+      - name: Compute build version
+        id: ver
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.ref_name }}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push Docker image
         id: build-and-push
         uses: docker/build-push-action@v7.0.0
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
+          build-args: |
+            VERSION=${{ steps.ver.outputs.value }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

@@ -32,6 +32,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/traffic"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/webserver"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/version"
 )
 
 func main() {
@@ -43,7 +44,7 @@ func main() {
 	}
 
 	// Initialize the application
-	log.Println("ZenithPanel server starting...")
+	log.Printf("ZenithPanel %s server starting...", version.Version)
 
 	// 1. Initialize Database (store in data/ so Docker volumes persist it across updates)
 	dbPath := "data/zenith.db"
