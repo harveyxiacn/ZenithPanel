@@ -399,6 +399,7 @@ export default {
     update: {
       title: 'パネル更新',
       subtitle: '自動で更新を確認しインストール',
+      currentVersion: '現在のバージョン',
       currentImage: '現在のイメージ',
       latestImage: '最新イメージ',
       available: '新しいバージョンが利用可能です。「今すぐ更新」をクリックして適用してください。',

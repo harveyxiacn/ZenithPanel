@@ -20,7 +20,10 @@ COPY --from=frontend-builder /app/frontend/dist ./internal/api/dist/
 ENV CGO_ENABLED=0
 ENV GOOS=linux
 ENV GOARCH=amd64
-RUN go build -o /zenithpanel main.go
+# Build version, injected at link time. CI passes the git tag (e.g. v1.0.0) or
+# a "main-<sha>" string via the VERSION build-arg; defaults to "dev" locally.
+ARG VERSION=dev
+RUN go build -ldflags "-s -w -X github.com/harveyxiacn/ZenithPanel/backend/internal/version.Version=${VERSION}" -o /zenithpanel main.go
 
 # Final Runtime Image
 FROM alpine:latest

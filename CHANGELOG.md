@@ -3,6 +3,31 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.0.0] — 2026-06-12 — first tagged release
+
+The first semver-tagged release. It establishes immutable `vX.Y.Z` image tags
+(`ghcr.io/harveyxiacn/zenithpanel:v1.0.0`) alongside the rolling `:latest` /
+`:main` OTA channel, and bakes a human-readable build version into the binary
+(surfaced in `/health`, `zenithctl version`, and Security → Update) so the panel
+shows `v1.0.0` instead of an image digest. It also encompasses all prior
+`[Unreleased]` batches documented below.
+
+### Added
+
+- **Build version identity.** `internal/version.Version` is injected at link
+  time from the Docker `VERSION` build-arg (the git tag in CI). Shown in the
+  Update panel as "Current Version".
+- **Responsive egress/traffic destination cards.** Top destinations / ASNs /
+  per-instance / per-user lists on the `/egress` page render as an independent,
+  width-adaptive card grid (`StatBar`) whose labels wrap (`break-all`) so long
+  domains/IPs are shown in full and reflow with the screen, replacing the old
+  fixed-width truncated rows. Detail-table cells wrap instead of truncating.
+- **Full i18n** for the Egress, Traffic, and Smart Deploy pages (and the
+  remaining nav labels) across English, 简体中文, 繁體中文, and 日本語.
+- **CSV export.** Backend `GET /api/v1/traffic/egress/export` streams egress
+  detail or top-destination rows as CSV (UTF-8 BOM); the live Traffic page
+  exports the active tab client-side.
+
 ## [Unreleased] — 2026-06-10 (traffic egress logger)
 
 ### Added

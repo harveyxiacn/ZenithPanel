@@ -14,15 +14,19 @@ import (
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/version"
 )
 
 const DefaultImage = "ghcr.io/harveyxiacn/zenithpanel:main"
 
 // UpdateInfo contains the result of an update check.
 type UpdateInfo struct {
-	Available bool   `json:"available"`
-	CurrentID string `json:"current_id"`
-	LatestID  string `json:"latest_id"`
+	Available bool `json:"available"`
+	// CurrentVersion is the human-readable build version of the running panel
+	// (e.g. "v1.0.0"), baked in at build time — friendlier than the digest.
+	CurrentVersion string `json:"current_version"`
+	CurrentID      string `json:"current_id"`
+	LatestID       string `json:"latest_id"`
 }
 
 // getContainerID detects the current Docker container ID.
@@ -161,7 +165,9 @@ func CheckForUpdate(ctx context.Context) (*UpdateInfo, error) {
 		return nil, fmt.Errorf("inspect registry image: %w", err)
 	}
 
-	return newUpdateInfo(info.Image, registry.DistributionInspect(distInspect)), nil
+	ui := newUpdateInfo(info.Image, registry.DistributionInspect(distInspect))
+	ui.CurrentVersion = version.Version
+	return ui, nil
 }
 
 // PerformUpdate recreates the current container with the latest image.

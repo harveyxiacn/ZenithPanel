@@ -49,6 +49,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/traffic"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/updater"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/webserver"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/version"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/time/rate"
@@ -765,9 +766,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 
 			health := gin.H{
-				"status": "ok",
-				"proxy":  proxyStatus,
-				"db":     dbStatus,
+				"status":  "ok",
+				"proxy":   proxyStatus,
+				"db":      dbStatus,
+				"version": version.Version,
 			}
 
 			// Engine-level uptime helps external monitors distinguish "always

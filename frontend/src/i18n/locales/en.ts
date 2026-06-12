@@ -408,6 +408,7 @@ export default {
     update: {
       title: 'Panel Update',
       subtitle: 'Check for and install updates automatically',
+      currentVersion: 'Current Version',
       currentImage: 'Current Image',
       latestImage: 'Latest Image',
       available: 'A new version is available. Click "Update Now" to apply.',

@@ -11,6 +11,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/version"
 )
 
 // Run is the CLI entry point. It returns the process exit code:
@@ -57,7 +59,7 @@ func Run(argv []string) int {
 		printHelp()
 		return 0
 	case "version":
-		fmt.Println("zenithctl v1")
+		fmt.Println("zenithctl " + version.Version)
 		return 0
 	case "status":
 		return runSimpleGet(client, "/api/v1/health", gf)
