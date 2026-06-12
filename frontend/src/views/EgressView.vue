@@ -1,36 +1,40 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   ArrowTrendingUpIcon, ArrowUpIcon, ArrowDownIcon, GlobeAltIcon,
-  Cog6ToothIcon, ArrowPathIcon, ServerStackIcon,
+  Cog6ToothIcon, ArrowPathIcon, ServerStackIcon, ArrowDownTrayIcon,
 } from '@heroicons/vue/24/outline'
 import { useToast } from '@/composables/useToast'
+import StatBar from '@/components/StatBar.vue'
 import {
   getEgressSeries, getEgressSummary, getEgressCoverage, getEgressList,
-  getEgressConfig, updateEgressConfig,
+  getEgressConfig, updateEgressConfig, downloadEgressCSV,
   type EgressSeriesPoint, type EgressSummaryRow, type EgressCoverage,
   type EgressRow, type EgressConfig,
 } from '@/api/traffic'
+import { triggerBlobDownload, fileStamp } from '@/utils/csv'
 
 const toast = useToast()
+const { t } = useI18n()
 
 // ---- filters ----
 type RangeKey = '1h' | '6h' | '24h' | '7d' | '30d'
-const rangePresets: { key: RangeKey; label: string; secs: number }[] = [
-  { key: '1h', label: '1 小时', secs: 3600 },
-  { key: '6h', label: '6 小时', secs: 6 * 3600 },
-  { key: '24h', label: '24 小时', secs: 24 * 3600 },
-  { key: '7d', label: '7 天', secs: 7 * 86400 },
-  { key: '30d', label: '30 天', secs: 30 * 86400 },
+const rangePresets: { key: RangeKey; secs: number }[] = [
+  { key: '1h', secs: 3600 },
+  { key: '6h', secs: 6 * 3600 },
+  { key: '24h', secs: 24 * 3600 },
+  { key: '7d', secs: 7 * 86400 },
+  { key: '30d', secs: 30 * 86400 },
 ]
 const range = ref<RangeKey>('6h')
 const instance = ref<string>('')
 const direction = ref<string>('egress')
 const userSearch = ref<string>('')
-const directionOptions: { val: string; label: string }[] = [
-  { val: 'egress', label: '出口' },
-  { val: 'return', label: '回程' },
-  { val: '', label: '全部' },
+const directionOptions: { val: string }[] = [
+  { val: 'egress' },
+  { val: 'return' },
+  { val: '' },
 ]
 
 const loading = ref(false)
@@ -80,7 +84,7 @@ async function fetchAll() {
     if (list?.code === 200) rows.value = list.data || []
     lastUpdated.value = new Date()
   } catch (e: any) {
-    toast.error(e?.response?.data?.msg || '加载出口流量失败')
+    toast.error(e?.response?.data?.msg || t('egress.loadFailed'))
   }
 }
 
@@ -193,10 +197,10 @@ async function saveConfig() {
     const res = await updateEgressConfig(cfg.value) as any
     if (res?.code === 200) {
       cfg.value = res.data || cfg.value
-      toast.success('已保存')
+      toast.success(t('egress.config.saved'))
     }
   } catch (e: any) {
-    toast.error(e?.response?.data?.msg || '保存失败')
+    toast.error(e?.response?.data?.msg || t('egress.config.saveFailed'))
   } finally {
     cfgSaving.value = false
   }
@@ -207,7 +211,24 @@ function cfgBool(key: string): boolean {
 }
 function setCfgBool(key: string, val: boolean) { cfg.value[key] = val ? 'true' : 'false' }
 
-function destLabel(r: EgressSummaryRow): string { return r.key || '(未解析)' }
+function destLabel(r: EgressSummaryRow): string { return r.key || t('egress.topDests.unresolved') }
+
+// ---- CSV export ----
+const exporting = ref(false)
+async function exportCsv() {
+  exporting.value = true
+  try {
+    const res: any = await downloadEgressCSV({ ...commonParams(), scope: 'detail' })
+    const blob = res instanceof Blob ? res : res?.data
+    if (!(blob instanceof Blob)) throw new Error('bad body')
+    triggerBlobDownload(t('egress.csvFilePrefix') + '-detail-' + fileStamp() + '.csv', blob)
+    toast.success(t('common.exported'))
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || t('common.exportFailed'))
+  } finally {
+    exporting.value = false
+  }
+}
 </script>
 
 <template>
@@ -216,21 +237,25 @@ function destLabel(r: EgressSummaryRow): string { return r.key || '(未解析)' 
       <div>
         <h1 class="text-2xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
           <ArrowTrendingUpIcon class="h-6 w-6 text-primary-500" />
-          出口流量
+          {{ t('egress.title') }}
         </h1>
         <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">
-          按代理实例 / 用户 / 目的地（域名·IP·ASN）统计的出口与回程流量历史
+          {{ t('egress.subtitle') }}
         </p>
       </div>
       <div class="flex items-center gap-3">
-        <span v-if="lastUpdated" class="text-xs text-slate-400">更新于 {{ lastUpdated.toLocaleTimeString() }}</span>
+        <span v-if="lastUpdated" class="text-xs text-slate-400">{{ t('egress.updatedAt', { time: lastUpdated.toLocaleTimeString() }) }}</span>
+        <button @click="exportCsv" :disabled="exporting"
+          class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 disabled:opacity-50">
+          <ArrowDownTrayIcon class="h-4 w-4" />{{ t('common.exportCsv') }}
+        </button>
         <button @click="refresh" :disabled="loading"
           class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50 disabled:opacity-50">
-          <ArrowPathIcon class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />刷新
+          <ArrowPathIcon class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />{{ t('common.refresh') }}
         </button>
         <button @click="showConfig = !showConfig"
           class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-sm text-slate-600 dark:text-slate-300 hover:bg-slate-50">
-          <Cog6ToothIcon class="h-4 w-4" />设置
+          <Cog6ToothIcon class="h-4 w-4" />{{ t('egress.settings') }}
         </button>
       </div>
     </header>
@@ -240,88 +265,88 @@ function destLabel(r: EgressSummaryRow): string { return r.key || '(未解析)' 
       <div class="inline-flex rounded-lg bg-slate-100 dark:bg-slate-800 p-1">
         <button v-for="r in rangePresets" :key="r.key" @click="range = r.key; refresh()"
           :class="['px-3 py-1.5 rounded-md transition text-sm', range === r.key ? 'bg-white dark:bg-slate-900 text-primary-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">
-          {{ r.label }}
+          {{ t('egress.ranges.' + r.key) }}
         </button>
       </div>
       <div class="inline-flex rounded-lg bg-slate-100 dark:bg-slate-800 p-1">
         <button v-for="d in directionOptions" :key="d.val" @click="direction = d.val; refresh()"
           :class="['px-3 py-1.5 rounded-md transition text-sm', direction === d.val ? 'bg-white dark:bg-slate-900 text-primary-600 shadow-sm' : 'text-slate-500 hover:text-slate-700']">
-          {{ d.label }}
+          {{ t('egress.directions.' + (d.val || 'all')) }}
         </button>
       </div>
       <select v-model="instance" @change="refresh"
         class="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm">
-        <option value="">全部实例</option>
+        <option value="">{{ t('egress.allInstances') }}</option>
         <option v-for="i in instanceOptions" :key="i" :value="i">{{ i }}</option>
       </select>
-      <input v-model="userSearch" @keyup.enter="refresh" placeholder="按用户邮箱筛选…"
+      <input v-model="userSearch" @keyup.enter="refresh" :placeholder="t('egress.filterUser')"
         class="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2 py-1.5 text-sm w-40" />
     </div>
 
     <!-- Config panel -->
     <section v-if="showConfig" class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5 space-y-4">
       <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200 flex items-center gap-2">
-        <Cog6ToothIcon class="h-4 w-4" />采集设置
+        <Cog6ToothIcon class="h-4 w-4" />{{ t('egress.config.title') }}
       </h2>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
         <label class="flex items-center justify-between gap-3">
-          <span>启用出口流量采集</span>
+          <span>{{ t('egress.config.enabled') }}</span>
           <input type="checkbox" :checked="cfgBool('traffic_egress_enabled')" @change="setCfgBool('traffic_egress_enabled', ($event.target as HTMLInputElement).checked)" />
         </label>
         <label class="flex items-center justify-between gap-3">
-          <span>ss 套接字采样器（全服务）</span>
+          <span>{{ t('egress.config.socketSampler') }}</span>
           <input type="checkbox" :checked="cfgBool('traffic_egress_socket_sampler')" @change="setCfgBool('traffic_egress_socket_sampler', ($event.target as HTMLInputElement).checked)" />
         </label>
         <label class="flex items-center justify-between gap-3">
-          <span>ASN/国家 DNS 解析</span>
+          <span>{{ t('egress.config.asn') }}</span>
           <input type="checkbox" :checked="cfgBool('traffic_egress_asn_enabled')" @change="setCfgBool('traffic_egress_asn_enabled', ($event.target as HTMLInputElement).checked)" />
         </label>
         <label class="flex items-center justify-between gap-3">
-          <span>反向 DNS 域名补全（IP-only 目的地）</span>
+          <span>{{ t('egress.config.rdns') }}</span>
           <input type="checkbox" :checked="cfgBool('traffic_egress_rdns_enabled')" @change="setCfgBool('traffic_egress_rdns_enabled', ($event.target as HTMLInputElement).checked)" />
         </label>
         <label class="flex items-center justify-between gap-3">
-          <span>明细保留天数</span>
+          <span>{{ t('egress.config.retentionDays') }}</span>
           <input v-model="cfg['traffic_egress_retention_days']" placeholder="7" class="w-20 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-right" />
         </label>
         <label class="flex items-center justify-between gap-3">
-          <span>小时汇总保留天数</span>
+          <span>{{ t('egress.config.hourlyRetentionDays') }}</span>
           <input v-model="cfg['traffic_egress_hourly_retention_days']" placeholder="90" class="w-20 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-right" />
         </label>
         <label class="flex items-center justify-between gap-3">
-          <span>清理时刻（0-23）</span>
+          <span>{{ t('egress.config.pruneHour') }}</span>
           <input v-model="cfg['traffic_egress_prune_hour']" placeholder="5" class="w-20 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-right" />
         </label>
         <label class="flex items-center justify-between gap-3 md:col-span-2">
-          <span class="whitespace-nowrap">zenith-xray access.log 路径（留空=不启用域名采集）</span>
+          <span class="whitespace-nowrap">{{ t('egress.config.xrayAccessPath') }}</span>
           <input v-model="cfg['traffic_egress_xray_access_path']" placeholder="/var/log/xray/access.log" class="flex-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 font-mono text-xs" />
         </label>
       </div>
       <div class="flex justify-end">
         <button @click="saveConfig" :disabled="cfgSaving"
-          class="rounded-lg bg-primary-600 text-white px-4 py-1.5 text-sm hover:bg-primary-700 disabled:opacity-50">保存</button>
+          class="rounded-lg bg-primary-600 text-white px-4 py-1.5 text-sm hover:bg-primary-700 disabled:opacity-50">{{ t('common.save') }}</button>
       </div>
     </section>
 
     <!-- Summary cards -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
       <div class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-4">
-        <div class="text-xs text-slate-500 uppercase tracking-wide">区间总流量</div>
+        <div class="text-xs text-slate-500 uppercase tracking-wide">{{ t('egress.cards.total') }}</div>
         <div class="text-2xl font-bold text-slate-800 dark:text-white mt-1">{{ fmtBytes(totalBytes) }}</div>
       </div>
       <div class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-4">
-        <div class="text-xs text-slate-500 uppercase tracking-wide">上行 / 下行</div>
+        <div class="text-xs text-slate-500 uppercase tracking-wide">{{ t('egress.cards.upDown') }}</div>
         <div class="text-base font-semibold text-slate-800 dark:text-white mt-1 flex items-center gap-2">
           <ArrowUpIcon class="h-4 w-4 text-emerald-500" />{{ fmtBytes(totalUp) }}
           <ArrowDownIcon class="h-4 w-4 text-sky-500 ml-1" />{{ fmtBytes(totalDown) }}
         </div>
       </div>
       <div class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-4">
-        <div class="text-xs text-slate-500 uppercase tracking-wide">目的地数</div>
+        <div class="text-xs text-slate-500 uppercase tracking-wide">{{ t('egress.cards.dests') }}</div>
         <div class="text-2xl font-bold text-slate-800 dark:text-white mt-1">{{ distinctDests }}</div>
       </div>
       <div class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-4">
-        <div class="text-xs text-slate-500 uppercase tracking-wide">活跃实例</div>
+        <div class="text-xs text-slate-500 uppercase tracking-wide">{{ t('egress.cards.activeInstances') }}</div>
         <div class="text-2xl font-bold text-slate-800 dark:text-white mt-1">{{ byInstance.length }}</div>
       </div>
     </div>
@@ -329,14 +354,14 @@ function destLabel(r: EgressSummaryRow): string { return r.key || '(未解析)' 
     <!-- Time series (stacked by instance) -->
     <section class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
       <div class="flex items-center justify-between mb-3">
-        <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200">流量时间序列（按实例堆叠）</h2>
+        <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200">{{ t('egress.series.title') }}</h2>
         <div class="flex flex-wrap gap-3 text-xs">
           <span v-for="i in seriesInstances" :key="i" class="inline-flex items-center gap-1 text-slate-500">
             <span class="inline-block w-2.5 h-2.5 rounded-sm" :style="{ background: instColor(i) }"></span>{{ i }}
           </span>
         </div>
       </div>
-      <div v-if="columns.length === 0" class="text-center text-slate-400 py-12 text-sm">该区间暂无数据（采集每 30 秒写入一次，新启用需稍等）</div>
+      <div v-if="columns.length === 0" class="text-center text-slate-400 py-12 text-sm">{{ t('egress.series.empty') }}</div>
       <div v-else class="flex items-end gap-px h-48 overflow-x-auto">
         <div v-for="c in columns" :key="c.bucket" class="flex flex-col-reverse min-w-[6px] flex-1 group relative" :title="fmtBucket(c.bucket) + ' · ' + fmtBytes(c.total)">
           <div v-for="seg in c.segs" :key="seg.instance"
@@ -353,7 +378,7 @@ function destLabel(r: EgressSummaryRow): string { return r.key || '(未解析)' 
     <!-- Coverage badges -->
     <section class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
       <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
-        <ServerStackIcon class="h-4 w-4" />各实例数据精度（诚实标注）
+        <ServerStackIcon class="h-4 w-4" />{{ t('egress.coverage.title') }}
       </h2>
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         <div v-for="c in coverage" :key="c.instance" class="rounded-lg border border-slate-100 dark:border-slate-700/60 p-3">
@@ -362,100 +387,81 @@ function destLabel(r: EgressSummaryRow): string { return r.key || '(未解析)' 
             <span class="font-medium text-slate-700 dark:text-slate-200 text-sm">{{ c.instance }}</span>
           </div>
           <div class="flex gap-1.5 mt-2">
-            <span :class="['px-1.5 py-0.5 rounded text-[10px]', c.domain ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-slate-100 text-slate-400 dark:bg-slate-700']">域名</span>
-            <span :class="['px-1.5 py-0.5 rounded text-[10px]', c.per_user ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-slate-100 text-slate-400 dark:bg-slate-700']">用户</span>
-            <span :class="['px-1.5 py-0.5 rounded text-[10px]', c.bytes ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-slate-100 text-slate-400 dark:bg-slate-700']">字节</span>
+            <span :class="['px-1.5 py-0.5 rounded text-[10px]', c.domain ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-slate-100 text-slate-400 dark:bg-slate-700']">{{ t('egress.coverage.domain') }}</span>
+            <span :class="['px-1.5 py-0.5 rounded text-[10px]', c.per_user ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-slate-100 text-slate-400 dark:bg-slate-700']">{{ t('egress.coverage.user') }}</span>
+            <span :class="['px-1.5 py-0.5 rounded text-[10px]', c.bytes ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' : 'bg-slate-100 text-slate-400 dark:bg-slate-700']">{{ t('egress.coverage.bytes') }}</span>
           </div>
           <p class="text-[11px] text-slate-400 mt-2 leading-snug">{{ c.note }}</p>
         </div>
       </div>
     </section>
 
-    <!-- Top destinations + ASNs -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <section class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
-        <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
-          <GlobeAltIcon class="h-4 w-4" />热门目的地（域名 / IP）
-        </h2>
-        <div v-if="topDests.length === 0" class="text-slate-400 text-sm py-6 text-center">暂无数据</div>
-        <div v-for="r in topDests.slice(0, 15)" :key="r.key || 'na'" class="flex items-center gap-3 mb-1.5">
-          <div class="w-48 flex items-center gap-1 min-w-0" :title="r.key + (r.kind === 'rdns' ? '（反向 DNS 解析，仅供参考）' : '')">
-            <span class="truncate text-xs font-mono text-slate-600 dark:text-slate-300">{{ destLabel(r) }}</span>
-            <span v-if="r.kind === 'rdns'"
-              class="shrink-0 px-1 rounded text-[9px] leading-4 bg-sky-100 text-sky-600 dark:bg-sky-900/40 dark:text-sky-300">rDNS</span>
-          </div>
-          <div class="flex-1 bg-slate-100 dark:bg-slate-700/50 rounded h-4 overflow-hidden">
-            <div class="h-full bg-primary-500" :style="{ width: barPct(r.bytes_total, topDests) + '%' }"></div>
-          </div>
-          <div class="w-20 text-right text-xs tabular-nums text-slate-500">{{ fmtBytes(r.bytes_total) }}</div>
-        </div>
-      </section>
+    <!-- Top destinations -->
+    <section class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
+      <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+        <GlobeAltIcon class="h-4 w-4" />{{ t('egress.topDests.title') }}
+      </h2>
+      <div v-if="topDests.length === 0" class="text-slate-400 text-sm py-6 text-center">{{ t('egress.topDests.empty') }}</div>
+      <div v-else class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+        <StatBar v-for="r in topDests.slice(0, 15)" :key="r.key || 'na'" :label="destLabel(r)" mono
+          :value="fmtBytes(r.bytes_total)" :pct="barPct(r.bytes_total, topDests)"
+          :badge="r.kind === 'rdns' ? 'rDNS' : undefined"
+          :title="r.key + (r.kind === 'rdns' ? t('egress.topDests.rdnsHint') : '')" />
+      </div>
+    </section>
 
-      <section class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
-        <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">热门 ASN / 机构</h2>
-        <div v-if="topAsns.length === 0" class="text-slate-400 text-sm py-6 text-center">暂无数据（ASN 异步解析，稍后出现）</div>
-        <div v-for="r in topAsns.slice(0, 15)" :key="r.key" class="flex items-center gap-3 mb-1.5">
-          <div class="w-48 truncate text-xs text-slate-600 dark:text-slate-300" :title="r.as_org || r.key">
-            <span class="font-mono">{{ r.key }}</span>
-            <span v-if="r.as_org" class="text-slate-400"> · {{ r.as_org }}</span>
-          </div>
-          <div class="flex-1 bg-slate-100 dark:bg-slate-700/50 rounded h-4 overflow-hidden">
-            <div class="h-full bg-indigo-500" :style="{ width: barPct(r.bytes_total, topAsns) + '%' }"></div>
-          </div>
-          <div class="w-20 text-right text-xs tabular-nums text-slate-500">{{ fmtBytes(r.bytes_total) }}</div>
-        </div>
-      </section>
-    </div>
+    <!-- Top ASNs -->
+    <section class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
+      <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">{{ t('egress.topAsns.title') }}</h2>
+      <div v-if="topAsns.length === 0" class="text-slate-400 text-sm py-6 text-center">{{ t('egress.topAsns.empty') }}</div>
+      <div v-else class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+        <StatBar v-for="r in topAsns.slice(0, 15)" :key="r.key" :label="r.key" mono
+          :sub="r.as_org || undefined" :value="fmtBytes(r.bytes_total)"
+          :pct="barPct(r.bytes_total, topAsns)" color="#6366f1" :title="r.as_org || r.key" />
+      </div>
+    </section>
 
-    <!-- By instance + by user -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      <section class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
-        <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">按实例</h2>
-        <div v-for="r in byInstance" :key="r.key || 'na'" class="flex items-center gap-3 mb-1.5">
-          <div class="w-40 flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
-            <span class="inline-block w-2.5 h-2.5 rounded-sm" :style="{ background: instColor(r.key) }"></span>{{ r.key || '(未知)' }}
-          </div>
-          <div class="flex-1 bg-slate-100 dark:bg-slate-700/50 rounded h-4 overflow-hidden">
-            <div class="h-full" :style="{ width: barPct(r.bytes_total, byInstance) + '%', background: instColor(r.key) }"></div>
-          </div>
-          <div class="w-20 text-right text-xs tabular-nums text-slate-500">{{ fmtBytes(r.bytes_total) }}</div>
-        </div>
-      </section>
+    <!-- By instance -->
+    <section class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
+      <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">{{ t('egress.byInstance.title') }}</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+        <StatBar v-for="r in byInstance" :key="r.key || 'na'" :label="r.key || t('egress.byInstance.unknown')"
+          :value="fmtBytes(r.bytes_total)" :pct="barPct(r.bytes_total, byInstance)"
+          :dotColor="instColor(r.key)" :color="instColor(r.key)" />
+      </div>
+    </section>
 
-      <section class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
-        <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">按用户</h2>
-        <div v-if="byUser.length === 0" class="text-slate-400 text-sm py-6 text-center">无 per-user 数据（IP-only 实例不含用户）</div>
-        <div v-for="r in byUser.slice(0, 15)" :key="r.key" class="flex items-center gap-3 mb-1.5">
-          <div class="w-40 truncate text-xs text-slate-600 dark:text-slate-300" :title="r.key">{{ r.key }}</div>
-          <div class="flex-1 bg-slate-100 dark:bg-slate-700/50 rounded h-4 overflow-hidden">
-            <div class="h-full bg-amber-500" :style="{ width: barPct(r.bytes_total, byUser) + '%' }"></div>
-          </div>
-          <div class="w-20 text-right text-xs tabular-nums text-slate-500">{{ fmtBytes(r.bytes_total) }}</div>
-        </div>
-      </section>
-    </div>
+    <!-- By user -->
+    <section class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-5">
+      <h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3">{{ t('egress.byUser.title') }}</h2>
+      <div v-if="byUser.length === 0" class="text-slate-400 text-sm py-6 text-center">{{ t('egress.byUser.empty') }}</div>
+      <div v-else class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2.5">
+        <StatBar v-for="r in byUser.slice(0, 15)" :key="r.key" :label="r.key" mono
+          :value="fmtBytes(r.bytes_total)" :pct="barPct(r.bytes_total, byUser)" color="#f59e0b" />
+      </div>
+    </section>
 
     <!-- Detail table -->
     <section class="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 overflow-hidden">
       <div class="px-4 py-3 border-b border-slate-100 dark:border-slate-700/40">
-        <h2 class="text-sm font-semibold text-slate-800 dark:text-slate-100">明细（最近 200 条桶记录）</h2>
+        <h2 class="text-sm font-semibold text-slate-800 dark:text-slate-100">{{ t('egress.table.title') }}</h2>
       </div>
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
           <thead class="bg-slate-50 dark:bg-slate-900/40 text-slate-500 text-xs uppercase tracking-wide">
             <tr>
-              <th class="text-left px-4 py-2.5">时间</th>
-              <th class="text-left px-4 py-2.5">实例</th>
-              <th class="text-left px-4 py-2.5">用户</th>
-              <th class="text-left px-4 py-2.5">目的地</th>
-              <th class="text-left px-4 py-2.5">ASN</th>
-              <th class="text-left px-4 py-2.5">方向</th>
-              <th class="text-right px-4 py-2.5">上行</th>
-              <th class="text-right px-4 py-2.5">下行</th>
+              <th class="text-left px-4 py-2.5">{{ t('egress.table.time') }}</th>
+              <th class="text-left px-4 py-2.5">{{ t('egress.table.instance') }}</th>
+              <th class="text-left px-4 py-2.5">{{ t('egress.table.user') }}</th>
+              <th class="text-left px-4 py-2.5">{{ t('egress.table.dest') }}</th>
+              <th class="text-left px-4 py-2.5">{{ t('egress.table.asn') }}</th>
+              <th class="text-left px-4 py-2.5">{{ t('egress.table.direction') }}</th>
+              <th class="text-right px-4 py-2.5">{{ t('egress.table.up') }}</th>
+              <th class="text-right px-4 py-2.5">{{ t('egress.table.down') }}</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-if="rows.length === 0"><td colspan="8" class="text-center text-slate-400 py-8">暂无记录</td></tr>
+            <tr v-if="rows.length === 0"><td colspan="8" class="text-center text-slate-400 py-8">{{ t('egress.table.empty') }}</td></tr>
             <tr v-for="(r, idx) in rows" :key="idx" class="border-t border-slate-100 dark:border-slate-700/50">
               <td class="px-4 py-2 text-xs text-slate-500 whitespace-nowrap">{{ fmtBucket(r.bucket) }}</td>
               <td class="px-4 py-2 text-xs">
@@ -463,17 +469,17 @@ function destLabel(r: EgressSummaryRow): string { return r.key || '(未解析)' 
                   <span class="inline-block w-2 h-2 rounded-sm" :style="{ background: instColor(r.instance) }"></span>{{ r.instance }}
                 </span>
               </td>
-              <td class="px-4 py-2 text-xs text-slate-500 truncate max-w-[10rem]" :title="r.user_email">{{ r.user_email || '—' }}</td>
-              <td class="px-4 py-2 text-xs font-mono text-slate-600 dark:text-slate-300 truncate max-w-[16rem]"
+              <td class="px-4 py-2 text-xs text-slate-500 break-all max-w-[12rem]" :title="r.user_email">{{ r.user_email || '—' }}</td>
+              <td class="px-4 py-2 text-xs font-mono text-slate-600 dark:text-slate-300 break-all max-w-[20rem]"
                 :title="[r.dest_host || r.dest_rdns, r.dest_ip].filter(Boolean).join(' · ')">
                 {{ r.dest_host || r.dest_rdns || r.dest_ip || '—' }}
                 <span v-if="!r.dest_host && r.dest_rdns"
                   class="px-1 rounded text-[9px] bg-sky-100 text-sky-600 dark:bg-sky-900/40 dark:text-sky-300">rDNS</span>
                 <span v-if="r.country" class="text-slate-400">· {{ r.country }}</span>
               </td>
-              <td class="px-4 py-2 text-xs text-slate-500 truncate max-w-[10rem]" :title="r.as_org">{{ r.asn || '—' }}</td>
+              <td class="px-4 py-2 text-xs text-slate-500 break-all max-w-[12rem]" :title="r.as_org">{{ r.asn || '—' }}</td>
               <td class="px-4 py-2 text-xs">
-                <span :class="r.direction === 'return' ? 'text-amber-600' : 'text-sky-600'">{{ r.direction === 'return' ? '回程' : '出口' }}</span>
+                <span :class="r.direction === 'return' ? 'text-amber-600' : 'text-sky-600'">{{ r.direction === 'return' ? t('egress.directions.return') : t('egress.directions.egress') }}</span>
               </td>
               <td class="px-4 py-2 text-right text-xs tabular-nums text-emerald-600">{{ fmtBytes(r.bytes_up) }}</td>
               <td class="px-4 py-2 text-right text-xs tabular-nums text-sky-600">{{ fmtBytes(r.bytes_down) }}</td>

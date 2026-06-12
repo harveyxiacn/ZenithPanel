@@ -1817,7 +1817,7 @@ onBeforeUnmount(() => {
                 <span
                   v-if="singboxOnlyProtocols.has(node.protocol)"
                   class="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700"
-                  title="此协议仅 Sing-box 支持，使用 Sing-box 引擎运行"
+                  :title="t('proxy.inbounds.singboxOnly')"
                 >Sing-box only</span>
               </td>
               <td class="px-6 py-4 text-sm text-slate-500">{{ node.port }}</td>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import {
   deployApply,
   deployClients,
@@ -14,6 +15,10 @@ import type {
   ProbeResult,
 } from '@/types/deploy'
 import { PRESETS } from '@/types/deploy'
+
+const { t } = useI18n()
+
+const stepKeys = ['probe', 'preset', 'options', 'preview', 'done']
 
 type Step = 1 | 2 | 3 | 4 | 5
 
@@ -122,7 +127,7 @@ async function applyDeployment() {
 
 async function rollbackDeployment() {
   if (!deployment.value) return
-  if (!confirm('Roll back this deployment? All tuning and inbounds from this run will be reverted.')) return
+  if (!confirm(t('smartDeploy.rollbackConfirm'))) return
   const d = await deployRollback(deployment.value.id)
   deployment.value = d
 }
@@ -144,18 +149,18 @@ const ramGB = computed(() =>
 const blockers = computed(() => {
   if (!probe.value) return [] as string[]
   const out: string[] = []
-  if (!probe.value.root_check.ok) out.push('面板不是 root 身份运行，无法应用系统调优。')
-  if (!probe.value.systemd.present) out.push('未检测到 systemd，Phase 1 不支持 SysV init。')
-  if (!probe.value.public_ip.v4) out.push('未能检测到公网 IPv4。')
+  if (!probe.value.root_check.ok) out.push(t('smartDeploy.blockers.notRoot'))
+  if (!probe.value.systemd.present) out.push(t('smartDeploy.blockers.noSystemd'))
+  if (!probe.value.public_ip.v4) out.push(t('smartDeploy.blockers.noPublicIp'))
   return out
 })
 
 const warnings = computed(() => {
   if (!probe.value) return [] as string[]
   const out: string[] = []
-  if (!probe.value.time_sync.synced) out.push('系统时间未同步，TLS 握手可能失败。建议先启用 chronyd 或 systemd-timesyncd。')
-  if (!probe.value.kernel.features.bbr) out.push('内核未启用 BBR 模块，调优效果会受限。')
-  if (probe.value.port_avail.ports[443] === false) out.push('端口 443 已被占用，面板会自动选备用端口（8443 等）。')
+  if (!probe.value.time_sync.synced) out.push(t('smartDeploy.warnings.timeNotSynced'))
+  if (!probe.value.kernel.features.bbr) out.push(t('smartDeploy.warnings.noBbr'))
+  if (probe.value.port_avail.ports[443] === false) out.push(t('smartDeploy.warnings.port443Occupied'))
   return out
 })
 </script>
@@ -164,9 +169,9 @@ const warnings = computed(() => {
   <div class="min-h-screen bg-slate-50 dark:bg-slate-900 p-6">
     <div class="max-w-4xl mx-auto">
       <header class="mb-8">
-        <h1 class="text-2xl font-semibold text-slate-900 dark:text-slate-100">智能部署 Smart Deploy</h1>
+        <h1 class="text-2xl font-semibold text-slate-900 dark:text-slate-100">{{ t('smartDeploy.title') }}</h1>
         <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">
-          从零到可用出口隧道，一步完成：环境探测 → 预设选择 → 系统调优 → 协议部署 → 订阅生成。
+          {{ t('smartDeploy.subtitle') }}
         </p>
       </header>
 
@@ -186,7 +191,7 @@ const warnings = computed(() => {
               {{ n }}
             </div>
             <span class="text-sm hidden sm:inline">
-              {{ ['探测', '预设', '选项', '预览', '完成'][n - 1] }}
+              {{ t('smartDeploy.steps.' + stepKeys[n - 1]) }}
             </span>
           </div>
           <div v-if="n < 5" class="flex-1 h-px bg-slate-200 dark:bg-slate-700"></div>
@@ -196,45 +201,45 @@ const warnings = computed(() => {
       <!-- Step 1: Probe -->
       <section v-if="step === 1" class="space-y-4">
         <div v-if="probeLoading" class="bg-white dark:bg-slate-800 rounded-lg p-6 text-center">
-          <p class="text-slate-600 dark:text-slate-400">正在探测环境……</p>
+          <p class="text-slate-600 dark:text-slate-400">{{ t('smartDeploy.probing') }}</p>
         </div>
         <div v-else-if="probeError" class="bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded-lg p-4">
-          <p class="text-rose-700 dark:text-rose-300">探测失败：{{ probeError }}</p>
-          <button class="mt-2 text-sm underline" @click="runProbe">重试</button>
+          <p class="text-rose-700 dark:text-rose-300">{{ t('smartDeploy.probeFailed', { err: probeError }) }}</p>
+          <button class="mt-2 text-sm underline" @click="runProbe">{{ t('smartDeploy.retry') }}</button>
         </div>
         <div v-else-if="probe">
           <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            <Chip tone="neutral" label="内核" :value="probe.kernel.version || '未知'" />
+            <Chip tone="neutral" :label="t('smartDeploy.chips.kernel')" :value="probe.kernel.version || t('smartDeploy.values.unknown')" />
             <Chip :tone="probe.kernel.features.bbr ? 'good' : 'warn'"
-                  label="BBR" :value="probe.kernel.features.bbr ? '可用' : '不可用'" />
+                  :label="t('smartDeploy.chips.bbr')" :value="probe.kernel.features.bbr ? t('smartDeploy.values.available') : t('smartDeploy.values.unavailable')" />
             <Chip :tone="probe.root_check.ok ? 'good' : 'bad'"
-                  label="权限" :value="probe.root_check.ok ? 'root' : `UID ${probe.root_check.uid}`" />
-            <Chip tone="neutral" label="发行版"
+                  :label="t('smartDeploy.chips.perms')" :value="probe.root_check.ok ? 'root' : `UID ${probe.root_check.uid}`" />
+            <Chip tone="neutral" :label="t('smartDeploy.chips.distro')"
                   :value="`${probe.distro.pretty_name || probe.distro.id}`" />
-            <Chip tone="neutral" label="公网 IPv4" :value="probe.public_ip.v4 || '未检测到'" />
-            <Chip tone="neutral" label="CPU / RAM"
-                  :value="`${probe.hardware.cpu_cores} 核 / ${ramGB} GB`" />
-            <Chip tone="neutral" label="主网卡"
-                  :value="probe.nic.primary ? `${probe.nic.primary} · ${probe.nic.link_speed_mbps} Mbps` : '未识别'" />
+            <Chip tone="neutral" :label="t('smartDeploy.chips.publicIp')" :value="probe.public_ip.v4 || t('smartDeploy.values.notDetected')" />
+            <Chip tone="neutral" :label="t('smartDeploy.chips.cpuRam')"
+                  :value="probe.hardware.cpu_cores + ' ' + t('smartDeploy.values.cores') + ' / ' + ramGB + ' GB'" />
+            <Chip tone="neutral" :label="t('smartDeploy.chips.primaryNic')"
+                  :value="probe.nic.primary ? `${probe.nic.primary} · ${probe.nic.link_speed_mbps} Mbps` : t('smartDeploy.values.unrecognized')" />
             <Chip :tone="probe.time_sync.synced ? 'good' : 'warn'"
-                  label="时间同步" :value="probe.time_sync.service || 'none'" />
-            <Chip tone="neutral" label="防火墙" :value="probe.firewall.type" />
+                  :label="t('smartDeploy.chips.timeSync')" :value="probe.time_sync.service || 'none'" />
+            <Chip tone="neutral" :label="t('smartDeploy.chips.firewall')" :value="probe.firewall.type" />
             <Chip :tone="probe.port_avail.ports[443] ? 'good' : 'warn'"
-                  label="端口 443" :value="probe.port_avail.ports[443] ? '空闲' : '已占用'" />
+                  :label="t('smartDeploy.chips.port443')" :value="probe.port_avail.ports[443] ? t('smartDeploy.values.free') : t('smartDeploy.values.occupied')" />
             <Chip :tone="probe.port_avail.ports[8443] ? 'good' : 'warn'"
-                  label="端口 8443" :value="probe.port_avail.ports[8443] ? '空闲' : '已占用'" />
-            <Chip tone="neutral" label="Systemd"
-                  :value="probe.systemd.present ? (probe.systemd.version || 'present') : '缺失'" />
+                  :label="t('smartDeploy.chips.port8443')" :value="probe.port_avail.ports[8443] ? t('smartDeploy.values.free') : t('smartDeploy.values.occupied')" />
+            <Chip tone="neutral" :label="t('smartDeploy.chips.systemd')"
+                  :value="probe.systemd.present ? (probe.systemd.version || 'present') : t('smartDeploy.values.missing')" />
           </div>
 
           <div v-if="blockers.length" class="mt-4 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded-lg p-4">
-            <h3 class="font-medium text-rose-700 dark:text-rose-300">阻断</h3>
+            <h3 class="font-medium text-rose-700 dark:text-rose-300">{{ t('smartDeploy.blockers.title') }}</h3>
             <ul class="mt-2 text-sm text-rose-700 dark:text-rose-300 list-disc list-inside">
               <li v-for="(b, i) in blockers" :key="i">{{ b }}</li>
             </ul>
           </div>
           <div v-if="warnings.length" class="mt-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
-            <h3 class="font-medium text-amber-700 dark:text-amber-300">警告</h3>
+            <h3 class="font-medium text-amber-700 dark:text-amber-300">{{ t('smartDeploy.warnings.title') }}</h3>
             <ul class="mt-2 text-sm text-amber-700 dark:text-amber-300 list-disc list-inside">
               <li v-for="(w, i) in warnings" :key="i">{{ w }}</li>
             </ul>
@@ -242,10 +247,10 @@ const warnings = computed(() => {
 
           <div class="mt-6 flex justify-end gap-2">
             <button class="px-4 py-2 text-sm rounded border border-slate-300 dark:border-slate-700"
-                    @click="runProbe">重新探测</button>
+                    @click="runProbe">{{ t('smartDeploy.reprobe') }}</button>
             <button class="px-4 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
                     :disabled="blockers.length > 0"
-                    @click="goto(2)">下一步：选择预设</button>
+                    @click="goto(2)">{{ t('smartDeploy.nextPreset') }}</button>
           </div>
         </div>
       </section>
@@ -266,7 +271,7 @@ const warnings = computed(() => {
               <h3 class="font-semibold text-slate-900 dark:text-slate-100">{{ preset.displayName }}</h3>
               <span v-if="preset.recommended"
                     class="text-xs px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">
-                推荐
+                {{ t('smartDeploy.recommended') }}
               </span>
             </div>
             <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 font-mono">{{ preset.description }}</p>
@@ -275,9 +280,9 @@ const warnings = computed(() => {
         </div>
         <div class="flex justify-between pt-2">
           <button class="px-4 py-2 text-sm rounded border border-slate-300 dark:border-slate-700"
-                  @click="goto(1)">上一步</button>
+                  @click="goto(1)">{{ t('smartDeploy.prev') }}</button>
           <button class="px-4 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700"
-                  @click="goto(3)">下一步：可选参数</button>
+                  @click="goto(3)">{{ t('smartDeploy.nextOptions') }}</button>
         </div>
       </section>
 
@@ -286,9 +291,9 @@ const warnings = computed(() => {
         <div class="bg-white dark:bg-slate-800 rounded-lg p-6 space-y-4">
           <div>
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
-              域名 (可选)
+              {{ t('smartDeploy.options.domain') }}
               <span class="text-xs text-slate-500 dark:text-slate-400 font-normal">
-                — 提供域名将使用 ACME 签发真实证书；留空使用自签
+                {{ t('smartDeploy.options.domainHint') }}
               </span>
             </label>
             <input v-model="domain" type="text" placeholder="proxy.example.com"
@@ -296,16 +301,16 @@ const warnings = computed(() => {
           </div>
           <div v-if="domain">
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
-              邮箱 (ACME 注册用)
+              {{ t('smartDeploy.options.email') }}
             </label>
             <input v-model="email" type="email" placeholder="you@example.com"
                    class="mt-1 w-full px-3 py-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900" />
           </div>
           <div v-if="selectedPreset === 'stable_egress' || selectedPreset === 'combo'">
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
-              Reality 目标 SNI (可选)
+              {{ t('smartDeploy.options.realitySni') }}
               <span class="text-xs text-slate-500 dark:text-slate-400 font-normal">
-                — 默认 www.microsoft.com
+                {{ t('smartDeploy.options.realitySniHint') }}
               </span>
             </label>
             <input v-model="realityTarget" type="text" placeholder="www.microsoft.com"
@@ -313,9 +318,9 @@ const warnings = computed(() => {
           </div>
           <div>
             <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">
-              端口覆盖 (可选)
+              {{ t('smartDeploy.options.portOverride') }}
               <span class="text-xs text-slate-500 dark:text-slate-400 font-normal">
-                — 留空使用 443 或自动回退
+                {{ t('smartDeploy.options.portOverrideHint') }}
               </span>
             </label>
             <input v-model.number="portOverride" type="number" placeholder="443"
@@ -324,11 +329,11 @@ const warnings = computed(() => {
         </div>
         <div class="flex justify-between pt-2">
           <button class="px-4 py-2 text-sm rounded border border-slate-300 dark:border-slate-700"
-                  @click="goto(2)">上一步</button>
+                  @click="goto(2)">{{ t('smartDeploy.prev') }}</button>
           <button class="px-4 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
                   :disabled="previewLoading"
                   @click="generatePreview">
-            {{ previewLoading ? '生成预览中……' : '生成预览' }}
+            {{ previewLoading ? t('smartDeploy.generating') : t('smartDeploy.generatePreview') }}
           </button>
         </div>
         <p v-if="previewError" class="text-sm text-rose-600 dark:text-rose-400">{{ previewError }}</p>
@@ -337,19 +342,19 @@ const warnings = computed(() => {
       <!-- Step 4: Preview -->
       <section v-else-if="step === 4 && plan" class="space-y-4">
         <div class="bg-white dark:bg-slate-800 rounded-lg p-6">
-          <h3 class="font-medium text-slate-900 dark:text-slate-100 mb-3">将要执行的操作</h3>
+          <h3 class="font-medium text-slate-900 dark:text-slate-100 mb-3">{{ t('smartDeploy.preview.title') }}</h3>
 
           <div class="text-sm space-y-3">
             <div>
-              <span class="text-slate-500 dark:text-slate-400">预设：</span>
+              <span class="text-slate-500 dark:text-slate-400">{{ t('smartDeploy.preview.preset') }}</span>
               <span class="font-medium">{{ plan.preset_id }}</span>
             </div>
             <div>
-              <span class="text-slate-500 dark:text-slate-400">证书模式：</span>
+              <span class="text-slate-500 dark:text-slate-400">{{ t('smartDeploy.preview.certMode') }}</span>
               <span class="font-mono">{{ plan.cert_mode }}</span>
             </div>
             <div>
-              <span class="text-slate-500 dark:text-slate-400">入站 ({{ plan.inbounds.length }})：</span>
+              <span class="text-slate-500 dark:text-slate-400">{{ t('smartDeploy.preview.inbounds', { n: plan.inbounds.length }) }}</span>
               <ul class="mt-1 space-y-1 ml-4">
                 <li v-for="ib in plan.inbounds" :key="ib.tag" class="font-mono text-xs">
                   {{ ib.engine }} / {{ ib.protocol }} · :{{ ib.port }}/{{ ib.network || 'tcp' }} · {{ ib.tag }}
@@ -357,7 +362,7 @@ const warnings = computed(() => {
               </ul>
             </div>
             <div>
-              <span class="text-slate-500 dark:text-slate-400">调优操作 ({{ plan.tuning.length }})：</span>
+              <span class="text-slate-500 dark:text-slate-400">{{ t('smartDeploy.preview.tuning', { n: plan.tuning.length }) }}</span>
               <ul class="mt-1 space-y-1 ml-4">
                 <li v-for="t in plan.tuning" :key="t.op_name" class="font-mono text-xs">
                   {{ t.op_name }}<span v-if="t.params"> {{ JSON.stringify(t.params) }}</span>
@@ -365,13 +370,13 @@ const warnings = computed(() => {
               </ul>
             </div>
             <div v-if="plan.firewall_allow_ports?.length">
-              <span class="text-slate-500 dark:text-slate-400">防火墙放行端口：</span>
+              <span class="text-slate-500 dark:text-slate-400">{{ t('smartDeploy.preview.firewallPorts') }}</span>
               <span class="font-mono text-xs">{{ plan.firewall_allow_ports.join(', ') }}</span>
             </div>
           </div>
 
           <div v-if="plan.notes?.length" class="mt-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded p-3">
-            <h4 class="font-medium text-amber-700 dark:text-amber-300 text-sm">提示</h4>
+            <h4 class="font-medium text-amber-700 dark:text-amber-300 text-sm">{{ t('smartDeploy.preview.notes') }}</h4>
             <ul class="mt-1 text-sm text-amber-700 dark:text-amber-300 list-disc list-inside">
               <li v-for="(n, i) in plan.notes" :key="i">{{ n }}</li>
             </ul>
@@ -380,11 +385,11 @@ const warnings = computed(() => {
 
         <div class="flex justify-between pt-2">
           <button class="px-4 py-2 text-sm rounded border border-slate-300 dark:border-slate-700"
-                  @click="goto(3)">修改选项</button>
+                  @click="goto(3)">{{ t('smartDeploy.preview.modifyOptions') }}</button>
           <button class="px-4 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50"
                   :disabled="applyLoading"
                   @click="applyDeployment">
-            {{ applyLoading ? '部署中……' : '确认并部署' }}
+            {{ applyLoading ? t('smartDeploy.deploying') : t('smartDeploy.confirmDeploy') }}
           </button>
         </div>
         <p v-if="applyError" class="text-sm text-rose-600 dark:text-rose-400">{{ applyError }}</p>
@@ -394,9 +399,9 @@ const warnings = computed(() => {
       <section v-else-if="step === 5 && deployment" class="space-y-4">
         <div v-if="deployment.status === 'succeeded'"
              class="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-lg p-6">
-          <h3 class="font-medium text-emerald-700 dark:text-emerald-300 text-lg">✓ 部署成功</h3>
+          <h3 class="font-medium text-emerald-700 dark:text-emerald-300 text-lg">{{ t('smartDeploy.result.success') }}</h3>
           <p class="text-sm text-emerald-700 dark:text-emerald-300 mt-1">
-            部署 ID：{{ deployment.id }}
+            {{ t('smartDeploy.result.deployId', { id: deployment.id }) }}
           </p>
           <p v-if="clientsInfo" class="text-sm text-emerald-700 dark:text-emerald-300 mt-2">
             {{ clientsInfo.note }}
@@ -405,22 +410,22 @@ const warnings = computed(() => {
         <div v-else
              class="bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded-lg p-6">
           <h3 class="font-medium text-rose-700 dark:text-rose-300 text-lg">
-            × 部署失败 · 状态：{{ deployment.status }}
+            {{ t('smartDeploy.result.failPrefix', { status: deployment.status }) }}
           </h3>
           <p class="text-sm text-rose-700 dark:text-rose-300 mt-2 font-mono break-all">
-            {{ deployment.error || '未知错误' }}
+            {{ deployment.error || t('smartDeploy.result.unknownError') }}
           </p>
           <p class="text-xs text-rose-600 dark:text-rose-400 mt-2">
-            失败时已自动回滚已应用的操作。
+            {{ t('smartDeploy.result.autoRolledBack') }}
           </p>
         </div>
 
         <div class="flex justify-end gap-2 pt-2">
           <button v-if="deployment.status === 'succeeded'"
                   class="px-4 py-2 text-sm rounded border border-rose-300 dark:border-rose-700 text-rose-600 dark:text-rose-400"
-                  @click="rollbackDeployment">回滚</button>
+                  @click="rollbackDeployment">{{ t('smartDeploy.rollback') }}</button>
           <button class="px-4 py-2 text-sm rounded bg-emerald-600 text-white hover:bg-emerald-700"
-                  @click="resetWizard">新建部署</button>
+                  @click="resetWizard">{{ t('smartDeploy.newDeploy') }}</button>
         </div>
       </section>
     </div>
