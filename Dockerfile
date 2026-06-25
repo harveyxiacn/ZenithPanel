@@ -31,7 +31,7 @@ WORKDIR /opt/zenithpanel
 
 # Pinned proxy engine versions — update these when a new release is desired.
 # Using ARGs avoids GitHub API rate-limit failures during CI builds.
-ARG XRAY_VERSION=v25.4.30
+ARG XRAY_VERSION=v26.2.6
 ARG SINGBOX_VERSION=v1.11.0
 
 # Install basic runtime dependencies (ca-certificates for TLS, tzdata, etc).
