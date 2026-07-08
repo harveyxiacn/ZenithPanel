@@ -3,6 +3,20 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Fixed
+
+- **DB logger flood that could fill the disk.** The GORM connection now uses an
+  explicit logger at `Warn` level with `IgnoreRecordNotFoundError` enabled and
+  colour disabled, instead of GORM's default. The traffic monitor polls every 2s
+  and calls `GetSetting()` for many optional keys that legitimately don't exist
+  yet; the default logger logged every `record not found` plus the full SQL (with
+  ANSI colour codes) to stdout, so a single container's `-json.log` grew to ~2 GB
+  and filled a 10 GB disk, hanging the host. Real errors and slow queries
+  (>200 ms) are still logged. Override with
+  `ZENITH_DB_LOG_LEVEL=silent|error|warn|info` for debugging.
+
 ## [1.0.0] — 2026-06-12 — first tagged release
 
 The first semver-tagged release. It establishes immutable `vX.Y.Z` image tags
