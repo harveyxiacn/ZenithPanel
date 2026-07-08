@@ -7,17 +7,57 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 var DB *gorm.DB
 
+// gormLogger builds the GORM logger used by the panel's DB connection.
+//
+// It runs at Warn level with record-not-found errors ignored. This matters:
+// the traffic monitor polls every 2s (see service/traffic/monitor.go) and calls
+// GetSetting() for many optional keys that legitimately don't exist yet. GORM's
+// default logger logs every ErrRecordNotFound together with the full SQL, so
+// those misses flooded the container's stdout — in production a single
+// zenithpanel json.log grew to 2GB and filled a 10GB disk, hanging the host.
+// Ignoring record-not-found (a normal, expected outcome here) while keeping
+// real errors and slow queries removes the noise without hiding problems.
+//
+// Override with ZENITH_DB_LOG_LEVEL=silent|error|warn|info when debugging.
+func gormLogger() logger.Interface {
+	level := logger.Warn
+	switch strings.ToLower(os.Getenv("ZENITH_DB_LOG_LEVEL")) {
+	case "silent":
+		level = logger.Silent
+	case "error":
+		level = logger.Error
+	case "warn":
+		level = logger.Warn
+	case "info":
+		level = logger.Info
+	}
+	return logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  level,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  false,
+		},
+	)
+}
+
 // InitDB initializes the SQLite database and performs auto-migration
 func InitDB(dbPath string) {
-	database, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	database, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
+		Logger: gormLogger(),
+	})
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
