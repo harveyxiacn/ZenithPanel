@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
@@ -254,7 +255,31 @@ func operatorInstanceMap() map[string]string {
 // listeningPortsAndComms returns the set of local listening ports (for inbound
 // vs outbound classification) and the set of process comms that own a listening
 // socket (servers — the candidates for egress tracking).
+//
+// Listening sockets only change when an engine is (re)applied, so the result
+// is cached for listenCacheTTL: that halves the `ss` fork+execs per sampler
+// tick. A newly bound proxy is picked up within one TTL.
 func listeningPortsAndComms() (map[int]bool, map[string]bool) {
+	listenCache.Lock()
+	defer listenCache.Unlock()
+	if time.Since(listenCache.at) < listenCacheTTL && listenCache.ports != nil {
+		return listenCache.ports, listenCache.comms
+	}
+	ports, comms := scanListeners()
+	listenCache.ports, listenCache.comms, listenCache.at = ports, comms, time.Now()
+	return ports, comms
+}
+
+const listenCacheTTL = 60 * time.Second
+
+var listenCache struct {
+	sync.Mutex
+	at    time.Time
+	ports map[int]bool
+	comms map[string]bool
+}
+
+func scanListeners() (map[int]bool, map[string]bool) {
 	ports := map[int]bool{}
 	comms := map[string]bool{}
 	for _, flag := range []string{"-tlnpH", "-ulnpH"} {

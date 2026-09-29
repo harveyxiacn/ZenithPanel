@@ -9,6 +9,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
@@ -93,6 +94,9 @@ type Monitor struct {
 	proxyAgg   *proxyAggregator
 	sysAgg     *systemAggregator
 	lastProcAt time.Time
+
+	tickMu     sync.Mutex   // serialises the loop's ticks and MarkViewed refreshes
+	lastViewed atomic.Int64 // unix nanos of the last /traffic read
 }
 
 // NewMonitor wires up the monitor with the running Sing-box manager. The
@@ -128,12 +132,50 @@ func (m *Monitor) loop(ctx context.Context) {
 	}
 }
 
-// tick gathers one full snapshot. The process scan is skipped on most ticks
-// because enumerating /proc is expensive; we reuse the previous process list
-// in between scans so the UI stays populated.
+// viewerWindow is how long after the last /traffic read the monitor keeps
+// sampling UI-only data (NIC rates, processes, per-user totals).
+const viewerWindow = 60 * time.Second
+
+// MarkViewed records that someone is looking at the live traffic data. If
+// the monitor had been idle, it refreshes synchronously so the caller never
+// sees a stale snapshot.
+func (m *Monitor) MarkViewed() {
+	now := time.Now().UnixNano()
+	prev := m.lastViewed.Swap(now)
+	if time.Duration(now-prev) >= viewerWindow {
+		m.tick(true)
+	}
+}
+
+func (m *Monitor) viewerActive() bool {
+	return time.Duration(time.Now().UnixNano()-m.lastViewed.Load()) < viewerWindow
+}
+
+// tick gathers one snapshot. Work is scaled to demand:
+//
+//   - nobody viewing and sing-box stopped: nothing to show or account — skip;
+//   - nobody viewing, sing-box running: poll the Clash API only, because
+//     per-user byte accounting depends on it (skipping it would lose the
+//     bytes of connections that open and close in between);
+//   - someone viewing: full snapshot incl. NIC rates, the process scan (on
+//     its slower clock) and per-user totals from the DB.
+//
+// The process scan is skipped on most ticks because enumerating /proc is
+// expensive; we reuse the previous process list in between scans.
 func (m *Monitor) tick(force bool) {
+	m.tickMu.Lock()
+	defer m.tickMu.Unlock()
 	now := time.Now()
-	users, perr := m.proxyAgg.sample(m.sm)
+	viewing := force || m.viewerActive()
+	if !viewing && (m.sm == nil || !m.sm.Status()) {
+		return
+	}
+	users, perr := m.proxyAgg.sample(m.sm, viewing)
+	if !viewing {
+		// Accounting-only tick: deltas are queued for the accountant; the
+		// UI snapshot is refreshed when someone next looks.
+		return
+	}
 	nics, sysErr := m.sysAgg.sampleNICs()
 
 	doProcs := force || now.Sub(m.lastProcAt) >= processTickInterval

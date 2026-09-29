@@ -73,11 +73,33 @@ func TestMonitorHistoryRingCapsAtHistoryCap(t *testing.T) {
 	defer cancel()
 	_ = ctx
 	for i := 0; i < historyCap+10; i++ {
-		m.tick(false)
+		m.tick(true) // force = someone is viewing
 	}
 	hist := m.History(0)
 	if len(hist) != historyCap {
 		t.Fatalf("expected history bounded at %d, got %d", historyCap, len(hist))
+	}
+}
+
+// With nobody viewing and no sing-box to account, a tick must do no work
+// (no snapshot, no /proc or gopsutil scans) — that is the idle-CPU fix.
+func TestMonitorIdleTickDoesNothing(t *testing.T) {
+	m := NewMonitor(nil)
+	for i := 0; i < 5; i++ {
+		m.tick(false)
+	}
+	if n := len(m.History(0)); n != 0 {
+		t.Fatalf("idle ticks recorded %d snapshots, want 0", n)
+	}
+	// A viewer arriving after idleness gets an immediate fresh snapshot.
+	m.MarkViewed()
+	if n := len(m.History(0)); n != 1 {
+		t.Fatalf("MarkViewed after idle should refresh once, got %d snapshots", n)
+	}
+	// Subsequent loop ticks keep sampling while the viewer is recent.
+	m.tick(false)
+	if n := len(m.History(0)); n != 2 {
+		t.Fatalf("tick with active viewer should sample, got %d snapshots", n)
 	}
 }
 

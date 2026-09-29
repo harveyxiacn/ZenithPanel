@@ -114,10 +114,16 @@ func (a *proxyAggregator) drainPendingDest() map[destAggKey]pendingDelta {
 // isn't running or the Clash API isn't enabled, we still return per-user
 // totals from the Client table (with zero rates) so the page is useful in
 // both states.
-func (a *proxyAggregator) sample(sm *proxy.SingboxManager) ([]ProxyUserSample, error) {
+//
+// withTotals=false skips the per-user DB totals (only the UI needs them);
+// the Clash poll and byte accounting run either way.
+func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]ProxyUserSample, error) {
 	now := time.Now()
 
-	clientTotals := loadClientTotals()
+	var clientTotals map[string]clientTotals
+	if withTotals {
+		clientTotals = loadClientTotals()
+	}
 	users := make(map[string]*ProxyUserSample, len(clientTotals))
 	for email, tot := range clientTotals {
 		users[email] = &ProxyUserSample{

@@ -952,6 +952,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Traffic monitor not initialized"})
 				return
 			}
+			tm.MarkViewed() // keep UI-only sampling on while someone is watching
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": tm.Latest()})
 		})
 		authGroup.GET("/traffic/history", func(c *gin.Context) {
@@ -965,6 +966,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					secs = v
 				}
 			}
+			tm.MarkViewed()
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": tm.History(secs)})
 		})
 
