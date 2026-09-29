@@ -44,6 +44,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/notify"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/selftest"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
 	sysopt "github.com/harveyxiacn/ZenithPanel/backend/internal/service/system"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/terminal"
@@ -2362,6 +2363,32 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					return
 				}
 				result := diagnostic.ProbeInbound(in)
+				// A bound port proves little (a node with a wrong Reality
+				// target or key passes it). Unless ?quick=1, push real
+				// traffic through the node using the exact share link the
+				// first enabled client imports, dialled at 127.0.0.1.
+				if result.OK && c.Query("quick") != "1" {
+					var cl model.Client
+					if err := config.DB.Where("inbound_id = ? AND enable = ?", in.ID, true).Order("id").First(&cl).Error; err != nil {
+						result.E2E = "skipped"
+						result.Err = "no enabled client — add one to run the end-to-end test"
+					} else if link := sub.ShareLink(in, cl, "127.0.0.1"); link == "" {
+						result.E2E = "skipped"
+					} else {
+						e2e := selftest.Run(c.Request.Context(), link, selftest.Options{})
+						result.ElapsedMs += e2e.LatencyMs
+						result.E2ELatency = e2e.LatencyMs
+						if e2e.OK {
+							result.E2E = "passed"
+							result.ExitIP = e2e.ExitIP
+						} else {
+							result.E2E = "failed"
+							result.OK = false
+							result.Stage = "proxy"
+							result.Err = e2e.Err
+						}
+					}
+				}
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok", "data": result})
 			})
 

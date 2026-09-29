@@ -30,6 +30,12 @@ type InboundProbeResult struct {
 	Stage     string `json:"stage,omitempty"`
 	ElapsedMs int64  `json:"elapsed_ms"`
 	Err       string `json:"err,omitempty"`
+	// End-to-end result (see service/selftest): "passed", "failed" or
+	// "skipped" (no enabled client, or quick mode). Empty when the port
+	// probe already failed. On "failed", OK is false and Stage is "proxy".
+	E2E        string `json:"e2e,omitempty"`
+	ExitIP     string `json:"exit_ip,omitempty"`
+	E2ELatency int64  `json:"e2e_latency_ms,omitempty"`
 }
 
 // quicProtocols are served over UDP/QUIC; they cannot be TCP-dialed and the

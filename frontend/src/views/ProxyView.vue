@@ -71,6 +71,14 @@ const inboundsLoading = ref(false)
 // away or applies new config. Each value is either a result object (ok/stage
 // pulled from the server) or the string 'pending' while the probe runs.
 const probeResults = ref<Record<number, InboundProbeResult | 'pending'>>({})
+// Tooltip for a passing probe: port check + end-to-end result (exit IP).
+function probeOkTitle(r: InboundProbeResult) {
+  const parts = [`OK · ${r.elapsed_ms}ms`]
+  if (r.e2e === 'passed') parts.push(t('proxy.inbounds.probeE2EPassed', { ip: r.exit_ip || '?' }))
+  else if (r.e2e === 'skipped') parts.push(t('proxy.inbounds.probeE2ESkipped'))
+  parts.push(t('proxy.inbounds.probeRecheck'))
+  return parts.join(' · ')
+}
 
 async function onProbeInbound(id: number) {
   probeResults.value = { ...probeResults.value, [id]: 'pending' }
@@ -1839,8 +1847,8 @@ onBeforeUnmount(() => {
                   v-else-if="probeResults[node.id] && (probeResults[node.id] as InboundProbeResult).ok"
                   @click="onProbeInbound(node.id)"
                   :class="['inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium transition', 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200']"
-                  :title="`OK · ${(probeResults[node.id] as InboundProbeResult).elapsed_ms}ms · ${$t('proxy.inbounds.probeRecheck')}`"
-                >✓ {{ (probeResults[node.id] as InboundProbeResult).elapsed_ms }}ms</button>
+                  :title="probeOkTitle(probeResults[node.id] as InboundProbeResult)"
+                >✓ {{ (probeResults[node.id] as InboundProbeResult).elapsed_ms }}ms<span v-if="(probeResults[node.id] as InboundProbeResult).e2e === 'passed'" class="ml-1 opacity-70">E2E</span></button>
                 <button
                   v-else-if="probeResults[node.id]"
                   @click="onProbeInbound(node.id)"

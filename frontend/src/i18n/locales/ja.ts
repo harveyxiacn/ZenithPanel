@@ -266,6 +266,8 @@ export default {
       addUser: 'ユーザー追加',
       probe: '接続確認',
       probeTooltip: 'サーバー側でこのインバウンドの接続性をチェックします',
+      probeE2EPassed: '実トラフィック OK、出口 IP {ip}',
+      probeE2ESkipped: 'エンドツーエンドテスト省略（有効なユーザーなし）',
       probeRecheck: 'クリックで再チェック',
       probeAll: '一括確認',
       probingAll: '確認中…',

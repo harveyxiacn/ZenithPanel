@@ -132,6 +132,10 @@ export interface InboundProbeResult {
   stage?: string
   elapsed_ms: number
   err?: string
+  /** end-to-end traffic test: passed | failed | skipped */
+  e2e?: 'passed' | 'failed' | 'skipped'
+  exit_ip?: string
+  e2e_latency_ms?: number
 }
 
 export function probeInbound(id: number) {

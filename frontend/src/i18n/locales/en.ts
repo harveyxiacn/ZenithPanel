@@ -273,6 +273,8 @@ export default {
       addUser: 'Add User',
       probe: 'Probe',
       probeTooltip: 'Run a server-side connectivity check on this inbound',
+      probeE2EPassed: 'real traffic OK, exit IP {ip}',
+      probeE2ESkipped: 'end-to-end test skipped (no enabled client)',
       probeRecheck: 'click to re-check',
       probeAll: 'Probe all',
       probingAll: 'Probing…',

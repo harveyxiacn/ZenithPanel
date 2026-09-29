@@ -266,6 +266,8 @@ export default {
       addUser: '新增用戶',
       probe: '探活',
       probeTooltip: '從伺服器端對此入站做一次連通性檢查',
+      probeE2EPassed: '真實流量測試通過，出口 IP {ip}',
+      probeE2ESkipped: '未做端到端測試（沒有啟用的使用者）',
       probeRecheck: '點擊重新檢測',
       probeAll: '探活全部',
       probingAll: '探活中…',

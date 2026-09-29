@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Always check out with LF: these run on Linux (a CRLF install.sh copied
+# from a Windows clone fails silently under bash).
+*.sh text eol=lf
+Dockerfile text eol=lf

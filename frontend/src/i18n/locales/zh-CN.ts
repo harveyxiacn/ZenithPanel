@@ -266,6 +266,8 @@ export default {
       addUser: '添加用户',
       probe: '探活',
       probeTooltip: '从服务端对此入站做一次连通性检查',
+      probeE2EPassed: '真实流量测试通过，出口 IP {ip}',
+      probeE2ESkipped: '未做端到端测试（没有启用的用户）',
       probeRecheck: '点击重新检测',
       probeAll: '探活全部',
       probingAll: '探活中…',

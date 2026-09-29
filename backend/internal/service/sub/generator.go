@@ -768,39 +768,39 @@ func writeClashTransport(sb *strings.Builder, si streamInfo) {
 // buildBase64Links generates base64-encoded V2Ray/Xray subscription links.
 func buildBase64Links(inbounds []model.Inbound, client model.Client, serverAddr string) string {
 	lines := make([]string, 0, len(inbounds))
-
 	for _, in := range inbounds {
-		si := parseStream(in.Stream)
-		publicServer := resolveInboundServerAddress(in, serverAddr)
-		remark := in.Tag
-		if remark == "" {
-			remark = fmt.Sprintf("%s-%d", in.Protocol, in.Port)
-		}
-
-		var link string
-		switch in.Protocol {
-		case "vless":
-			link = buildVLESSLink(in, client, publicServer, si)
-		case "vmess":
-			link = buildVMessLink(in, client, publicServer, si)
-		case "trojan":
-			link = buildTrojanLink(in, client, publicServer, si, remark)
-		case "shadowsocks":
-			link = buildSSLink(in, client, publicServer, remark)
-		case "hysteria2":
-			link = buildHysteria2Link(in, client, publicServer, si, remark)
-		case "tuic":
-			link = buildTUICLink(in, client, publicServer, si, remark)
-		default:
-			continue
-		}
-
-		if link != "" {
+		if link := ShareLink(in, client, resolveInboundServerAddress(in, serverAddr)); link != "" {
 			lines = append(lines, link)
 		}
 	}
-
 	return base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n")))
+}
+
+// ShareLink returns the share URI (vless://, vmess://, trojan://, ss://,
+// hysteria2://, tuic://) a client imports for inbound `in`, pointing at
+// `server`. Empty for protocols without a share format. The end-to-end
+// self-test consumes exactly this, so it validates what users receive.
+func ShareLink(in model.Inbound, client model.Client, server string) string {
+	si := parseStream(in.Stream)
+	remark := in.Tag
+	if remark == "" {
+		remark = fmt.Sprintf("%s-%d", in.Protocol, in.Port)
+	}
+	switch in.Protocol {
+	case "vless":
+		return buildVLESSLink(in, client, server, si)
+	case "vmess":
+		return buildVMessLink(in, client, server, si)
+	case "trojan":
+		return buildTrojanLink(in, client, server, si, remark)
+	case "shadowsocks":
+		return buildSSLink(in, client, server, remark)
+	case "hysteria2":
+		return buildHysteria2Link(in, client, server, si, remark)
+	case "tuic":
+		return buildTUICLink(in, client, server, si, remark)
+	}
+	return ""
 }
 
 // buildVLESSLink generates a vless:// share link.
