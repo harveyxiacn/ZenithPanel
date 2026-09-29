@@ -24,9 +24,12 @@ func recordAudit(c *gin.Context, action, detail string) {
 	// Recover (and explicitly drop the panic value with `_`) so a panicking
 	// audit write — caused by, say, a closed DB during shutdown — can't take
 	// the goroutine pool down with it.
+	// Capture the handle now: reading the global from the goroutine races
+	// with anything that swaps config.DB (tests do, per test case).
+	db := config.DB
 	go func() {
 		defer func() { _ = recover() }()
-		config.DB.Create(&model.AuditLog{
+		db.Create(&model.AuditLog{
 			Username: principal,
 			Action:   action,
 			Detail:   detail,

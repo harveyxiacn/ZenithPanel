@@ -3,7 +3,6 @@ package api
 import (
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,20 +34,12 @@ func StartSubscriptionServer() {
 	}
 }
 
-// subFallbackHost picks the host for subscription URLs when neither an
-// explicit public host nor a certificate name is available: the first
-// inbound's configured server address (the address clients already dial),
-// else the host the admin is using.
+// subFallbackHost is the host share links use when neither an explicit
+// public host nor a certificate name is available — the same rule as the
+// subscription generator (request host, or a configured node address when
+// the admin is on loopback / the unix socket).
 func subFallbackHost(c *gin.Context) string {
-	var in model.Inbound
-	if config.DB.Where("enable = ? AND server_address <> ''", true).Order("id").First(&in).Error == nil {
-		return strings.Trim(in.ServerAddress, "[]")
-	}
-	host := c.Request.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		return h
-	}
-	return host
+	return sub.ServerAddrFor(c)
 }
 
 func registerSubscriptionServerRoutes(g *gin.RouterGroup, panelPort func() string) {

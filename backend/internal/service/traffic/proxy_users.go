@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +40,9 @@ type clashConn struct {
 	Download uint64            `json:"download"`
 	Start    string            `json:"start"`
 	Metadata clashConnMetadata `json:"metadata"`
+	// Outbound chain; the per-user "user:<identity>" outbound in it is how
+	// sing-box traffic is attributed (see proxy.UserOutboundPrefix).
+	Chains []string `json:"chains"`
 }
 
 type clashConnMetadata struct {
@@ -54,6 +58,10 @@ type clashConnMetadata struct {
 
 type clashConnectionsResponse struct {
 	Connections []clashConn `json:"connections"`
+	// Process-wide cumulative byte counters, including connections that
+	// have already closed (the per-connection list only has open ones).
+	UploadTotal   uint64 `json:"uploadTotal"`
+	DownloadTotal uint64 `json:"downloadTotal"`
 }
 
 // proxyAggregator turns sequential Clash API snapshots into per-user upload/
@@ -62,12 +70,18 @@ type clashConnectionsResponse struct {
 // which the accountant drains every 30 s into Client.UpLoad/DownLoad so the
 // cumulative-traffic column reflects what's actually flowed.
 type proxyAggregator struct {
-	mu           sync.Mutex
-	lastAt       time.Time
-	lastConn     map[string]clashConn // by connection id
-	pendingFlush map[string]pendingDelta
-	pendingDest  map[destAggKey]pendingDelta // per-(user,dest) deltas for egress logging
-	httpc        *http.Client
+	mu       sync.Mutex
+	lastAt   time.Time
+	lastConn map[string]clashConn // by connection id
+	// For bytes of connections that close between polls: the previous
+	// global totals and each open connection's latest per-tick delta
+	// (used to weight the split of the closed-connection remainder).
+	lastTotals    pendingDelta
+	haveTotals    bool
+	lastConnDelta map[string]pendingDelta
+	pendingFlush  map[string]pendingDelta
+	pendingDest   map[destAggKey]pendingDelta // per-(user,dest) deltas for egress logging
+	httpc         *http.Client
 }
 
 // pendingDelta accumulates bytes per user since the last DB flush. Held inside
@@ -79,9 +93,10 @@ type pendingDelta struct {
 
 func newProxyAggregator() *proxyAggregator {
 	return &proxyAggregator{
-		lastConn:     map[string]clashConn{},
-		pendingFlush: map[string]pendingDelta{},
-		pendingDest:  map[destAggKey]pendingDelta{},
+		lastConn:      map[string]clashConn{},
+		lastConnDelta: map[string]pendingDelta{},
+		pendingFlush:  map[string]pendingDelta{},
+		pendingDest:   map[destAggKey]pendingDelta{},
 		// Short timeout: the Clash API is local; if it hangs longer than this
 		// the panel UI should see an error and we should not block the loop.
 		httpc: &http.Client{Timeout: 2 * time.Second},
@@ -146,7 +161,7 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 		}
 	}
 
-	connsByUser, byID, err := a.fetchConnections(sm)
+	connsByUser, byID, totals, err := a.fetchConnections(sm)
 	if err != nil {
 		out := flatten(users)
 		return out, err
@@ -165,6 +180,8 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 	}
 
 	a.mu.Lock()
+	curConnDelta := make(map[string]pendingDelta, len(byID))
+	var sumUp, sumDown uint64
 	for user, conns := range connsByUser {
 		us, ok := users[user]
 		if !ok {
@@ -199,6 +216,9 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 			}
 			deltaUp += cUp
 			deltaDown += cDown
+			curConnDelta[c.ID] = pendingDelta{up: cUp, down: cDown}
+			sumUp += cUp
+			sumDown += cDown
 			if logDest && (cUp > 0 || cDown > 0) {
 				dk := destAggKey{user: user, host: c.Metadata.Host, ip: c.Metadata.DestinationIP}
 				pd := a.pendingDest[dk]
@@ -223,9 +243,85 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 			a.pendingFlush[user] = pd
 		}
 	}
+
+	// Bytes a connection moves between our last poll and its close never
+	// show up per connection (the Clash list only has open ones) — at
+	// ~30 MB/s that lost well over half of a 100 MB download. The global
+	// totals do include them: credit the remainder to the users whose
+	// connections disappeared since the previous poll.
+	if a.haveTotals && totals.up >= a.lastTotals.up && totals.down >= a.lastTotals.down {
+		remUp := subFloor(totals.up-a.lastTotals.up, sumUp)
+		remDown := subFloor(totals.down-a.lastTotals.down, sumDown)
+		if remUp > 0 || remDown > 0 {
+			for u, d := range splitClosedRemainder(prev, byID, a.lastConnDelta, remUp, remDown) {
+				pd := a.pendingFlush[u]
+				pd.up += d.up
+				pd.down += d.down
+				a.pendingFlush[u] = pd
+			}
+		}
+	}
+	a.lastTotals, a.haveTotals = totals, true
+	a.lastConnDelta = curConnDelta
 	a.mu.Unlock()
 
 	return flatten(users), nil
+}
+
+func subFloor(a, b uint64) uint64 {
+	if a > b {
+		return a - b
+	}
+	return 0
+}
+
+// splitClosedRemainder divides the closed-connection remainder among the
+// users of connections present in prev but gone from cur, weighted by each
+// connection's last observed per-tick bytes (equal weights if none moved).
+// Exact when the closed connections belong to one user.
+func splitClosedRemainder(prev, cur map[string]clashConn, lastDelta map[string]pendingDelta, remUp, remDown uint64) map[string]pendingDelta {
+	type w struct {
+		user   string
+		weight uint64
+	}
+	var gone []w
+	var total uint64
+	for id, c := range prev {
+		if _, still := cur[id]; still {
+			continue
+		}
+		u := userOf(c)
+		if u == "" {
+			u = "(anonymous)"
+		}
+		d := lastDelta[id]
+		gone = append(gone, w{u, d.up + d.down})
+		total += d.up + d.down
+	}
+	out := map[string]pendingDelta{}
+	if len(gone) == 0 {
+		return out
+	}
+	var givenUp, givenDown uint64
+	for i, g := range gone {
+		var up, down uint64
+		switch {
+		case i == len(gone)-1: // last one takes the rounding remainder
+			up, down = remUp-givenUp, remDown-givenDown
+		case total == 0:
+			up, down = remUp/uint64(len(gone)), remDown/uint64(len(gone))
+		default:
+			up = uint64(float64(remUp) * float64(g.weight) / float64(total))
+			down = uint64(float64(remDown) * float64(g.weight) / float64(total))
+		}
+		givenUp += up
+		givenDown += down
+		pd := out[g.user]
+		pd.up += up
+		pd.down += down
+		out[g.user] = pd
+	}
+	return out
 }
 
 func flatten(m map[string]*ProxyUserSample) []ProxyUserSample {
@@ -262,15 +358,23 @@ func userOf(c clashConn) string {
 	if c.Metadata.User != "" {
 		return c.Metadata.User
 	}
-	return c.Metadata.InboundUser
+	if c.Metadata.InboundUser != "" {
+		return c.Metadata.InboundUser
+	}
+	for _, ob := range c.Chains {
+		if u, ok := strings.CutPrefix(ob, proxy.UserOutboundPrefix); ok {
+			return u
+		}
+	}
+	return ""
 }
 
-func (a *proxyAggregator) fetchConnections(sm *proxy.SingboxManager) (map[string][]clashConn, map[string]clashConn, error) {
+func (a *proxyAggregator) fetchConnections(sm *proxy.SingboxManager) (map[string][]clashConn, map[string]clashConn, pendingDelta, error) {
 	if sm == nil || !sm.Status() {
-		return nil, nil, fmt.Errorf("sing-box is not running")
+		return nil, nil, pendingDelta{}, fmt.Errorf("sing-box is not running")
 	}
-	if config.GetSetting("singbox_clash_api_enabled") != "true" {
-		return nil, nil, fmt.Errorf("Clash API is not enabled — turn it on in Proxy settings and re-apply the config")
+	if !proxy.ClashAPIEnabled() {
+		return nil, nil, pendingDelta{}, fmt.Errorf("Clash API is not enabled — turn it on in Proxy settings and re-apply the config")
 	}
 	port := config.GetSetting("singbox_clash_api_port")
 	if port == "" {
@@ -278,16 +382,16 @@ func (a *proxyAggregator) fetchConnections(sm *proxy.SingboxManager) (map[string
 	}
 	resp, err := a.httpc.Get("http://127.0.0.1:" + port + "/connections")
 	if err != nil {
-		return nil, nil, fmt.Errorf("clash api unreachable: %w", err)
+		return nil, nil, pendingDelta{}, fmt.Errorf("clash api unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 5<<20))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, pendingDelta{}, err
 	}
 	var parsed clashConnectionsResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, nil, fmt.Errorf("clash api response: %w", err)
+		return nil, nil, pendingDelta{}, fmt.Errorf("clash api response: %w", err)
 	}
 	byUser := make(map[string][]clashConn, len(parsed.Connections))
 	byID := make(map[string]clashConn, len(parsed.Connections))
@@ -301,7 +405,7 @@ func (a *proxyAggregator) fetchConnections(sm *proxy.SingboxManager) (map[string
 		}
 		byUser[u] = append(byUser[u], c)
 	}
-	return byUser, byID, nil
+	return byUser, byID, pendingDelta{up: parsed.UploadTotal, down: parsed.DownloadTotal}, nil
 }
 
 type clientTotals struct {

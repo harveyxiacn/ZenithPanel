@@ -97,6 +97,31 @@ func parseStream(streamJSON string) streamInfo {
 		}
 	}
 
+	// Sing-box-native stream shape (Smart Deploy presets):
+	// {"tls":{"enabled":true,"server_name":…,"insecure":true,"alpn":[…]}}.
+	// Without this, self-signed Hy2/TUIC nodes were shared without the
+	// insecure flag and every client failed certificate verification.
+	if tls, ok := raw["tls"].(map[string]any); ok {
+		if en, _ := tls["enabled"].(bool); en && si.Security == "none" {
+			si.Security = "tls"
+		}
+		if v, ok := tls["server_name"].(string); ok && si.SNI == "" {
+			si.SNI = v
+		}
+		if v, ok := tls["insecure"].(bool); ok && v {
+			si.AllowInsecure = true
+		}
+		if alpn, ok := tls["alpn"].([]any); ok && si.ALPN == "" {
+			parts := make([]string, 0, len(alpn))
+			for _, a := range alpn {
+				if s, ok := a.(string); ok {
+					parts = append(parts, s)
+				}
+			}
+			si.ALPN = strings.Join(parts, ",")
+		}
+	}
+
 	if _, ok := raw["realitySettings"].(map[string]any); ok {
 		info := proxyservice.ReadRealityStreamInfo(raw)
 		if info.PublicKey != "" {
@@ -226,9 +251,43 @@ func parseSSPlugin(settingsJSON string) (pluginName, pluginOpts string) {
 func getServerAddr(c *gin.Context) string {
 	host := c.Request.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
-		return h
+		host = h
+	}
+	if isLocalHost(host) {
+		// The admin reached the panel via SSH tunnel / unix socket; a link
+		// to 127.0.0.1 is useless on a phone. Use the address another node
+		// is explicitly configured with — it's the same machine.
+		if pub := firstExplicitServerAddress(); pub != "" {
+			return pub
+		}
 	}
 	return host
+}
+
+// ServerAddrFor exposes getServerAddr for other panel components.
+func ServerAddrFor(c *gin.Context) string { return getServerAddr(c) }
+
+func isLocalHost(host string) bool {
+	h := strings.Trim(host, "[]")
+	if h == "" || h == "unix" || strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+func firstExplicitServerAddress() string {
+	if config.DB == nil {
+		return ""
+	}
+	var ins []model.Inbound
+	config.DB.Where("enable = ? AND server_address <> ''", true).Order("id").Find(&ins)
+	for _, in := range ins {
+		if a := normalizeServerAddress(in.ServerAddress); a != "" && !isLocalHost(a) {
+			return a
+		}
+	}
+	return ""
 }
 
 func normalizeServerAddress(raw string) string {
@@ -243,6 +302,13 @@ func normalizeServerAddress(raw string) string {
 		return host
 	}
 	return strings.Trim(addr, "[]")
+}
+
+// ResolveServerAddress returns the address clients are told to dial for
+// inbound `in` (its explicit server address, TLS SNI or transport host,
+// falling back to requestHost) — the same value subscriptions use.
+func ResolveServerAddress(in model.Inbound, requestHost string) string {
+	return resolveInboundServerAddress(in, requestHost)
 }
 
 func resolveInboundServerAddress(in model.Inbound, requestHost string) string {

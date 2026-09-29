@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 )
 
 // socketSampleInterval is the cadence for `ss` snapshots. 10s is fine on a
@@ -88,7 +89,7 @@ func (e *EgressCollector) sampleContext() samplerContext {
 		listenPorts: ports,
 		listeners:   comms,
 		overrides:   operatorInstanceMap(),
-		clashOn:     config.GetSetting("singbox_clash_api_enabled") == "true",
+		clashOn:     proxy.ClashAPIEnabled(),
 	}
 }
 

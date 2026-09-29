@@ -62,7 +62,7 @@ func Run(ctx context.Context, link string, opt Options) Result {
 		return Result{Err: "cannot parse share link: " + err.Error()}
 	}
 	if opt.Server != "" {
-		ob["server"] = opt.Server
+		redirectServer(ob, opt.Server)
 	}
 
 	port, err := freePort()
@@ -123,6 +123,21 @@ func Run(ctx context.Context, link string, opt Options) Result {
 		return Result{LatencyMs: latency, Err: fmt.Sprintf("check URL returned HTTP %d through proxy", resp.StatusCode)}
 	}
 	return Result{OK: true, LatencyMs: latency, ExitIP: traceIP(string(body))}
+}
+
+// redirectServer points the outbound at addr while keeping the TLS name a
+// real client would use: with no explicit SNI in the link, clients send the
+// server address, so that original address must stay the server_name or the
+// certificate check would fail only because of the redirect.
+func redirectServer(ob map[string]any, addr string) {
+	if t, ok := ob["tls"].(map[string]any); ok {
+		if sn, _ := t["server_name"].(string); sn == "" {
+			if orig, _ := ob["server"].(string); orig != "" {
+				t["server_name"] = orig
+			}
+		}
+	}
+	ob["server"] = addr
 }
 
 func freePort() (int, error) {

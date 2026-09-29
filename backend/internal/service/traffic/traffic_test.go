@@ -132,3 +132,41 @@ func emails(s []ProxyUserSample) []string {
 	}
 	return out
 }
+
+func TestUserOfFromChains(t *testing.T) {
+	c := clashConn{Chains: []string{"user:harvey#5"}}
+	if got := userOf(c); got != "harvey#5" {
+		t.Fatalf("userOf = %q, want harvey#5", got)
+	}
+	if got := userOf(clashConn{Chains: []string{"direct"}}); got != "" {
+		t.Fatalf("plain direct chain must not name a user, got %q", got)
+	}
+	c.Metadata.User = "meta"
+	if got := userOf(c); got != "meta" {
+		t.Fatalf("metadata user should win, got %q", got)
+	}
+}
+
+func TestSplitClosedRemainder(t *testing.T) {
+	prev := map[string]clashConn{
+		"a": {ID: "a", Chains: []string{"user:alice"}},
+		"b": {ID: "b", Chains: []string{"user:bob"}},
+		"c": {ID: "c", Chains: []string{"user:carol"}}, // still open
+	}
+	cur := map[string]clashConn{"c": prev["c"]}
+	last := map[string]pendingDelta{"a": {down: 300}, "b": {down: 100}, "c": {down: 999}}
+
+	got := splitClosedRemainder(prev, cur, last, 0, 1000)
+	if got["alice"].down+got["bob"].down != 1000 {
+		t.Fatalf("remainder not fully distributed: %+v", got)
+	}
+	if got["alice"].down != 750 || got["bob"].down != 250 {
+		t.Errorf("weighted split wrong: %+v", got)
+	}
+	if _, ok := got["carol"]; ok {
+		t.Errorf("still-open connection must not absorb the remainder")
+	}
+	if len(splitClosedRemainder(cur, cur, last, 5, 5)) != 0 {
+		t.Errorf("no closed connections → nothing to attribute")
+	}
+}

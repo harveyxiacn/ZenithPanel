@@ -125,3 +125,21 @@ func TestTraceIP(t *testing.T) {
 		t.Fatalf("traceIP = %q", got)
 	}
 }
+
+func TestRedirectServerKeepsTLSName(t *testing.T) {
+	ob := map[string]any{"server": "203.0.113.10", "tls": map[string]any{"enabled": true}}
+	redirectServer(ob, "127.0.0.1")
+	if ob["server"] != "127.0.0.1" || ob["tls"].(map[string]any)["server_name"] != "203.0.113.10" {
+		t.Fatalf("got %v", ob)
+	}
+	ob = map[string]any{"server": "203.0.113.10", "tls": map[string]any{"enabled": true, "server_name": "www.apple.com"}}
+	redirectServer(ob, "127.0.0.1")
+	if ob["tls"].(map[string]any)["server_name"] != "www.apple.com" {
+		t.Fatalf("explicit SNI overwritten: %v", ob)
+	}
+	ob = map[string]any{"server": "203.0.113.10", "method": "aes-128-gcm"} // no TLS
+	redirectServer(ob, "127.0.0.1")
+	if _, has := ob["tls"]; has {
+		t.Fatalf("TLS block invented for a non-TLS outbound")
+	}
+}

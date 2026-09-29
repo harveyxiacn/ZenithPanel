@@ -353,3 +353,19 @@ func TestExpandAddsCPUWarnings(t *testing.T) {
 		t.Errorf("no AES warning expected on Neoverse-N1, got %v", plan.Notes)
 	}
 }
+
+func TestExpandSetsServerAddress(t *testing.T) {
+	plan, err := Expand(model.PresetCombo, baseProbe(), Input{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ib := range plan.Inbounds {
+		if ib.ServerAddress != "1.2.3.4" {
+			t.Errorf("%s: server_address = %q, want probed public IP", ib.Tag, ib.ServerAddress)
+		}
+	}
+	plan, _ = Expand(model.PresetSpeed, baseProbe(), Input{Domain: "vpn.example.com"})
+	if plan.Inbounds[0].ServerAddress != "vpn.example.com" {
+		t.Errorf("domain not preferred: %q", plan.Inbounds[0].ServerAddress)
+	}
+}

@@ -2276,7 +2276,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			})
 
 			proxyGroup.GET("/clash-api/status", func(c *gin.Context) {
-				enabled := config.GetSetting("singbox_clash_api_enabled") == "true"
+				enabled := proxy.ClashAPIEnabled()
 				c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"enabled": enabled}})
 			})
 
@@ -2286,7 +2286,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Sing-box is not running"})
 					return
 				}
-				if config.GetSetting("singbox_clash_api_enabled") != "true" {
+				if !proxy.ClashAPIEnabled() {
 					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Clash API not enabled — enable it and re-apply Sing-box config"})
 					return
 				}
@@ -2398,10 +2398,12 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					if err := config.DB.Where("inbound_id = ? AND enable = ?", in.ID, true).Order("id").First(&cl).Error; err != nil {
 						result.E2E = "skipped"
 						result.Err = "no enabled client — add one to run the end-to-end test"
-					} else if link := sub.ShareLink(in, cl, "127.0.0.1"); link == "" {
+					} else if link := sub.ShareLink(in, cl, sub.ResolveServerAddress(in, subFallbackHost(c))); link == "" {
 						result.E2E = "skipped"
 					} else {
-						e2e := selftest.Run(c.Request.Context(), link, selftest.Options{})
+						// Same link clients get, dialled at loopback (the TLS
+						// name stays the public address, as for real clients).
+						e2e := selftest.Run(c.Request.Context(), link, selftest.Options{Server: "127.0.0.1"})
 						result.ElapsedMs += e2e.LatencyMs
 						result.E2ELatency = e2e.LatencyMs
 						if e2e.OK {

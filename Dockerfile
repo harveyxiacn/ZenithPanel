@@ -40,7 +40,7 @@ WORKDIR /opt/zenithpanel
 # Pinned proxy engine versions — update these when a new release is desired.
 # Using ARGs avoids GitHub API rate-limit failures during CI builds.
 ARG XRAY_VERSION=v26.2.6
-ARG SINGBOX_VERSION=v1.11.0
+ARG SINGBOX_VERSION=v1.14.2
 # Set automatically by BuildKit to the platform being built (amd64 / arm64).
 ARG TARGETARCH
 
@@ -72,9 +72,16 @@ RUN set -ex && \
       *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
     esac && \
     SINGBOX_VER_STRIP="${SINGBOX_VERSION#v}" && \
-    wget -O /tmp/singbox.tar.gz "https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VERSION}/sing-box-${SINGBOX_VER_STRIP}-linux-${SB_ARCH}.tar.gz" && \
+    SB_BASE="https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VERSION}" && \
+    # Since 1.12 the plain linux tarball is glibc-linked (exit 127 on Alpine);
+    # use the -musl build, falling back to the plain one for older versions.
+    SB_NAME="sing-box-${SINGBOX_VER_STRIP}-linux-${SB_ARCH}-musl" && \
+    if ! wget -O /tmp/singbox.tar.gz "${SB_BASE}/${SB_NAME}.tar.gz"; then \
+      SB_NAME="sing-box-${SINGBOX_VER_STRIP}-linux-${SB_ARCH}" && \
+      wget -O /tmp/singbox.tar.gz "${SB_BASE}/${SB_NAME}.tar.gz"; \
+    fi && \
     tar -xzf /tmp/singbox.tar.gz -C /tmp && \
-    cp /tmp/sing-box-${SINGBOX_VER_STRIP}-linux-${SB_ARCH}/sing-box /usr/local/bin/sing-box && \
+    cp /tmp/${SB_NAME}/sing-box /usr/local/bin/sing-box && \
     chmod 755 /usr/local/bin/sing-box && \
     rm -rf /tmp/singbox.tar.gz /tmp/sing-box-* && \
     sing-box version

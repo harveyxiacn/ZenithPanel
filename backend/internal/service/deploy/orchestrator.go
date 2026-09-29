@@ -383,6 +383,8 @@ func (d dbInboundDeployer) Create(spec InboundSpec) (uint, error) {
 		Stream:   string(streamJSON),
 		Enable:   true,
 		Remark:   spec.Remark,
+
+		ServerAddress: spec.ServerAddress,
 	}
 	if err := d.db.Create(&ib).Error; err != nil {
 		return 0, err

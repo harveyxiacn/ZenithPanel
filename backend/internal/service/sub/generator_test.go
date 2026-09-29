@@ -533,3 +533,31 @@ func TestBuildBase64LinksUsesInboundServerAddressOverrideForReality(t *testing.T
 		t.Fatalf("expected request host to be excluded when inbound server override exists, got: %s", links)
 	}
 }
+
+func TestIsLocalHost(t *testing.T) {
+	for _, h := range []string{"127.0.0.1", "localhost", "unix", "::1", "[::1]", ""} {
+		if !isLocalHost(h) {
+			t.Errorf("%q should be local", h)
+		}
+	}
+	for _, h := range []string{"129.146.187.122", "vpn.example.com", "2603:c020::1"} {
+		if isLocalHost(h) {
+			t.Errorf("%q should not be local", h)
+		}
+	}
+}
+
+// Smart Deploy stores sing-box-native TLS; self-signed nodes must be shared
+// with the insecure flag or clients reject the certificate.
+func TestParseStreamSingboxNativeTLS(t *testing.T) {
+	si := parseStream(`{"tls":{"enabled":true,"server_name":"203.0.113.10","insecure":true,"alpn":["h3"]}}`)
+	if si.Security != "tls" || si.SNI != "203.0.113.10" || !si.AllowInsecure || si.ALPN != "h3" {
+		t.Fatalf("got %+v", si)
+	}
+	link := buildHysteria2Link(model.Inbound{Tag: "hy2", Port: 443, Settings: "{}",
+		Stream: `{"tls":{"enabled":true,"server_name":"203.0.113.10","insecure":true}}`},
+		model.Client{UUID: "pw"}, "203.0.113.10", si, "hy2")
+	if !strings.Contains(link, "insecure=1") || !strings.Contains(link, "sni=203.0.113.10") {
+		t.Fatalf("link missing insecure/sni: %s", link)
+	}
+}

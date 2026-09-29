@@ -48,3 +48,15 @@ func identityOf(ids map[uint]string, c model.Client) string {
 	}
 	return c.Email
 }
+
+// ClashAPIEnabled reports whether sing-box exposes its Clash API (bound to
+// 127.0.0.1). It is on unless explicitly disabled: per-user traffic
+// accounting and live rates for sing-box protocols depend on it.
+func ClashAPIEnabled() bool {
+	return config.GetSetting("singbox_clash_api_enabled") != "false"
+}
+
+// UserOutboundPrefix tags the per-user direct outbounds sing-box routes
+// each authenticated user through; the Clash API reports the outbound in a
+// connection's "chains", which is how traffic is attributed to users.
+const UserOutboundPrefix = "user:"
