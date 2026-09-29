@@ -1490,11 +1490,13 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(404, gin.H{"code": 404, "msg": "Inbound not found"})
 				return
 			}
+			// Hard delete: a soft-deleted row keeps its tag in the unique
+			// index, so an inbound could never be recreated under its name.
 			if err := config.DB.Transaction(func(tx *gorm.DB) error {
-				if err := tx.Delete(&model.Client{}, "inbound_id = ?", id).Error; err != nil {
+				if err := tx.Unscoped().Delete(&model.Client{}, "inbound_id = ?", id).Error; err != nil {
 					return err
 				}
-				return tx.Delete(&model.Inbound{}, "id = ?", id).Error
+				return tx.Unscoped().Delete(&model.Inbound{}, "id = ?", id).Error
 			}); err != nil {
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete inbound"})
 				return
@@ -1632,7 +1634,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			if !ok {
 				return
 			}
-			if err := config.DB.Delete(&model.Client{}, "id = ?", id).Error; err != nil {
+			if err := config.DB.Unscoped().Delete(&model.Client{}, "id = ?", id).Error; err != nil {
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete client"})
 				return
 			}
@@ -1659,7 +1661,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			var affected int64
 			switch req.Action {
 			case "delete":
-				res := config.DB.Delete(&model.Client{}, "id IN ?", req.IDs)
+				res := config.DB.Unscoped().Delete(&model.Client{}, "id IN ?", req.IDs)
 				if res.Error != nil {
 					c.JSON(500, gin.H{"code": 500, "msg": "Bulk delete failed"})
 					return
@@ -1884,7 +1886,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			if !ok {
 				return
 			}
-			if err := config.DB.Delete(&model.Outbound{}, "id = ?", id).Error; err != nil {
+			if err := config.DB.Unscoped().Delete(&model.Outbound{}, "id = ?", id).Error; err != nil {
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete outbound"})
 				return
 			}
@@ -2107,21 +2109,34 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					xm.SetDualMode(true)
 					sm.SetDualMode(true)
 
-					if err := xm.Stop(); err != nil {
-						log.Printf("Xray pre-stop (auto): %v", err)
+					// Leave an engine running when its generated config is
+					// identical to the one it is serving: a restart would cut
+					// every user's connections for nothing (e.g. editing a
+					// Hysteria2 node used to disconnect all VLESS users).
+					// ?force=1 restarts regardless.
+					force := c.Query("force") == "1"
+					xrayKeep := wantXray && !force && xm.ConfigUnchanged()
+					singboxKeep := wantSingbox && !force && sm.ConfigUnchanged()
+
+					if !xrayKeep {
+						if err := xm.Stop(); err != nil {
+							log.Printf("Xray pre-stop (auto): %v", err)
+						}
 					}
-					if err := sm.Stop(); err != nil {
-						log.Printf("Sing-box pre-stop (auto): %v", err)
+					if !singboxKeep {
+						if err := sm.Stop(); err != nil {
+							log.Printf("Sing-box pre-stop (auto): %v", err)
+						}
 					}
 
 					var xrayErr, singboxErr error
-					if wantXray {
+					if wantXray && !xrayKeep {
 						if err := xm.Start(); err != nil {
 							xrayErr = err
 							log.Printf("Xray start (auto): %v", err)
 						}
 					}
-					if wantSingbox {
+					if wantSingbox && !singboxKeep {
 						if err := sm.Start(); err != nil {
 							singboxErr = err
 							log.Printf("Sing-box start (auto): %v", err)
@@ -2135,16 +2150,22 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					}
 					var msgs []string
 					if wantXray {
-						if xrayErr != nil {
+						switch {
+						case xrayErr != nil:
 							msgs = append(msgs, fmt.Sprintf("Xray failed: %v", xrayErr))
-						} else {
+						case xrayKeep:
+							msgs = append(msgs, "Xray unchanged (kept running)")
+						default:
 							msgs = append(msgs, "Xray applied")
 						}
 					}
 					if wantSingbox {
-						if singboxErr != nil {
+						switch {
+						case singboxErr != nil:
 							msgs = append(msgs, fmt.Sprintf("Sing-box failed: %v", singboxErr))
-						} else {
+						case singboxKeep:
+							msgs = append(msgs, "Sing-box unchanged (kept running)")
+						default:
 							msgs = append(msgs, "Sing-box applied")
 						}
 					}

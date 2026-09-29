@@ -27,6 +27,33 @@ func WriteConfigToFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0600)
 }
 
+// configUnchanged reports whether a running engine is already serving
+// exactly the config generate() would produce now. Restarting an engine
+// drops every user's connections (and, for Xray, the not-yet-committed
+// byte counts of connections still open), so apply skips engines whose
+// config didn't change.
+func configUnchanged(running bool, path string, generate func() (string, error)) bool {
+	if !running {
+		return false
+	}
+	want, err := generate()
+	if err != nil {
+		return false
+	}
+	have, err := os.ReadFile(path)
+	return err == nil && string(have) == want
+}
+
+// ConfigUnchanged: see configUnchanged.
+func (x *XrayManager) ConfigUnchanged() bool {
+	return configUnchanged(x.Status(), x.ConfigPath, x.GenerateConfig)
+}
+
+// ConfigUnchanged: see configUnchanged.
+func (s *SingboxManager) ConfigUnchanged() bool {
+	return configUnchanged(s.Status(), s.ConfigPath, s.GenerateConfig)
+}
+
 // ringBuffer is a fixed-size buffer that keeps the most recent N bytes written
 // to it. It implements io.Writer so it can be used as cmd.Stdout/Stderr.
 // Used by BaseCore to capture proxy logs without unbounded memory growth.

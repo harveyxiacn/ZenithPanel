@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
@@ -14,6 +15,7 @@ import (
 type XrayManager struct {
 	BaseCore
 	skippedProtos []string
+	beforeStop    atomic.Pointer[func()]
 }
 
 func NewXrayManager() *XrayManager {
@@ -182,7 +184,7 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]any,
 		"port":     in.Port,
 		"protocol": in.Protocol,
 		"sniffing": map[string]any{
-			"enabled":      true,
+			"enabled": true,
 			// fakedns is intentionally omitted — panel doesn't configure a
 			// fake-dns outbound, and listing it here makes xray attempt a
 			// no-op DNS sniff on every connection that adds latency and
@@ -294,7 +296,12 @@ func fetchClientsByInbound(inbounds []model.Inbound) map[uint][]model.Client {
 	}
 	var clients []model.Client
 	config.DB.Where("inbound_id IN ? AND enable = ?", ids, true).Find(&clients)
+	// These copies only feed config generation, where Email becomes the
+	// engine's per-user stats key: make it unique across all rows (see
+	// StatsIdentities) so traffic is never credited to several clients.
+	idents := LoadStatsIdentities()
 	for _, c := range clients {
+		c.Email = identityOf(idents, c)
 		grouped[c.InboundID] = append(grouped[c.InboundID], c)
 	}
 	return grouped
@@ -346,6 +353,20 @@ func (x *XrayManager) Start() error {
 
 	cmd := exec.Command(x.BinaryPath, "run", "-c", x.ConfigPath)
 	return x.startAndVerify(cmd)
+}
+
+// SetBeforeStop registers a callback run just before a running Xray is
+// stopped (including the stop half of Restart/apply). The traffic
+// accountant uses it to read Xray's in-memory per-user counters, which a
+// restart would otherwise discard.
+func (x *XrayManager) SetBeforeStop(f func()) { x.beforeStop.Store(&f) }
+
+// Stop runs the before-stop hook, then stops the process.
+func (x *XrayManager) Stop() error {
+	if f := x.beforeStop.Load(); f != nil && x.Status() {
+		(*f)()
+	}
+	return x.BaseCore.Stop()
 }
 
 func (x *XrayManager) Restart() error {

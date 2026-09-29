@@ -1,6 +1,7 @@
 package traffic
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -150,4 +151,72 @@ func newTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
+}
+
+// Regression: the same email on two inbounds (one row per protocol) used to
+// receive every delta twice because updates matched on email.
+func TestApplyDeltasDuplicateEmailCreditsOneRow(t *testing.T) {
+	db := newTestDB(t)
+	c1 := model.Client{Email: "carol", InboundID: 1, Enable: true}
+	c2 := model.Client{Email: "carol", InboundID: 2, Enable: true}
+	db.Create(&c1)
+	db.Create(&c2)
+
+	a := &Accountant{db: db}
+	ident2 := fmt.Sprintf("carol#%d", c2.ID)
+	settled := a.applyDeltas(map[string]pendingDelta{ident2: {up: 10, down: 20}}, "test")
+	if !settled[ident2] {
+		t.Fatalf("delta not settled")
+	}
+	var r1, r2 model.Client
+	db.First(&r1, c1.ID)
+	db.First(&r2, c2.ID)
+	if r1.UpLoad != 0 || r1.DownLoad != 0 {
+		t.Errorf("row 1 wrongly credited: %d/%d", r1.UpLoad, r1.DownLoad)
+	}
+	if r2.UpLoad != 10 || r2.DownLoad != 20 {
+		t.Errorf("row 2 not credited: %d/%d", r2.UpLoad, r2.DownLoad)
+	}
+}
+
+func TestXrayDeltas(t *testing.T) {
+	last := map[string]pendingDelta{"a": {up: 100, down: 1000}, "b": {up: 50, down: 50}}
+	totals := map[string]pendingDelta{
+		"a": {up: 150, down: 1000}, // grew
+		"b": {up: 10, down: 5},     // below baseline → counter was reset
+		"c": {up: 7, down: 8},      // new identity
+	}
+	got := xrayDeltas(totals, last)
+	if got["a"] != (pendingDelta{up: 50, down: 0}) {
+		t.Errorf("a = %+v", got["a"])
+	}
+	if got["b"] != (pendingDelta{up: 10, down: 5}) {
+		t.Errorf("b (reset) = %+v", got["b"])
+	}
+	if got["c"] != (pendingDelta{up: 7, down: 8}) {
+		t.Errorf("c = %+v", got["c"])
+	}
+	if _, ok := xrayDeltas(map[string]pendingDelta{"a": {up: 100, down: 1000}}, last)["a"]; ok {
+		t.Errorf("unchanged counter must produce no delta")
+	}
+}
+
+// Xray v26 prints counter values as JSON numbers; older builds as strings.
+// Decoding numbers used to fail the whole response (no Xray accounting).
+func TestParseXrayStatsNumericValues(t *testing.T) {
+	raw := []byte(`{"stat":[
+		{"name":"user>>>harvey>>>traffic>>>uplink","value":1976},
+		{"name":"user>>>harvey>>>traffic>>>downlink","value":10522589},
+		{"name":"user>>>old>>>traffic>>>downlink","value":"42"}
+	]}`)
+	got, err := parseXrayStats(raw)
+	if err != nil {
+		t.Fatalf("parseXrayStats: %v", err)
+	}
+	if got["harvey"].up != 1976 || got["harvey"].down != 10522589 {
+		t.Errorf("harvey = %+v", got["harvey"])
+	}
+	if got["old"].down != 42 {
+		t.Errorf("string-encoded value not parsed: %+v", got["old"])
+	}
 }

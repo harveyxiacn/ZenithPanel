@@ -80,3 +80,22 @@ func TestGetSettingCacheExpiresForDirectWrites(t *testing.T) {
 		t.Fatalf("direct write not visible after TTL: %q", got)
 	}
 }
+
+func TestPurgeSoftDeletedProxyRowsFreesTag(t *testing.T) {
+	db := newSettingsDB(t)
+	if err := db.AutoMigrate(&model.Inbound{}, &model.Client{}, &model.Outbound{}); err != nil {
+		t.Fatal(err)
+	}
+	in := model.Inbound{Tag: "node", Protocol: "vless", Port: 443}
+	if err := db.Create(&in).Error; err != nil {
+		t.Fatal(err)
+	}
+	db.Delete(&in) // legacy soft delete
+	if err := db.Create(&model.Inbound{Tag: "node", Protocol: "vless", Port: 8443}).Error; err == nil {
+		t.Fatal("precondition: soft-deleted row should still block the tag")
+	}
+	purgeSoftDeletedProxyRows(db)
+	if err := db.Create(&model.Inbound{Tag: "node", Protocol: "vless", Port: 8443}).Error; err != nil {
+		t.Fatalf("tag still blocked after purge: %v", err)
+	}
+}

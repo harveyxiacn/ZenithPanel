@@ -98,6 +98,16 @@ func (a *proxyAggregator) drainPending() map[string]pendingDelta {
 	return out
 }
 
+// requeue puts back a delta the accountant failed to persist.
+func (a *proxyAggregator) requeue(user string, d pendingDelta) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	pd := a.pendingFlush[user]
+	pd.up += d.up
+	pd.down += d.down
+	a.pendingFlush[user] = pd
+}
+
 // drainPendingDest returns the per-(user, destination) byte deltas accumulated
 // since the last call, clearing internal state. Drained by the EgressCollector
 // on the same 30 s cadence. Always safe to call even when egress logging is
@@ -150,7 +160,7 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 	a.lastAt = now
 	a.mu.Unlock()
 
-	if dt <= 0 || dt > 30 { // 30s gap → treat as cold start, skip rate
+	if dt <= 0 || dt > 30 { // 30s gap → no meaningful rate this tick
 		dt = 0
 	}
 
@@ -169,49 +179,48 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 			if t := pickTarget(c); t != "" {
 				targets[t] = struct{}{}
 			}
-			if dt > 0 {
-				// Per-connection delta, so it can be attributed to this
-				// connection's destination for egress logging. Summed back into
-				// the per-user deltaUp/deltaDown exactly as before.
-				var cUp, cDown uint64
-				if old, ok := prev[c.ID]; ok {
-					if c.Upload >= old.Upload {
-						cUp = c.Upload - old.Upload
-					}
-					if c.Download >= old.Download {
-						cDown = c.Download - old.Download
-					}
-				} else {
-					// New connection — count whatever has already flowed since
-					// it opened. Better signal than zero on the first tick.
-					cUp = c.Upload
-					cDown = c.Download
+			// Per-connection delta, so it can be attributed to this
+			// connection's destination for egress logging. Computed on
+			// every tick — even after a gap, when only the *rate* is
+			// meaningless — so no bytes are dropped from accounting.
+			var cUp, cDown uint64
+			if old, ok := prev[c.ID]; ok {
+				if c.Upload >= old.Upload {
+					cUp = c.Upload - old.Upload
 				}
-				deltaUp += cUp
-				deltaDown += cDown
-				if logDest && (cUp > 0 || cDown > 0) {
-					dk := destAggKey{user: user, host: c.Metadata.Host, ip: c.Metadata.DestinationIP}
-					pd := a.pendingDest[dk]
-					pd.up += cUp
-					pd.down += cDown
-					a.pendingDest[dk] = pd
+				if c.Download >= old.Download {
+					cDown = c.Download - old.Download
 				}
+			} else {
+				// New connection — count whatever has already flowed since
+				// it opened. Better signal than zero on the first tick.
+				cUp = c.Upload
+				cDown = c.Download
+			}
+			deltaUp += cUp
+			deltaDown += cDown
+			if logDest && (cUp > 0 || cDown > 0) {
+				dk := destAggKey{user: user, host: c.Metadata.Host, ip: c.Metadata.DestinationIP}
+				pd := a.pendingDest[dk]
+				pd.up += cUp
+				pd.down += cDown
+				a.pendingDest[dk] = pd
 			}
 		}
 		us.TopTargets = topNStrings(targets, 5)
 		if dt > 0 {
 			us.UploadRateBps = uint64(float64(deltaUp) / dt)
 			us.DownloadRateBps = uint64(float64(deltaDown) / dt)
-			// Accumulate raw byte deltas (not rates) for the next DB flush.
-			// "(anonymous)" users are recorded too but won't match a Client
-			// row on flush, so they're effectively dropped — acceptable since
-			// connections without metadata.user can't be attributed anyway.
-			if deltaUp > 0 || deltaDown > 0 {
-				pd := a.pendingFlush[user]
-				pd.up += deltaUp
-				pd.down += deltaDown
-				a.pendingFlush[user] = pd
-			}
+		}
+		// Accumulate raw byte deltas (not rates) for the next DB flush.
+		// "(anonymous)" users are recorded too but won't match a Client
+		// row on flush, so they're effectively dropped — acceptable since
+		// connections without metadata.user can't be attributed anyway.
+		if deltaUp > 0 || deltaDown > 0 {
+			pd := a.pendingFlush[user]
+			pd.up += deltaUp
+			pd.down += deltaDown
+			a.pendingFlush[user] = pd
 		}
 	}
 	a.mu.Unlock()
@@ -336,6 +345,10 @@ func loadClientTotals() map[string]clientTotals {
 	}
 	var clients []model.Client
 	config.DB.Where("enable = ?", true).Find(&clients)
+	// Keyed by the same per-client identity the engines report under, so
+	// live rates line up with totals and rows sharing an email (one per
+	// protocol) don't overwrite each other.
+	idents := proxy.LoadStatsIdentities()
 	for _, c := range clients {
 		t := clientTotals{up: c.UpLoad, down: c.DownLoad}
 		if in, ok := inboundByID[c.InboundID]; ok {
@@ -343,7 +356,11 @@ func loadClientTotals() map[string]clientTotals {
 			t.inboundTag = in.Tag
 			t.engine = engineForProtocol(in.Protocol)
 		}
-		out[c.Email] = t
+		key := idents[c.ID]
+		if key == "" {
+			key = c.Email
+		}
+		out[key] = t
 	}
 	return out
 }

@@ -123,8 +123,25 @@ func InitDB(dbPath string) {
 		log.Printf("Warning: failed to migrate traffic-egress tables: %v", err)
 	}
 
+	purgeSoftDeletedProxyRows(database)
+
 	DB = database
 	log.Println("Database initialized and migrated successfully")
+}
+
+// purgeSoftDeletedProxyRows hard-deletes inbound/client/outbound rows that
+// older versions soft-deleted. Those rows kept their tag / (inbound, email)
+// in the unique indexes, so a deleted node or user could never be recreated
+// under the same name. Nothing reads soft-deleted rows.
+func purgeSoftDeletedProxyRows(db *gorm.DB) {
+	for _, m := range []any{&model.Client{}, &model.Inbound{}, &model.Outbound{}} {
+		res := db.Unscoped().Where("deleted_at IS NOT NULL").Delete(m)
+		if res.Error != nil {
+			log.Printf("Warning: purge soft-deleted %T: %v", m, res.Error)
+		} else if res.RowsAffected > 0 {
+			log.Printf("Purged %d soft-deleted %T row(s)", res.RowsAffected, m)
+		}
+	}
 }
 
 // settingCacheTTL bounds how stale GetSetting can be for writes that bypass
