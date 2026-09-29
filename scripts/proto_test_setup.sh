@@ -11,7 +11,7 @@ mkdir -p "$CERT_DIR"
 if [ ! -f "$CERT_DIR/fullchain.pem" ]; then
   openssl req -x509 -newkey rsa:2048 -nodes -days 7 \
     -subj "/CN=test.local" \
-    -addext "subjectAltName=DNS:test.local,DNS:hysteria2.fanni-panda.com,IP:127.0.0.1" \
+    -addext "subjectAltName=DNS:test.local,DNS:hy2.example.com,IP:127.0.0.1" \
     -keyout "$CERT_DIR/privkey.pem" \
     -out  "$CERT_DIR/fullchain.pem"
   chmod 0600 "$CERT_DIR/privkey.pem"

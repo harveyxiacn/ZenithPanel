@@ -10,7 +10,7 @@ import (
 // Links are produced by the real subscription generator so the parser is
 // tested against exactly what users import.
 func TestOutboundFromGeneratedLinks(t *testing.T) {
-	client := model.Client{UUID: "0c3b1590-b393-50b1-7714-932039923fa0", Email: "u1"}
+	client := model.Client{UUID: "00000000-0000-4000-8000-000000000001", Email: "u1"}
 	cases := []struct {
 		name  string
 		in    model.Inbound
@@ -121,7 +121,7 @@ func TestOutboundRejectsGarbage(t *testing.T) {
 }
 
 func TestTraceIP(t *testing.T) {
-	if got := traceIP("fl=1\nip=129.146.187.122\nloc=US\n"); got != "129.146.187.122" {
+	if got := traceIP("fl=1\nip=203.0.113.10\nloc=US\n"); got != "203.0.113.10" {
 		t.Fatalf("traceIP = %q", got)
 	}
 }

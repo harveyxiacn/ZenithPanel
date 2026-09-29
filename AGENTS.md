@@ -571,7 +571,7 @@ It just doesn't have to be a domain you paid for. Three valid paths:
 **Ground truth from the rabisu (203.0.113.10) walkthrough**, both
 phases shipped Hy2 with TLS on and `serverName` populated:
 
-- **Phase 1 (self-signed):** `serverName="hysteria2.fanni-panda.com"`,
+- **Phase 1 (self-signed):** `serverName="hy2.example.com"`,
   self-signed cert at `/opt/zenithpanel/data/certs/fullchain.pem`
   (CN=`test.local`). The subscription URL emitted `insecure=1` because
   the cert CN didn't match the SNI — clients had to skip verification

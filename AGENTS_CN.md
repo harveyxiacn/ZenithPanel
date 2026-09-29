@@ -355,7 +355,7 @@ QUIC 协议本身就要求 TLS，TLS 需要证书，证书必须有 SAN（DNS �
 **rabisu (203.0.113.10) 实际操作的两阶段为证**，两阶段 Hy2 都开了
 TLS 且都有非空 `serverName`：
 
-- **阶段 1（自签）：** `serverName="hysteria2.fanni-panda.com"`，自签
+- **阶段 1（自签）：** `serverName="hy2.example.com"`，自签
   证书 `/opt/zenithpanel/data/certs/fullchain.pem`（CN=`test.local`）。
   订阅 URL 带 `insecure=1`——因为证书 CN 跟 SNI 不匹配，客户端必须跳
   过验证才能连。

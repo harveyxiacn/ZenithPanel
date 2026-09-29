@@ -540,7 +540,7 @@ func TestIsLocalHost(t *testing.T) {
 			t.Errorf("%q should be local", h)
 		}
 	}
-	for _, h := range []string{"129.146.187.122", "vpn.example.com", "2603:c020::1"} {
+	for _, h := range []string{"203.0.113.10", "vpn.example.com", "2603:c020::1"} {
 		if isLocalHost(h) {
 			t.Errorf("%q should not be local", h)
 		}

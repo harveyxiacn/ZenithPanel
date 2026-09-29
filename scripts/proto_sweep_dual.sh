@@ -55,7 +55,7 @@ cat > /root/proto-tests/sb-hy2.json <<JSON
     "type": "hysteria2", "tag": "out",
     "server": "127.0.0.1", "server_port": 8443,
     "password": "2ea59f1e-8006-083b-9892-244a57e03005",
-    "tls": {"enabled": true, "server_name": "hysteria2.fanni-panda.com", "insecure": true, "alpn": ["h3"]},
+    "tls": {"enabled": true, "server_name": "hy2.example.com", "insecure": true, "alpn": ["h3"]},
     "obfs": {"type": "salamander", "password": "228dc2c8f3c2acd6dc4005c3dd0c4e4c"}
   }]
 }
