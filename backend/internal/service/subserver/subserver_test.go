@@ -1,10 +1,19 @@
 package subserver
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -105,5 +114,52 @@ func TestNewSecret(t *testing.T) {
 	a, b := NewSecret(), NewSecret()
 	if len(a) != 20 || a == b {
 		t.Fatalf("weak secrets: %q %q", a, b)
+	}
+}
+
+func writeSelfSigned(t *testing.T, dir, cn string, notAfter time.Time) (string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: cn},
+		DNSNames: []string{cn}, NotBefore: time.Now().Add(-time.Hour), NotAfter: notAfter}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, _ := x509.MarshalECPrivateKey(key)
+	cp, kp := filepath.Join(dir, "c.crt"), filepath.Join(dir, "c.key")
+	_ = os.WriteFile(cp, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600)
+	_ = os.WriteFile(kp, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb}), 0o600)
+	return cp, kp
+}
+
+// The ACME renewer rewrites the same files; the listener must pick up the
+// renewed certificate without a restart.
+func TestFileCertReloadsOnChange(t *testing.T) {
+	dir := t.TempDir()
+	first := time.Now().Add(24 * time.Hour).Truncate(time.Second)
+	cp, kp := writeSelfSigned(t, dir, "sub.example.com", first)
+	fc := &fileCert{certPath: cp, keyPath: kp}
+	c1, err := fc.get(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaf, _ := x509.ParseCertificate(c1.Certificate[0]); !leaf.NotAfter.Equal(first) {
+		t.Fatalf("unexpected first cert")
+	}
+
+	second := time.Now().Add(90 * 24 * time.Hour).Truncate(time.Second)
+	writeSelfSigned(t, dir, "sub.example.com", second)
+	future := time.Now().Add(2 * time.Second)
+	_ = os.Chtimes(cp, future, future) // guarantee a new mtime
+	c2, err := fc.get(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaf, _ := x509.ParseCertificate(c2.Certificate[0]); !leaf.NotAfter.Equal(second) {
+		t.Fatalf("renewed certificate not reloaded")
 	}
 }

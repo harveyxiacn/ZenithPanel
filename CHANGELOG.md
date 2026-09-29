@@ -3,6 +3,17 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.1] — 2026-09-29
+
+### Added
+
+- **Dedicated certificate for the subscription listener** (`cert_domain` in
+  `/api/v1/admin/subscription`, "Certificate domain" in the UI). Uses the
+  panel-issued ACME certificate for that domain, so subscriptions are served
+  over HTTPS (`https://<domain>:2096/<secret>/<uuid>`) while the admin panel
+  stays on plain HTTP behind its SSH tunnel. Renewed certificates are picked
+  up automatically (hot reload by file mtime, no restart).
+
 ## [1.3.0] — 2026-09-29 — VPN reliability, accurate traffic, sing-box 1.14
 
 Development log with root causes and measurements:

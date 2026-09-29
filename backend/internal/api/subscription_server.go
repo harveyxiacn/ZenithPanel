@@ -52,6 +52,7 @@ func registerSubscriptionServerRoutes(g *gin.RouterGroup, panelPort func() strin
 			Enabled          bool   `json:"enabled"`
 			Port             int    `json:"port"`
 			PublicHost       string `json:"public_host"`
+			CertDomain       string `json:"cert_domain"`
 			RegenerateSecret bool   `json:"regenerate_secret"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -64,6 +65,7 @@ func registerSubscriptionServerRoutes(g *gin.RouterGroup, panelPort func() strin
 			cfg.Port = req.Port
 		}
 		cfg.PublicHost = strings.TrimSpace(req.PublicHost)
+		cfg.CertDomain = strings.ToLower(strings.TrimSpace(req.CertDomain))
 		if cfg.Port < 1 || cfg.Port > 65535 {
 			c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Port must be 1-65535"})
 			return
