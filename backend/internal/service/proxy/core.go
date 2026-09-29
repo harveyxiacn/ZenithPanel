@@ -44,12 +44,14 @@ func configUnchanged(running bool, path string, generate func() (string, error))
 	return err == nil && string(have) == want
 }
 
-// ConfigUnchanged: see configUnchanged.
+// ConfigUnchanged reports whether the running Xray already serves the
+// config that would be generated now (see configUnchanged).
 func (x *XrayManager) ConfigUnchanged() bool {
 	return configUnchanged(x.Status(), x.ConfigPath, x.GenerateConfig)
 }
 
-// ConfigUnchanged: see configUnchanged.
+// ConfigUnchanged reports whether the running sing-box already serves the
+// config that would be generated now (see configUnchanged).
 func (s *SingboxManager) ConfigUnchanged() bool {
 	return configUnchanged(s.Status(), s.ConfigPath, s.GenerateConfig)
 }
