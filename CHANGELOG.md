@@ -3,6 +3,59 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.0] — 2026-09-29 — VPN reliability, accurate traffic, sing-box 1.14
+
+Development log with root causes and measurements:
+[docs/devlog/2026-09-29.md](docs/devlog/2026-09-29.md).
+
+### Added
+
+- **End-to-end node self-test.** `proxy test` (API, CLI, UI) now pushes real
+  traffic through each node using the exact share link its first enabled
+  user imports (sing-box client dialled at loopback) and reports `e2e`,
+  `exit_ip` and latency. The old port probe passed nodes that carried no
+  traffic; it remains available as `?quick=1`.
+- **Public subscription listener** (`/api/v1/admin/subscription`, UI card on
+  Users & Subs): separate port (default 2096), only `/<secret>/<uuid>`, TLS
+  when the panel has a certificate. Subscription links/QRs use it, so client
+  apps can refresh while the admin port stays private.
+- The panel re-opens the ports of enabled nodes and the subscription listener
+  at startup and after each apply on hosts whose firewall blocks by default —
+  rules added from the container did not survive a host reboot.
+
+### Changed
+
+- **sing-box 1.11.0 → 1.14.2**: config migrated (reject action instead of the
+  block/dns outbounds, WireGuard endpoints, typed DNS servers,
+  `default_domain_resolver`); image uses the `-musl` build.
+- **Apply keeps unchanged engines running** (`?force=1` to restart anyway):
+  editing one protocol no longer disconnects users of the other engine.
+- **Idle overhead 2.8% → 0.05% CPU** (RSS 39 → 29.5 MB): UI-only sampling runs
+  only while someone views traffic; settings reads are cached; fewer `ss` execs.
+- sing-box Clash API (127.0.0.1) is on by default — needed for accounting.
+- The per-user speed limit is no longer offered in the UI: no engine enforces
+  it (field kept for compatibility).
+
+### Fixed
+
+- **Xray per-user traffic was always 0** since the Xray v26 bump: counter
+  values changed from JSON strings to numbers and every stats read failed.
+- **Hysteria2/TUIC per-user traffic was always 0**: the Clash API has no user
+  field. Users are now attributed via per-user direct outbounds, and bytes of
+  connections that close between polls (~60% of a fast download) are
+  recovered from global totals. Measured: 3×100 MB billed +0.28%.
+- A user whose email exists on several inbounds had every delta credited to
+  all of them; engines now report a unique per-client identity.
+- Xray counters were read with `-reset`, losing bytes if the DB write failed;
+  they are also read right before Xray stops.
+- Self-signed Smart Deploy Hy2/TUIC nodes were shared without `insecure=1`/SNI
+  (sing-box-native TLS block not parsed) — every client failed verification.
+- Links for Smart Deploy nodes pointed at 127.0.0.1 when the admin used an
+  SSH tunnel; nodes now store their public address.
+- Deleted nodes/users could not be recreated under the same name (soft-delete
+  kept the unique key); deletes are hard now and old rows are purged.
+- Data race in the async audit writer.
+
 ## [1.2.1] — 2026-09-29
 
 ### Fixed
