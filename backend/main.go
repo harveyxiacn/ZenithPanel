@@ -30,6 +30,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/system"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/traffic"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/webserver"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/version"
@@ -82,6 +83,12 @@ func main() {
 
 	// 3. Execute Setup Initialization (check persistent state)
 	setup.InitSetup()
+
+	// 3a. Restore kernel tuning (Smart Deploy sysctl drop-ins, RPS masks)
+	// that a host reboot wiped — see system.ReapplyPersistentTuning.
+	if runtime.GOOS == "linux" && os.Geteuid() == 0 {
+		system.ReapplyPersistentTuning(context.Background())
+	}
 
 	// 4. Initialize Managers
 	dm, err := docker.NewManager()

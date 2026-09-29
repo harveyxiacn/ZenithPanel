@@ -31,6 +31,7 @@ const (
 	TuneSystemdNofile   = "systemd_nofile"
 	TuneTimeSyncEnable  = "time_sync_enable"
 	TuneQdiscCake       = "qdisc_cake"
+	TuneRPSSpread       = "rps_spread"
 )
 
 // Expand turns a preset ID + environment snapshot + user input into a
@@ -38,17 +39,50 @@ const (
 // secret fields (UUIDs, Reality keys, passwords) are generated via
 // crypto/rand so identical inputs still produce distinct plans.
 func Expand(presetID string, probe ProbeResult, in Input) (DeployPlan, error) {
+	var plan DeployPlan
+	var err error
 	switch presetID {
 	case model.PresetStableEgress:
-		return expandStableEgress(probe, in)
+		plan, err = expandStableEgress(probe, in)
 	case model.PresetSpeed:
-		return expandSpeed(probe, in)
+		plan, err = expandSpeed(probe, in)
 	case model.PresetCombo:
-		return expandCombo(probe, in)
+		plan, err = expandCombo(probe, in)
 	case model.PresetWeakNetwork:
-		return expandWeakNetwork(probe, in)
+		plan, err = expandWeakNetwork(probe, in)
 	default:
 		return DeployPlan{}, fmt.Errorf("unknown preset: %q", presetID)
+	}
+	if err != nil {
+		return plan, err
+	}
+	addHostSpecificTuning(&plan, probe)
+	return plan, nil
+}
+
+// addHostSpecificTuning adapts a plan to the probed CPU and NIC, the same
+// way for every preset:
+//
+//   - RPS/RFS when the NIC has fewer RX queues than there are cores (typical
+//     virtio VPS NICs), so receive processing isn't pinned to a subset of
+//     CPUs.
+//   - Warn-level CPU advice (no hardware AES, AES-NI hidden by the VM) as
+//     plan notes.
+func addHostSpecificTuning(plan *DeployPlan, probe ProbeResult) {
+	cores := probe.Hardware.CPUCores
+	if probe.NIC.Primary != "" && probe.NIC.RxQueues > 0 && cores > probe.NIC.RxQueues {
+		plan.Tuning = append(plan.Tuning, TuneSpec{OpName: TuneRPSSpread, Params: map[string]string{
+			"iface": probe.NIC.Primary,
+			"cpus":  fmt.Sprintf("%d", cores),
+		}})
+		plan.Notes = append(plan.Notes, fmt.Sprintf(
+			"%s has %d RX queue(s) for %d CPUs — enabling RPS/RFS to spread packet processing across all cores.",
+			probe.NIC.Primary, probe.NIC.RxQueues, cores))
+	}
+	for _, a := range probe.Hardware.CPU.Advice() {
+		if a.Level == "warn" {
+			plan.Notes = append(plan.Notes, a.Text)
+		}
 	}
 }
 

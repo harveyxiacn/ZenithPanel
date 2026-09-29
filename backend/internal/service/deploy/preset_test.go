@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/cpuinfo"
 )
 
 // baseProbe returns a realistic probe with 443 free, kernel 5.15, 1Gbps NIC.
@@ -280,4 +281,75 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func hasTuneOp(plan DeployPlan, name string) *TuneSpec {
+	for i := range plan.Tuning {
+		if plan.Tuning[i].OpName == name {
+			return &plan.Tuning[i]
+		}
+	}
+	return nil
+}
+
+func TestExpandAddsRPSWhenFewerQueuesThanCores(t *testing.T) {
+	probe := baseProbe()
+	probe.Hardware.CPUCores = 4
+	probe.NIC.RxQueues = 2
+	for _, preset := range []string{model.PresetStableEgress, model.PresetSpeed, model.PresetCombo, model.PresetWeakNetwork} {
+		plan, err := Expand(preset, probe, Input{})
+		if err != nil {
+			t.Fatalf("%s: %v", preset, err)
+		}
+		op := hasTuneOp(plan, TuneRPSSpread)
+		if op == nil {
+			t.Fatalf("%s: rps_spread missing from %v", preset, plan.Tuning)
+		}
+		if op.Params["iface"] != "eth0" || op.Params["cpus"] != "4" {
+			t.Errorf("%s: rps params = %v", preset, op.Params)
+		}
+		n := 0
+		for _, ts := range plan.Tuning {
+			if ts.OpName == TuneRPSSpread {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s: rps_spread appears %d times", preset, n)
+		}
+	}
+}
+
+func TestExpandSkipsRPSWhenQueuePerCore(t *testing.T) {
+	probe := baseProbe()
+	probe.Hardware.CPUCores = 4
+	for _, q := range []int{0, 4, 8} { // unknown, equal, more
+		probe.NIC.RxQueues = q
+		plan, err := Expand(model.PresetSpeed, probe, Input{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hasTuneOp(plan, TuneRPSSpread) != nil {
+			t.Errorf("rx_queues=%d: rps_spread should not be planned", q)
+		}
+	}
+}
+
+func TestExpandAddsCPUWarnings(t *testing.T) {
+	probe := baseProbe()
+	probe.Hardware.CPU = cpuinfo.Parse("processor\t: 0\nvendor_id\t: GenuineIntel\nmodel name\t: QEMU Virtual CPU version 2.5+\nflags\t\t: fpu sse2 hypervisor\n", "amd64")
+	plan, err := Expand(model.PresetStableEgress, probe, Input{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(plan.Notes, "\n")
+	if !strings.Contains(joined, "No hardware AES") || !strings.Contains(joined, "hides AES-NI") {
+		t.Errorf("expected AES warnings in notes, got:\n%s", joined)
+	}
+
+	probe.Hardware.CPU = cpuinfo.Parse("processor\t: 0\nFeatures\t: fp asimd aes pmull\nCPU implementer\t: 0x41\nCPU part\t: 0xd0c\n", "arm64")
+	plan, _ = Expand(model.PresetStableEgress, probe, Input{})
+	if strings.Contains(strings.Join(plan.Notes, "\n"), "AES") {
+		t.Errorf("no AES warning expected on Neoverse-N1, got %v", plan.Notes)
+	}
 }

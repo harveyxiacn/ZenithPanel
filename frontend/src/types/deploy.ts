@@ -34,6 +34,22 @@ export interface KernelFeatures {
   tfo: boolean
 }
 
+export interface CPUInfo {
+  arch: string
+  vendor: 'intel' | 'amd' | 'arm' | 'ampere' | 'other' | 'unknown'
+  model: string
+  cores: number
+  aes: boolean
+  clmul: boolean
+  avx2: boolean
+  avx512: boolean
+  sve: boolean
+  atomics: boolean
+  hypervisor: boolean
+  aes_hidden: boolean
+  preferred_cipher: 'aes-gcm' | 'chacha20-poly1305'
+}
+
 export interface ProbeResult {
   root_check: { ok: boolean; uid: number; note?: string }
   kernel: {
@@ -46,8 +62,8 @@ export interface ProbeResult {
   distro: { id: string; version_id: string; pretty_name: string }
   time_sync: { service: string; active: boolean; synced: boolean; error?: string }
   public_ip: { v4: string; v6?: string; error?: string }
-  hardware: { cpu_cores: number; ram_bytes: number; swap_bytes: number }
-  nic: { primary: string; link_speed_mbps: number }
+  hardware: { cpu_cores: number; ram_bytes: number; swap_bytes: number; cpu?: CPUInfo }
+  nic: { primary: string; link_speed_mbps: number; rx_queues?: number }
   port_avail: { ports: Record<number, boolean> }
   inbound_ports: number[]
   firewall: { type: string; active: boolean }
