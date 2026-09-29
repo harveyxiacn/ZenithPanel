@@ -144,3 +144,12 @@ func ObtainCert(domain string, email string) (certPath, keyPath string, err erro
 
 	return certPath, keyPath, nil
 }
+
+// ACMEPaths returns where the panel keeps the ACME-issued (and auto-renewed)
+// certificate for domain, and whether domain is a valid name.
+func ACMEPaths(domain string) (certPath, keyPath string, ok bool) {
+	if !domainRe.MatchString(domain) {
+		return "", "", false
+	}
+	return filepath.Join(certDir, domain+".crt"), filepath.Join(certDir, domain+".key"), true
+}

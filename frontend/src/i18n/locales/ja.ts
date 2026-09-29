@@ -326,10 +326,12 @@ export default {
       port: 'ポート',
       publicHost: '公開ホスト（任意）',
       publicHostPlaceholder: 'クライアントが使う IP またはドメイン',
+      certDomain: '証明書ドメイン（任意）',
+      certDomainPlaceholder: 'パネル発行の ACME 証明書 例: sub.example.com',
       rotate: 'シークレット再生成',
       rotateHint: '新しいシークレットパスを生成 — 既存の URL は無効になります',
       saved: 'サブスクリプション設定を保存しました',
-      plainWarning: 'パネルの TLS 証明書が未設定のため、ノード認証情報を含むサブスクリプションが平文 HTTP で配信されます。証明書（例: ACME で <ip>.nip.io）を発行しパネル証明書に設定すると HTTPS になります。',
+      plainWarning: 'パネルの TLS 証明書が未設定のため、ノード認証情報を含むサブスクリプションが平文 HTTP で配信されます。ACME で証明書を発行し「証明書ドメイン」に入力すると HTTPS になります。',
     },
     subscription: {
       title: '購読リンク',
