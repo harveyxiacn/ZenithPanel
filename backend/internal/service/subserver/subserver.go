@@ -30,6 +30,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/cert"
 )
 
 // Settings keys.
@@ -38,6 +39,7 @@ const (
 	SettingPort       = "sub_server_port"
 	SettingSecret     = "sub_server_secret"
 	SettingPublicHost = "sub_server_public_host" // optional override for the URL host
+	SettingCertDomain = "sub_server_cert_domain" // optional ACME cert (data/certs/<domain>.crt) for TLS
 	DefaultPort       = 2096
 )
 
@@ -47,6 +49,10 @@ type Config struct {
 	Port       int    `json:"port"`
 	Secret     string `json:"secret"`
 	PublicHost string `json:"public_host"`
+	// CertDomain selects an ACME certificate issued by the panel for this
+	// listener only, so the admin panel can stay on plain HTTP behind its
+	// SSH tunnel. Empty = use the panel certificate if one is configured.
+	CertDomain string `json:"cert_domain"`
 }
 
 // Status is Config plus runtime facts for the UI.
@@ -65,6 +71,7 @@ func Load() Config {
 		Port:       DefaultPort,
 		Secret:     config.GetSetting(SettingSecret),
 		PublicHost: strings.TrimSpace(config.GetSetting(SettingPublicHost)),
+		CertDomain: strings.TrimSpace(config.GetSetting(SettingCertDomain)),
 	}
 	if p, err := strconv.Atoi(config.GetSetting(SettingPort)); err == nil && p > 0 && p < 65536 {
 		cfg.Port = p
@@ -79,6 +86,7 @@ func Save(cfg Config) error {
 		SettingPort:       strconv.Itoa(cfg.Port),
 		SettingSecret:     cfg.Secret,
 		SettingPublicHost: cfg.PublicHost,
+		SettingCertDomain: cfg.CertDomain,
 	} {
 		if err := config.SetSetting(k, v); err != nil {
 			return err
@@ -141,8 +149,24 @@ func (s *Server) Apply(cfg Config) error {
 	}
 	srv := &http.Server{Handler: r, ReadHeaderTimeout: 10 * time.Second}
 
-	if cert, cn, ok := panelCert(); ok {
-		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+	if cfg.CertDomain != "" {
+		certPath, keyPath, ok := cert.ACMEPaths(cfg.CertDomain)
+		if !ok {
+			_ = ln.Close()
+			s.lastErr = "invalid certificate domain"
+			return errors.New(s.lastErr)
+		}
+		loader := &fileCert{certPath: certPath, keyPath: keyPath}
+		if _, err := loader.get(nil); err != nil {
+			_ = ln.Close()
+			s.lastErr = "certificate for " + cfg.CertDomain + ": " + err.Error()
+			return errors.New(s.lastErr)
+		}
+		srv.TLSConfig = &tls.Config{GetCertificate: loader.get, MinVersion: tls.VersionTLS12}
+		ln = tls.NewListener(ln, srv.TLSConfig)
+		s.tls, s.certCN = true, cfg.CertDomain
+	} else if c, cn, ok := panelCert(); ok {
+		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{c}, MinVersion: tls.VersionTLS12}
 		ln = tls.NewListener(ln, srv.TLSConfig)
 		s.tls, s.certCN = true, cn
 	}
@@ -239,4 +263,36 @@ func certName(certPEM []byte) string {
 		}
 	}
 	return c.Subject.CommonName
+}
+
+// fileCert serves a certificate from disk, reloading it when the file
+// changes — the ACME renewer rewrites the same paths, so renewals take
+// effect without restarting the listener.
+type fileCert struct {
+	certPath, keyPath string
+
+	mu    sync.Mutex
+	mtime time.Time
+	cert  *tls.Certificate
+}
+
+func (f *fileCert) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	st, err := os.Stat(f.certPath)
+	if err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.cert != nil && st.ModTime().Equal(f.mtime) {
+		return f.cert, nil
+	}
+	c, err := tls.LoadX509KeyPair(f.certPath, f.keyPath)
+	if err != nil {
+		if f.cert != nil {
+			return f.cert, nil // keep serving the previous cert mid-renewal
+		}
+		return nil, err
+	}
+	f.cert, f.mtime = &c, st.ModTime()
+	return f.cert, nil
 }

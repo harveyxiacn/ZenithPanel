@@ -326,10 +326,12 @@ export default {
       port: '端口',
       publicHost: '公网地址（可选）',
       publicHostPlaceholder: '客户端使用的 IP 或域名',
+      certDomain: '证书域名（可选）',
+      certDomainPlaceholder: '面板签发的 ACME 证书，如 sub.example.com',
       rotate: '更换密钥',
       rotateHint: '生成新的密钥路径 — 旧的订阅链接将失效',
       saved: '订阅设置已保存',
-      plainWarning: '面板未配置 TLS 证书，订阅内容（含节点凭据）将以明文 HTTP 传输。建议签发证书（例如通过 ACME 签发 <ip>.nip.io）并设为面板证书以切换到 HTTPS。',
+      plainWarning: '面板未配置 TLS 证书，订阅内容（含节点凭据）将以明文 HTTP 传输。建议通过 ACME 签发证书，并在「证书域名」中填写该域名以切换到 HTTPS。',
     },
     subscription: {
       title: '订阅链接',

@@ -326,10 +326,12 @@ export default {
       port: '連接埠',
       publicHost: '公網位址（選填）',
       publicHostPlaceholder: '用戶端使用的 IP 或網域',
+      certDomain: '憑證網域（選填）',
+      certDomainPlaceholder: '面板簽發的 ACME 憑證，如 sub.example.com',
       rotate: '更換密鑰',
       rotateHint: '產生新的密鑰路徑 — 舊的訂閱連結將失效',
       saved: '訂閱設定已儲存',
-      plainWarning: '面板未設定 TLS 憑證，訂閱內容（含節點憑據）將以明文 HTTP 傳輸。建議簽發憑證（例如透過 ACME 簽發 <ip>.nip.io）並設為面板憑證以切換到 HTTPS。',
+      plainWarning: '面板未設定 TLS 憑證，訂閱內容（含節點憑據）將以明文 HTTP 傳輸。建議透過 ACME 簽發憑證，並在「憑證網域」中填寫該網域以切換到 HTTPS。',
     },
     subscription: {
       title: '訂閱連結',

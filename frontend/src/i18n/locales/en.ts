@@ -333,10 +333,12 @@ export default {
       port: 'Port',
       publicHost: 'Public host (optional)',
       publicHostPlaceholder: 'IP or domain clients use',
+      certDomain: 'Certificate domain (optional)',
+      certDomainPlaceholder: 'ACME cert, e.g. sub.example.com',
       rotate: 'New secret',
       rotateHint: 'Generate a new secret path — existing subscription URLs stop working',
       saved: 'Subscription settings saved',
-      plainWarning: 'No panel TLS certificate is configured, so subscriptions (which contain node credentials) are served over plain HTTP. Issue a certificate (e.g. <ip>.nip.io via ACME) and set it as the panel certificate to switch to HTTPS.',
+      plainWarning: 'No panel TLS certificate is configured, so subscriptions (which contain node credentials) are served over plain HTTP. Issue a certificate via ACME and enter its domain under "Certificate domain" to switch to HTTPS.',
     },
     subscription: {
       title: 'Subscription Link',

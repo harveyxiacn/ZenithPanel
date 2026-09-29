@@ -680,7 +680,7 @@ async function copySubLink(uuid: string, format?: 'clash' | 'base64') {
 // When enabled, subscription links point at a dedicated listener so client
 // apps can refresh them while the admin port stays private.
 const subServer = ref<SubscriptionServerStatus | null>(null)
-const subServerForm = ref({ enabled: false, port: 2096, public_host: '' })
+const subServerForm = ref({ enabled: false, port: 2096, public_host: '', cert_domain: '' })
 const subServerOpen = ref(false)
 const subServerSaving = ref(false)
 const subServerNotes = ref<string[]>([])
@@ -690,7 +690,7 @@ async function loadSubServer() {
   try {
     const res = await getSubscriptionServer()
     subServer.value = res.data.data
-    subServerForm.value = { enabled: res.data.data.enabled, port: res.data.data.port, public_host: res.data.data.public_host || '' }
+    subServerForm.value = { enabled: res.data.data.enabled, port: res.data.data.port, public_host: res.data.data.public_host || '', cert_domain: res.data.data.cert_domain || '' }
   } catch { /* non-admin tokens can't read it — fall back to panel links */ }
 }
 
@@ -2017,7 +2017,7 @@ onBeforeUnmount(() => {
           </button>
           <div v-if="subServerOpen" class="mt-3 space-y-3">
             <p class="text-xs text-slate-500">{{ $t('proxy.subServer.hint') }}</p>
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+            <div class="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
               <label class="flex items-center gap-2 text-sm text-slate-700">
                 <input type="checkbox" v-model="subServerForm.enabled" /> {{ $t('proxy.subServer.enable') }}
               </label>
@@ -2028,6 +2028,10 @@ onBeforeUnmount(() => {
               <div>
                 <label class="block text-xs text-slate-500 mb-1">{{ $t('proxy.subServer.publicHost') }}</label>
                 <input v-model="subServerForm.public_host" :placeholder="$t('proxy.subServer.publicHostPlaceholder')" class="input-field text-sm w-full" />
+              </div>
+              <div>
+                <label class="block text-xs text-slate-500 mb-1">{{ $t('proxy.subServer.certDomain') }}</label>
+                <input v-model="subServerForm.cert_domain" :placeholder="$t('proxy.subServer.certDomainPlaceholder')" class="input-field text-sm w-full" />
               </div>
               <div class="flex gap-2">
                 <button :disabled="subServerSaving" @click="saveSubServer(false)" class="bg-primary-600 text-white rounded-lg text-sm px-4 py-2 hover:bg-primary-700 disabled:opacity-50">{{ $t('common.save') }}</button>
