@@ -383,6 +383,8 @@ func (d dbInboundDeployer) Create(spec InboundSpec) (uint, error) {
 		Stream:   string(streamJSON),
 		Enable:   true,
 		Remark:   spec.Remark,
+
+		ServerAddress: spec.ServerAddress,
 	}
 	if err := d.db.Create(&ib).Error; err != nil {
 		return 0, err
@@ -390,8 +392,16 @@ func (d dbInboundDeployer) Create(spec InboundSpec) (uint, error) {
 	return ib.ID, nil
 }
 
+// Delete removes a deployed inbound and its users. Hard delete, like the
+// inbound API: a soft-deleted row keeps its tag reserved, and leftover
+// clients would keep appearing (orphaned) in the users list.
 func (d dbInboundDeployer) Delete(id uint) error {
-	return d.db.Delete(&model.Inbound{}, id).Error
+	return d.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Unscoped().Delete(&model.Client{}, "inbound_id = ?", id).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Delete(&model.Inbound{}, id).Error
+	})
 }
 
 // injectCertPaths fills in cert_path / key_path for Hy2/TUIC TLS streams

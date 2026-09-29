@@ -107,6 +107,25 @@ export function getActiveConnections() {
   return apiClient.get('/v1/proxy/connections')
 }
 
+export interface SubscriptionServerStatus {
+  enabled: boolean
+  port: number
+  secret: string
+  public_host: string
+  running: boolean
+  tls: boolean
+  base_url?: string
+  error?: string
+}
+
+export function getSubscriptionServer() {
+  return apiClient.get<{ code: number; data: SubscriptionServerStatus }>('/v1/admin/subscription')
+}
+
+export function updateSubscriptionServer(body: { enabled: boolean; port?: number; public_host?: string; regenerate_secret?: boolean }) {
+  return apiClient.put<{ code: number; msg: string; data: { status: SubscriptionServerStatus; notes: string[] } }>('/v1/admin/subscription', body)
+}
+
 export function getClashApiStatus() {
   return apiClient.get('/v1/proxy/clash-api/status')
 }
@@ -132,6 +151,10 @@ export interface InboundProbeResult {
   stage?: string
   elapsed_ms: number
   err?: string
+  /** end-to-end traffic test: passed | failed | skipped */
+  e2e?: 'passed' | 'failed' | 'skipped'
+  exit_ip?: string
+  e2e_latency_ms?: number
 }
 
 export function probeInbound(id: number) {

@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -94,17 +95,49 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 	// with `unknown field "inbound_user"` and took every Hy2/TUIC inbound down
 	// as soon as any client had a limit set.
 
-	// System outbounds always present
+	// Only "direct" is a real outbound; blocking is the `reject` rule action
+	// and DNS hijacking the `hijack-dns` action (the legacy `block` / `dns`
+	// special outbounds were removed in sing-box 1.13).
 	outbounds := []any{
 		map[string]any{"type": "direct", "tag": "direct"},
-		map[string]any{"type": "block", "tag": "block"},
-		map[string]any{"type": "dns", "tag": "dns-out"},
 	}
-	// Append user-defined custom outbounds (e.g. WireGuard/WARP)
+	// User-defined custom outbounds. WireGuard (WARP) is an endpoint since
+	// 1.13; endpoint tags are routable exactly like outbound tags.
+	var endpoints []any
 	for _, ob := range customOutbounds {
 		entry := buildSingboxOutbound(ob)
-		if entry != nil {
+		if entry == nil {
+			continue
+		}
+		if ob.Protocol == "wireguard" {
+			endpoints = append(endpoints, entry)
+		} else {
 			outbounds = append(outbounds, entry)
+		}
+	}
+
+	// Per-user attribution: sing-box's Clash API doesn't report which user a
+	// connection belongs to, but it does report the outbound chain. Route
+	// each authenticated user's remaining (direct) traffic through its own
+	// "user:<identity>" direct outbound so the accountant can attribute
+	// bytes. These rules come after the user's routing rules, so blocks and
+	// custom outbounds (WARP…) still apply first.
+	if ClashAPIEnabled() {
+		seen := map[string]bool{}
+		for _, in := range inbounds {
+			for _, c := range clientsByInbound[in.ID] {
+				if seen[c.Email] {
+					continue
+				}
+				seen[c.Email] = true // Email already holds the stats identity
+				tag := UserOutboundPrefix + c.Email
+				outbounds = append(outbounds, map[string]any{"type": "direct", "tag": tag})
+				routeRules = append(routeRules, map[string]any{
+					"auth_user": []string{c.Email},
+					"action":    "route",
+					"outbound":  tag,
+				})
+			}
 		}
 	}
 
@@ -115,9 +148,9 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 		},
 		"dns": map[string]any{
 			"servers": []any{
-				map[string]any{"tag": "dns-primary", "address": primary},
-				map[string]any{"tag": "dns-secondary", "address": secondary},
-				map[string]any{"tag": "dns-local", "address": "local"},
+				singboxDNSServer("dns-primary", primary),
+				singboxDNSServer("dns-secondary", secondary),
+				map[string]any{"tag": "dns-local", "type": "local"},
 			},
 			"strategy": "prefer_ipv4",
 			"final":    "dns-primary",
@@ -129,7 +162,13 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 			"final":                 "direct",
 			"auto_detect_interface": true,
 			"rule_set":              buildSingboxRuleSets(usedSite, usedGeoIP),
+			// How outbounds (direct, rule-set downloads, WARP) resolve
+			// domains since 1.12; prefer IPv4 so the egress IP is stable.
+			"default_domain_resolver": map[string]any{"server": "dns-primary", "strategy": "prefer_ipv4"},
 		},
+	}
+	if len(endpoints) > 0 {
+		singboxConfig["endpoints"] = endpoints
 	}
 
 	for _, in := range inbounds {
@@ -150,7 +189,7 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 		},
 	}
 	// Clash API toggle layers on top of the cache_file block.
-	if config.GetSetting("singbox_clash_api_enabled") == "true" {
+	if ClashAPIEnabled() {
 		port := config.GetSetting("singbox_clash_api_port")
 		if port == "" {
 			port = "9090"
@@ -480,6 +519,43 @@ func resolveDNSServers() (string, string) {
 	return primary, secondary
 }
 
+// singboxDNSServer converts a DNS address as stored in settings (the legacy
+// sing-box / Xray style: "8.8.8.8", "udp://8.8.8.8:53", "tcp://…",
+// "tls://dns.google", "quic://…", "https://cloudflare-dns.com/dns-query",
+// "h3://…", "local") into the typed server object sing-box 1.12+ requires.
+// Servers named by domain get resolved through dns-local.
+func singboxDNSServer(tag, addr string) map[string]any {
+	addr = strings.TrimSpace(addr)
+	if addr == "" || strings.EqualFold(addr, "local") {
+		return map[string]any{"tag": tag, "type": "local"}
+	}
+	typ, rest := "udp", addr
+	if scheme, r, ok := strings.Cut(addr, "://"); ok {
+		typ, rest = strings.ToLower(scheme), r
+	}
+	switch typ {
+	case "udp", "tcp", "tls", "quic", "https", "h3":
+	default:
+		typ = "udp"
+	}
+	hostport, path, _ := strings.Cut(rest, "/")
+	host, portStr, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host, portStr = strings.Trim(hostport, "[]"), ""
+	}
+	srv := map[string]any{"tag": tag, "type": typ, "server": host}
+	if p, err := strconv.Atoi(portStr); err == nil && p > 0 {
+		srv["server_port"] = p
+	}
+	if (typ == "https" || typ == "h3") && path != "" && "/"+path != "/dns-query" {
+		srv["path"] = "/" + path
+	}
+	if net.ParseIP(host) == nil {
+		srv["domain_resolver"] = "dns-local"
+	}
+	return srv
+}
+
 // applyStreamToSingbox extracts TLS and transport config from the stored stream
 // JSON. Two input shapes are supported:
 //   - Xray-style (visual form): {"security": "tls", "tlsSettings": {...}, ...}
@@ -707,6 +783,11 @@ func buildSingboxRoutingRule(r model.RoutingRule) (map[string]any, []string, []s
 		"action":   "route",
 		"outbound": r.OutboundTag,
 	}
+	// "block" is a routing target in the DB (shared with Xray, where it is a
+	// blackhole outbound); sing-box expresses it as the reject action.
+	if r.OutboundTag == "block" {
+		ruleMap = map[string]any{"action": "reject"}
+	}
 
 	hasContent := false
 	var geositeTags, geoipTags []string
@@ -805,38 +886,60 @@ func buildSingboxRoutingRule(r model.RoutingRule) (map[string]any, []string, []s
 func buildSingboxOutbound(ob model.Outbound) map[string]any {
 	switch ob.Protocol {
 	case "wireguard":
+		// sing-box 1.13+ WireGuard *endpoint* (goes into top-level
+		// "endpoints", see GenerateConfig). Built from WARPConfig fields.
 		entry := map[string]any{
 			"type": "wireguard",
 			"tag":  ob.Tag,
 		}
+		peer := map[string]any{
+			"address":     "engage.cloudflareclient.com",
+			"port":        2408,
+			"allowed_ips": []string{"0.0.0.0/0", "::/0"},
+		}
 		if ob.Config != "" {
 			var cfg map[string]any
 			if err := json.Unmarshal([]byte(ob.Config), &cfg); err == nil {
-				// WARPConfig fields → sing-box WireGuard fields
 				if pk, ok := cfg["private_key"].(string); ok && pk != "" {
 					entry["private_key"] = pk
 				}
-				endpoint := "engage.cloudflareclient.com"
-				port := 2408
 				if ep, ok := cfg["endpoint"].(string); ok && ep != "" {
-					endpoint = ep
+					// The WARP API returns "ip:port"; a bare host keeps the default port.
+					if h, p, err := net.SplitHostPort(ep); err == nil {
+						peer["address"] = h
+						if n, err := strconv.Atoi(p); err == nil && n > 0 {
+							peer["port"] = n
+						}
+					} else {
+						peer["address"] = ep
+					}
 				}
 				if p, ok := cfg["endpoint_port"].(float64); ok && p > 0 {
-					port = int(p)
+					peer["port"] = int(p)
 				}
-				entry["server"] = endpoint
-				entry["server_port"] = port
 				if pubKey, ok := cfg["public_key"].(string); ok && pubKey != "" {
-					entry["peer_public_key"] = pubKey
+					peer["public_key"] = pubKey
 				}
 				if addr, ok := cfg["address"].(string); ok && addr != "" {
-					entry["local_address"] = []string{addr}
+					// sing-box needs a prefix; WARP hands out a bare IPv4.
+					if !strings.Contains(addr, "/") {
+						if ip := net.ParseIP(addr); ip != nil && ip.To4() == nil {
+							addr += "/128"
+						} else {
+							addr += "/32"
+						}
+					}
+					entry["address"] = []string{addr}
 				}
 				if rh, ok := cfg["reserved_hex"].(string); ok && rh != "" {
-					entry["reserved"] = rh
+					// reserved is three bytes; the stored form is hex.
+					if b, err := hex.DecodeString(strings.TrimPrefix(rh, "0x")); err == nil && len(b) == 3 {
+						peer["reserved"] = []int{int(b[0]), int(b[1]), int(b[2])}
+					}
 				}
 			}
 		}
+		entry["peers"] = []any{peer}
 		return entry
 
 	case "socks5":

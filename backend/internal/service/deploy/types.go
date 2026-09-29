@@ -162,6 +162,10 @@ type InboundSpec struct {
 	Settings map[string]any `json:"settings"`
 	Stream   map[string]any `json:"stream,omitempty"`
 	Remark   string         `json:"remark,omitempty"`
+	// ServerAddress is the host clients dial (domain or public IP). Without
+	// it share links fall back to whatever host the admin used to reach the
+	// panel — 127.0.0.1 through an SSH tunnel.
+	ServerAddress string `json:"server_address,omitempty"`
 }
 
 // TuneSpec names a reversible system-tuning operation plus its parameters.

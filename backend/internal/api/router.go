@@ -44,6 +44,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/notify"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/selftest"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
 	sysopt "github.com/harveyxiacn/ZenithPanel/backend/internal/service/system"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/terminal"
@@ -951,6 +952,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Traffic monitor not initialized"})
 				return
 			}
+			tm.MarkViewed() // keep UI-only sampling on while someone is watching
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": tm.Latest()})
 		})
 		authGroup.GET("/traffic/history", func(c *gin.Context) {
@@ -964,6 +966,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					secs = v
 				}
 			}
+			tm.MarkViewed()
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": tm.History(secs)})
 		})
 
@@ -1487,16 +1490,19 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(404, gin.H{"code": 404, "msg": "Inbound not found"})
 				return
 			}
+			// Hard delete: a soft-deleted row keeps its tag in the unique
+			// index, so an inbound could never be recreated under its name.
 			if err := config.DB.Transaction(func(tx *gorm.DB) error {
-				if err := tx.Delete(&model.Client{}, "inbound_id = ?", id).Error; err != nil {
+				if err := tx.Unscoped().Delete(&model.Client{}, "inbound_id = ?", id).Error; err != nil {
 					return err
 				}
-				return tx.Delete(&model.Inbound{}, "id = ?", id).Error
+				return tx.Unscoped().Delete(&model.Inbound{}, "id = ?", id).Error
 			}); err != nil {
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete inbound"})
 				return
 			}
 			sub.InvalidateSubCache()
+			EnsurePanelPortsOpen() // close the deleted node's port
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
 			recordAudit(c, "inbound.delete", fmt.Sprintf("id=%d", id))
 		})
@@ -1629,7 +1635,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			if !ok {
 				return
 			}
-			if err := config.DB.Delete(&model.Client{}, "id = ?", id).Error; err != nil {
+			if err := config.DB.Unscoped().Delete(&model.Client{}, "id = ?", id).Error; err != nil {
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete client"})
 				return
 			}
@@ -1656,7 +1662,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			var affected int64
 			switch req.Action {
 			case "delete":
-				res := config.DB.Delete(&model.Client{}, "id IN ?", req.IDs)
+				res := config.DB.Unscoped().Delete(&model.Client{}, "id IN ?", req.IDs)
 				if res.Error != nil {
 					c.JSON(500, gin.H{"code": 500, "msg": "Bulk delete failed"})
 					return
@@ -1881,7 +1887,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			if !ok {
 				return
 			}
-			if err := config.DB.Delete(&model.Outbound{}, "id = ?", id).Error; err != nil {
+			if err := config.DB.Unscoped().Delete(&model.Outbound{}, "id = ?", id).Error; err != nil {
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete outbound"})
 				return
 			}
@@ -2104,21 +2110,34 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					xm.SetDualMode(true)
 					sm.SetDualMode(true)
 
-					if err := xm.Stop(); err != nil {
-						log.Printf("Xray pre-stop (auto): %v", err)
+					// Leave an engine running when its generated config is
+					// identical to the one it is serving: a restart would cut
+					// every user's connections for nothing (e.g. editing a
+					// Hysteria2 node used to disconnect all VLESS users).
+					// ?force=1 restarts regardless.
+					force := c.Query("force") == "1"
+					xrayKeep := wantXray && !force && xm.ConfigUnchanged()
+					singboxKeep := wantSingbox && !force && sm.ConfigUnchanged()
+
+					if !xrayKeep {
+						if err := xm.Stop(); err != nil {
+							log.Printf("Xray pre-stop (auto): %v", err)
+						}
 					}
-					if err := sm.Stop(); err != nil {
-						log.Printf("Sing-box pre-stop (auto): %v", err)
+					if !singboxKeep {
+						if err := sm.Stop(); err != nil {
+							log.Printf("Sing-box pre-stop (auto): %v", err)
+						}
 					}
 
 					var xrayErr, singboxErr error
-					if wantXray {
+					if wantXray && !xrayKeep {
 						if err := xm.Start(); err != nil {
 							xrayErr = err
 							log.Printf("Xray start (auto): %v", err)
 						}
 					}
-					if wantSingbox {
+					if wantSingbox && !singboxKeep {
 						if err := sm.Start(); err != nil {
 							singboxErr = err
 							log.Printf("Sing-box start (auto): %v", err)
@@ -2132,16 +2151,22 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					}
 					var msgs []string
 					if wantXray {
-						if xrayErr != nil {
+						switch {
+						case xrayErr != nil:
 							msgs = append(msgs, fmt.Sprintf("Xray failed: %v", xrayErr))
-						} else {
+						case xrayKeep:
+							msgs = append(msgs, "Xray unchanged (kept running)")
+						default:
 							msgs = append(msgs, "Xray applied")
 						}
 					}
 					if wantSingbox {
-						if singboxErr != nil {
+						switch {
+						case singboxErr != nil:
 							msgs = append(msgs, fmt.Sprintf("Sing-box failed: %v", singboxErr))
-						} else {
+						case singboxKeep:
+							msgs = append(msgs, "Sing-box unchanged (kept running)")
+						default:
 							msgs = append(msgs, "Sing-box applied")
 						}
 					}
@@ -2159,6 +2184,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					})
 					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
 					recordAudit(c, "proxy.apply", engine)
+					EnsurePanelPortsOpen()
 				case "xray":
 					// Stop Sing-box first to free any ports it holds before Xray binds them.
 					if sm.Status() {
@@ -2187,6 +2213,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					})
 					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
 					recordAudit(c, "proxy.apply", engine)
+					EnsurePanelPortsOpen()
 				case "singbox", "sing-box":
 					// Stop Xray first to free any ports it holds before Sing-box binds them.
 					if xm.Status() {
@@ -2209,6 +2236,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					})
 					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
 					recordAudit(c, "proxy.apply", engine)
+					EnsurePanelPortsOpen()
 				default:
 					c.JSON(http.StatusBadRequest, gin.H{
 						"code": 400,
@@ -2249,7 +2277,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			})
 
 			proxyGroup.GET("/clash-api/status", func(c *gin.Context) {
-				enabled := config.GetSetting("singbox_clash_api_enabled") == "true"
+				enabled := proxy.ClashAPIEnabled()
 				c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"enabled": enabled}})
 			})
 
@@ -2259,7 +2287,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Sing-box is not running"})
 					return
 				}
-				if config.GetSetting("singbox_clash_api_enabled") != "true" {
+				if !proxy.ClashAPIEnabled() {
 					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Clash API not enabled — enable it and re-apply Sing-box config"})
 					return
 				}
@@ -2362,6 +2390,34 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					return
 				}
 				result := diagnostic.ProbeInbound(in)
+				// A bound port proves little (a node with a wrong Reality
+				// target or key passes it). Unless ?quick=1, push real
+				// traffic through the node using the exact share link the
+				// first enabled client imports, dialled at 127.0.0.1.
+				if result.OK && c.Query("quick") != "1" {
+					var cl model.Client
+					if err := config.DB.Where("inbound_id = ? AND enable = ?", in.ID, true).Order("id").First(&cl).Error; err != nil {
+						result.E2E = "skipped"
+						result.Err = "no enabled client — add one to run the end-to-end test"
+					} else if link := sub.ShareLink(in, cl, sub.ResolveServerAddress(in, subFallbackHost(c))); link == "" {
+						result.E2E = "skipped"
+					} else {
+						// Same link clients get, dialled at loopback (the TLS
+						// name stays the public address, as for real clients).
+						e2e := selftest.Run(c.Request.Context(), link, selftest.Options{Server: "127.0.0.1"})
+						result.ElapsedMs += e2e.LatencyMs
+						result.E2ELatency = e2e.LatencyMs
+						if e2e.OK {
+							result.E2E = "passed"
+							result.ExitIP = e2e.ExitIP
+						} else {
+							result.E2E = "failed"
+							result.OK = false
+							result.Stage = "proxy"
+							result.Err = e2e.Err
+						}
+					}
+				}
 				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok", "data": result})
 			})
 
@@ -3129,6 +3185,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		// Smart Deploy — preset-driven one-click egress with reversible
 		// tuning. See docs/superpowers/specs/2026-04-21-smart-deploy-design.md.
 		RegisterDeployRoutes(authGroup)
+
+		// Public subscription listener (admin-scoped settings).
+		registerSubscriptionServerRoutes(authGroup, func() string { return config.GetSetting("port") })
 
 		// Ad-block toggle: GET reports current state; PUT flips the setting,
 		// re-applies the managed routing rule, and triggers a proxy re-apply

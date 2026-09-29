@@ -1,6 +1,9 @@
 package firewall
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCatchAllPosition(t *testing.T) {
 	cases := []struct {
@@ -57,5 +60,53 @@ func TestRuleComment(t *testing.T) {
 		if got := ruleComment(in); got != want {
 			t.Errorf("ruleComment(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestBlocksByDefaultAndHasAccept(t *testing.T) {
+	oracle := `-P INPUT ACCEPT
+-A INPUT -p tcp -m state --state NEW -m tcp --dport 22 -j ACCEPT
+-A INPUT -p tcp -m tcp --dport 443 -m comment --comment vless-reality -j ACCEPT
+-A INPUT -p udp -m udp --dport 8443 -j ACCEPT
+-A INPUT -j REJECT --reject-with icmp-host-prohibited
+`
+	if !blocksByDefault(oracle) {
+		t.Error("catch-all REJECT should count as blocking")
+	}
+	if !blocksByDefault("-P INPUT DROP\n-A INPUT -i lo -j ACCEPT\n") {
+		t.Error("DROP policy should count as blocking")
+	}
+	if blocksByDefault("-P INPUT ACCEPT\n-A INPUT -p tcp --dport 25 -j DROP\n") {
+		t.Error("open firewall with a targeted DROP is not blocking by default")
+	}
+	cases := []struct {
+		proto, port string
+		want        bool
+	}{
+		{"tcp", "443", true}, {"tcp", "22", true}, {"udp", "8443", true},
+		{"udp", "443", false}, {"tcp", "8443", false}, {"tcp", "2096", false},
+	}
+	for _, c := range cases {
+		if got := hasAccept(oracle, c.proto, c.port); got != c.want {
+			t.Errorf("hasAccept(%s/%s) = %v, want %v", c.proto, c.port, got, c.want)
+		}
+	}
+}
+
+func TestStaleManagedRules(t *testing.T) {
+	spec := `-P INPUT ACCEPT
+-A INPUT -p tcp -m state --state NEW -m tcp --dport 22 -j ACCEPT
+-A INPUT -p tcp -m tcp --dport 443 -m comment --comment zenith-vless-reality -j ACCEPT
+-A INPUT -p udp -m udp --dport 8443 -m comment --comment zenith-smart-weaknet-hy2 -j ACCEPT
+-A INPUT -p tcp -m tcp --dport 8080 -m comment --comment "my own rule" -j ACCEPT
+-A INPUT -p tcp -m tcp --dport 9000 -j ACCEPT
+-A INPUT -j REJECT --reject-with icmp-host-prohibited
+`
+	got := staleManagedRules(spec, map[string]bool{"tcp/443": true})
+	if len(got) != 1 {
+		t.Fatalf("want exactly the stale managed udp/8443 rule, got %v", got)
+	}
+	if want := "-p udp -m udp --dport 8443 -m comment --comment zenith-smart-weaknet-hy2 -j ACCEPT"; strings.Join(got[0], " ") != want {
+		t.Fatalf("spec = %q", strings.Join(got[0], " "))
 	}
 }

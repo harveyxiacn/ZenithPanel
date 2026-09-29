@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon, SignalIcon, ArrowDownTrayIcon, BoltIcon } from '@heroicons/vue/24/outline'
-import { listInbounds, createInbound, updateInbound, deleteInbound, importThreeXUIInbounds, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig, bulkClientAction, getActiveConnections, getClashApiStatus, enableClashApi, disableClashApi, probeInbound, type InboundProbeResult } from '@/api/proxy'
+import { listInbounds, createInbound, updateInbound, deleteInbound, importThreeXUIInbounds, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig, bulkClientAction, getActiveConnections, getClashApiStatus, enableClashApi, disableClashApi, probeInbound, type InboundProbeResult, getSubscriptionServer, updateSubscriptionServer, type SubscriptionServerStatus } from '@/api/proxy'
 import apiClient from '@/api/client'
 import QRCode from 'qrcode'
 import { useConfirm } from '@/composables/useConfirm'
@@ -71,6 +71,14 @@ const inboundsLoading = ref(false)
 // away or applies new config. Each value is either a result object (ok/stage
 // pulled from the server) or the string 'pending' while the probe runs.
 const probeResults = ref<Record<number, InboundProbeResult | 'pending'>>({})
+// Tooltip for a passing probe: port check + end-to-end result (exit IP).
+function probeOkTitle(r: InboundProbeResult) {
+  const parts = [`OK · ${r.elapsed_ms}ms`]
+  if (r.e2e === 'passed') parts.push(t('proxy.inbounds.probeE2EPassed', { ip: r.exit_ip || '?' }))
+  else if (r.e2e === 'skipped') parts.push(t('proxy.inbounds.probeE2ESkipped'))
+  parts.push(t('proxy.inbounds.probeRecheck'))
+  return parts.join(' · ')
+}
 
 async function onProbeInbound(id: number) {
   probeResults.value = { ...probeResults.value, [id]: 'pending' }
@@ -490,7 +498,7 @@ const clientsLoading = ref(false)
 const showClientForm = ref(false)
 const selectedClientIds = ref<number[]>([])
 const bulkBusy = ref(false)
-const clientForm = ref<any>({ email: '', inbound_id: 0, total: 0, enable: true, speed_limit_mbps: 0, reset_day: 0 })
+const clientForm = ref<any>({ email: '', inbound_id: 0, total: 0, enable: true, reset_day: 0 })
 const copiedUuid = ref('')
 
 async function fetchClients() {
@@ -512,11 +520,10 @@ async function saveClient() {
       enable: f.enable,
       reset_day: f.reset_day ?? 0,
       // Convert MB/s → bytes/sec for the backend (1 MB/s = 1,048,576 B/s)
-      speed_limit: Math.max(0, Math.round((f.speed_limit_mbps || 0) * 1024 * 1024)),
     }
     await createClient(payload)
     showClientForm.value = false
-    clientForm.value = { email: '', inbound_id: 0, total: 0, enable: true, speed_limit_mbps: 0, reset_day: 0 }
+    clientForm.value = { email: '', inbound_id: 0, total: 0, enable: true, reset_day: 0 }
     await fetchClients()
     await loadProxyStatus()
     toast.success(t('common.created'))
@@ -627,7 +634,7 @@ async function toggleClashApi() {
 
 function addClientForInbound(inboundId: number) {
   switchTab('users')
-  clientForm.value = { email: '', inbound_id: inboundId, total: 0, enable: true, speed_limit_mbps: 0, reset_day: 0 }
+  clientForm.value = { email: '', inbound_id: inboundId, total: 0, enable: true, reset_day: 0 }
   showClientForm.value = true
 }
 
@@ -645,7 +652,7 @@ function inboundTagById(id: number): string {
 }
 
 async function copySubLink(uuid: string, format?: 'clash' | 'base64') {
-  const link = buildSubscriptionLink(location.origin, uuid, format)
+  const link = buildSubscriptionLink(location.origin, uuid, format, subBase.value)
 
   try {
     if (navigator.clipboard?.writeText) {
@@ -669,6 +676,38 @@ async function copySubLink(uuid: string, format?: 'clash' | 'base64') {
   }
 }
 
+// ---- Public subscription server ----
+// When enabled, subscription links point at a dedicated listener so client
+// apps can refresh them while the admin port stays private.
+const subServer = ref<SubscriptionServerStatus | null>(null)
+const subServerForm = ref({ enabled: false, port: 2096, public_host: '' })
+const subServerOpen = ref(false)
+const subServerSaving = ref(false)
+const subServerNotes = ref<string[]>([])
+const subBase = computed(() => (subServer.value?.running && subServer.value.base_url) || '')
+
+async function loadSubServer() {
+  try {
+    const res = await getSubscriptionServer()
+    subServer.value = res.data.data
+    subServerForm.value = { enabled: res.data.data.enabled, port: res.data.data.port, public_host: res.data.data.public_host || '' }
+  } catch { /* non-admin tokens can't read it — fall back to panel links */ }
+}
+
+async function saveSubServer(regenerate = false) {
+  subServerSaving.value = true
+  try {
+    const res = await updateSubscriptionServer({ ...subServerForm.value, regenerate_secret: regenerate })
+    subServer.value = res.data.data.status
+    subServerNotes.value = res.data.data.notes || []
+    toast.success(t('proxy.subServer.saved'))
+  } catch (e: any) {
+    toast.error(e?.response?.data?.msg || e?.message || t('common.errorOccurred'))
+  } finally {
+    subServerSaving.value = false
+  }
+}
+
 // ---- Subscription Link Modal ----
 const showSubLinkModal = ref(false)
 const subLinkUuid = ref('')
@@ -676,7 +715,7 @@ const subLinkEmail = ref('')
 const subLinkFormat = ref<'base64' | 'clash'>('base64')
 
 const subLinkValue = computed(() => {
-  return buildSubscriptionLink(location.origin, subLinkUuid.value, subLinkFormat.value)
+  return buildSubscriptionLink(location.origin, subLinkUuid.value, subLinkFormat.value, subBase.value)
 })
 
 function openSubLinkModal(uuid: string, email: string) {
@@ -716,7 +755,7 @@ async function generateQr() {
       qrDataUrl.value = await QRCode.toDataURL(firstLink, { width: 280, margin: 2, color: { dark: '#1e293b', light: '#ffffff' } })
     } else {
       // Clash: encode subscription URL (Clash clients fetch it natively)
-      const link = buildSubscriptionLink(location.origin, qrUuid.value, 'clash')
+      const link = buildSubscriptionLink(location.origin, qrUuid.value, 'clash', subBase.value)
       qrDataUrl.value = await QRCode.toDataURL(link, { width: 280, margin: 2, color: { dark: '#1e293b', light: '#ffffff' } })
     }
   } catch {
@@ -1346,6 +1385,7 @@ onMounted(() => {
   fetchOutbounds()
   loadProxyStatus()
   refreshClashApiStatus()
+  loadSubServer()
 })
 
 // Start/stop the live-connection poll when the user switches into/out of the tab.
@@ -1839,8 +1879,8 @@ onBeforeUnmount(() => {
                   v-else-if="probeResults[node.id] && (probeResults[node.id] as InboundProbeResult).ok"
                   @click="onProbeInbound(node.id)"
                   :class="['inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium transition', 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200']"
-                  :title="`OK · ${(probeResults[node.id] as InboundProbeResult).elapsed_ms}ms · ${$t('proxy.inbounds.probeRecheck')}`"
-                >✓ {{ (probeResults[node.id] as InboundProbeResult).elapsed_ms }}ms</button>
+                  :title="probeOkTitle(probeResults[node.id] as InboundProbeResult)"
+                >✓ {{ (probeResults[node.id] as InboundProbeResult).elapsed_ms }}ms<span v-if="(probeResults[node.id] as InboundProbeResult).e2e === 'passed'" class="ml-1 opacity-70">E2E</span></button>
                 <button
                   v-else-if="probeResults[node.id]"
                   @click="onProbeInbound(node.id)"
@@ -1967,6 +2007,42 @@ onBeforeUnmount(() => {
           </button>
         </div>
 
+        <!-- Public subscription access -->
+        <div class="px-6 py-3 border-b border-slate-100 bg-white">
+          <button class="w-full flex items-center justify-between text-left" @click="subServerOpen = !subServerOpen">
+            <span class="text-sm font-medium text-slate-700">{{ $t('proxy.subServer.title') }}</span>
+            <span class="text-xs" :class="subServer?.running ? (subServer.tls ? 'text-emerald-600' : 'text-amber-600') : 'text-slate-400'">
+              {{ subServer?.running ? (subServer.tls ? $t('proxy.subServer.onTls') : $t('proxy.subServer.onPlain')) : $t('proxy.subServer.off') }}
+            </span>
+          </button>
+          <div v-if="subServerOpen" class="mt-3 space-y-3">
+            <p class="text-xs text-slate-500">{{ $t('proxy.subServer.hint') }}</p>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+              <label class="flex items-center gap-2 text-sm text-slate-700">
+                <input type="checkbox" v-model="subServerForm.enabled" /> {{ $t('proxy.subServer.enable') }}
+              </label>
+              <div>
+                <label class="block text-xs text-slate-500 mb-1">{{ $t('proxy.subServer.port') }}</label>
+                <input v-model.number="subServerForm.port" type="number" min="1" max="65535" class="input-field text-sm w-full" />
+              </div>
+              <div>
+                <label class="block text-xs text-slate-500 mb-1">{{ $t('proxy.subServer.publicHost') }}</label>
+                <input v-model="subServerForm.public_host" :placeholder="$t('proxy.subServer.publicHostPlaceholder')" class="input-field text-sm w-full" />
+              </div>
+              <div class="flex gap-2">
+                <button :disabled="subServerSaving" @click="saveSubServer(false)" class="bg-primary-600 text-white rounded-lg text-sm px-4 py-2 hover:bg-primary-700 disabled:opacity-50">{{ $t('common.save') }}</button>
+                <button v-if="subServer?.secret" :disabled="subServerSaving" @click="saveSubServer(true)" class="text-sm px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700" :title="$t('proxy.subServer.rotateHint')">{{ $t('proxy.subServer.rotate') }}</button>
+              </div>
+            </div>
+            <div v-if="subServer?.running && subServer.base_url" class="text-xs font-mono break-all text-slate-600 bg-slate-50 rounded p-2">{{ subServer.base_url }}&lt;uuid&gt;</div>
+            <p v-if="subServer?.running && !subServer.tls" class="text-xs text-amber-700 bg-amber-50 rounded p-2">{{ $t('proxy.subServer.plainWarning') }}</p>
+            <p v-if="subServer?.error" class="text-xs text-rose-700">{{ subServer.error }}</p>
+            <ul v-if="subServerNotes.length" class="text-xs text-slate-600 list-disc list-inside">
+              <li v-for="(n, i) in subServerNotes" :key="i">{{ n }}</li>
+            </ul>
+          </div>
+        </div>
+
         <!-- Add Client Form -->
         <div v-if="showClientForm" class="p-6 border-b border-slate-100 bg-slate-50">
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
@@ -1979,10 +2055,6 @@ onBeforeUnmount(() => {
             <button @click="saveClient" class="bg-primary-600 text-white rounded-lg text-sm hover:bg-primary-700">{{ $t('common.add') }}</button>
           </div>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div>
-              <label class="text-xs text-slate-500 block mb-1">Speed Limit (MB/s, 0 = unlimited)</label>
-              <input v-model.number="clientForm.speed_limit_mbps" type="number" min="0" step="0.5" class="input-field text-sm w-full" />
-            </div>
             <div>
               <label class="text-xs text-slate-500 block mb-1">Monthly Reset Day (1-28, 0 = off)</label>
               <input v-model.number="clientForm.reset_day" type="number" min="0" max="28" class="input-field text-sm w-full" />
@@ -2017,7 +2089,7 @@ onBeforeUnmount(() => {
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.email') }}</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.inbounds.tag') }}</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.traffic') }}</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Speed</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.resetColumn') }}</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.status') }}</th>
               <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
             </tr>
@@ -2062,8 +2134,7 @@ onBeforeUnmount(() => {
                 </template>
               </td>
               <td class="px-6 py-4 text-sm text-slate-500">
-                <div>{{ user.speed_limit > 0 ? ((user.speed_limit / (1024 * 1024)).toFixed(1) + ' MB/s') : '∞' }}</div>
-                <div v-if="user.reset_day > 0" class="text-xs text-slate-400">Resets day {{ user.reset_day }}</div>
+                <div>{{ user.reset_day > 0 ? $t('proxy.clients.resetsOnDay', { day: user.reset_day }) : '—' }}</div>
               </td>
               <td class="px-6 py-4">
                 <span :class="[user.enable ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-800', 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full']">
