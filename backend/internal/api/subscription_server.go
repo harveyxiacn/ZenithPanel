@@ -94,13 +94,15 @@ func registerSubscriptionServerRoutes(g *gin.RouterGroup, panelPort func() strin
 		if cfg.Enabled {
 			port := strconv.Itoa(cfg.Port)
 			if !firewallAllows(port) {
-				if err := firewall.AddRule("tcp", port, "ACCEPT", "", "zenith-subscription"); err != nil {
+				if err := firewall.AddRule("tcp", port, "ACCEPT", "", firewall.ManagedCommentPrefix+"subscription"); err != nil {
 					notes = append(notes, "Could not open the port in the host firewall: "+err.Error())
 				} else {
 					notes = append(notes, fmt.Sprintf("Opened TCP %s in the host firewall.", port))
 				}
 			}
 			notes = append(notes, fmt.Sprintf("If your cloud provider has a security group / security list, allow inbound TCP %d there too.", cfg.Port))
+		} else {
+			EnsurePanelPortsOpen() // closes the port the listener no longer uses
 		}
 		recordAudit(c, "subscription_server.update", fmt.Sprintf("enabled=%v port=%d", cfg.Enabled, cfg.Port))
 		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Saved", "data": gin.H{
@@ -143,9 +145,12 @@ func inboundFirewallProtos(in model.Inbound) []string {
 func EnsurePanelPortsOpen() {
 	var inbounds []model.Inbound
 	config.DB.Where("enable = ?", true).Find(&inbounds)
+	keep := map[string]bool{}
 	for _, in := range inbounds {
 		for _, proto := range inboundFirewallProtos(in) {
-			if added, err := firewall.EnsureOpen(proto, strconv.Itoa(in.Port), "zenith-"+in.Tag); err != nil {
+			port := strconv.Itoa(in.Port)
+			keep[proto+"/"+port] = true
+			if added, err := firewall.EnsureOpen(proto, port, firewall.ManagedCommentPrefix+in.Tag); err != nil {
 				log.Printf("firewall: ensure %s/%d: %v", proto, in.Port, err)
 				return // iptables unavailable — nothing else will work either
 			} else if added {
@@ -154,8 +159,17 @@ func EnsurePanelPortsOpen() {
 		}
 	}
 	if cfg := subserver.Load(); cfg.Enabled {
-		if added, err := firewall.EnsureOpen("tcp", strconv.Itoa(cfg.Port), "zenith-subscription"); err == nil && added {
+		port := strconv.Itoa(cfg.Port)
+		keep["tcp/"+port] = true
+		if added, err := firewall.EnsureOpen("tcp", port, firewall.ManagedCommentPrefix+"subscription"); err == nil && added {
 			log.Printf("firewall: opened tcp/%d for the subscription server", cfg.Port)
 		}
+	}
+	// Close ports the panel opened for listeners that no longer exist
+	// (deleted / disabled / moved nodes). Only panel-labelled rules.
+	if n, err := firewall.PruneManaged(keep); err != nil {
+		log.Printf("firewall: prune: %v", err)
+	} else if n > 0 {
+		log.Printf("firewall: closed %d port(s) no longer used by any node", n)
 	}
 }

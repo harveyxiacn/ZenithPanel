@@ -55,6 +55,12 @@ Development log with root causes and measurements:
 - Deleted nodes/users could not be recreated under the same name (soft-delete
   kept the unique key); deletes are hard now and old rows are purged.
 - Data race in the async audit writer.
+- Smart Deploy rollback left the deployment's users behind (orphans) and
+  soft-deleted the inbound; it now hard-deletes both. Orphans are purged on
+  startup.
+- Ports the panel opened for deleted/disabled nodes stayed open; panel-labelled
+  (`zenith-*`) firewall rules for unused ports are now removed. Rules added by
+  hand are never touched.
 
 ## [1.2.1] — 2026-09-29
 

@@ -231,6 +231,58 @@ func EnsureOpen(proto, port, comment string) (bool, error) {
 	return true, AddRule(proto, port, "ACCEPT", "", comment)
 }
 
+// ManagedCommentPrefix marks INPUT rules the panel opened for its own
+// listeners (see EnsureOpen callers). Only rules carrying it are ever
+// pruned automatically; rules an operator added are left alone.
+const ManagedCommentPrefix = "zenith-"
+
+// staleManagedRules returns the `iptables -S` rule specs (without the
+// leading "-A INPUT") of panel-managed ACCEPT rules whose proto/port is not
+// in keep (keys "tcp/443").
+func staleManagedRules(spec string, keep map[string]bool) [][]string {
+	var out [][]string
+	for _, line := range strings.Split(spec, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 3 || f[0] != "-A" || f[1] != "INPUT" {
+			continue
+		}
+		var proto, port, comment string
+		for i := 2; i+1 < len(f); i++ {
+			switch f[i] {
+			case "-p":
+				proto = f[i+1]
+			case "--dport":
+				port = f[i+1]
+			case "--comment":
+				comment = strings.Trim(f[i+1], `"`)
+			}
+		}
+		if strings.HasPrefix(comment, ManagedCommentPrefix) && proto != "" && port != "" && !keep[proto+"/"+port] {
+			out = append(out, f[2:])
+		}
+	}
+	return out
+}
+
+// PruneManaged deletes panel-managed ACCEPT rules for ports no enabled
+// listener uses any more (e.g. after a node is deleted or moved), so the
+// host doesn't keep unused ports open. Returns how many rules were removed.
+func PruneManaged(keep map[string]bool) (int, error) {
+	out, err := exec.Command("iptables", "-S", "INPUT").Output()
+	if err != nil {
+		return 0, fmt.Errorf("iptables: %w", err)
+	}
+	n := 0
+	for _, rule := range staleManagedRules(string(out), keep) {
+		args := append([]string{"-D", "INPUT"}, rule...)
+		if b, err := exec.Command("iptables", args...).CombinedOutput(); err != nil {
+			return n, fmt.Errorf("iptables %s: %s", strings.Join(args, " "), strings.TrimSpace(string(b)))
+		}
+		n++
+	}
+	return n, nil
+}
+
 // CloudflareIPv4Ranges contains the official Cloudflare IPv4 ranges.
 // Source: https://www.cloudflare.com/ips-v4/
 var CloudflareIPv4Ranges = []string{

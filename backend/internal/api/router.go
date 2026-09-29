@@ -1502,6 +1502,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			sub.InvalidateSubCache()
+			EnsurePanelPortsOpen() // close the deleted node's port
 			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
 			recordAudit(c, "inbound.delete", fmt.Sprintf("id=%d", id))
 		})

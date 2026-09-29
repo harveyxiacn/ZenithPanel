@@ -142,6 +142,12 @@ func purgeSoftDeletedProxyRows(db *gorm.DB) {
 			log.Printf("Purged %d soft-deleted %T row(s)", res.RowsAffected, m)
 		}
 	}
+	// Clients whose inbound no longer exists (older Smart Deploy rollbacks
+	// removed the inbound but left its users behind).
+	res := db.Unscoped().Where("inbound_id NOT IN (?)", db.Unscoped().Model(&model.Inbound{}).Select("id")).Delete(&model.Client{})
+	if res.Error == nil && res.RowsAffected > 0 {
+		log.Printf("Purged %d orphaned client row(s)", res.RowsAffected)
+	}
 }
 
 // settingCacheTTL bounds how stale GetSetting can be for writes that bypass
