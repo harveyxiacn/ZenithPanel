@@ -32,6 +32,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/docker"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/cpuinfo"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/adblock"
 	backupsvc "github.com/harveyxiacn/ZenithPanel/backend/internal/service/backup"
@@ -927,6 +928,15 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			// Record network sample for the history ring buffer on every poll
 			monitor.RecordNetworkSample(stats.NetIn, stats.NetOut)
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": stats})
+		})
+
+		// CPU profile + proxy-relevant advice (hardware AES, hidden AES-NI…).
+		authGroup.GET("/system/cpu", func(c *gin.Context) {
+			info := cpuinfo.Detect()
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": gin.H{
+				"cpu":    info,
+				"advice": info.Advice(),
+			}})
 		})
 
 		authGroup.GET("/system/network-history", func(c *gin.Context) {

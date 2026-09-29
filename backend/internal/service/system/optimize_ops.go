@@ -73,6 +73,7 @@ func init() {
 	register(TuneOp{Name: "tcp_fastopen_full", Apply: applyTFOFull, Revert: revertFile})
 	register(TuneOp{Name: "systemd_nofile", Apply: applySystemdNofile, Revert: revertFile})
 	register(TuneOp{Name: "time_sync_enable", Apply: applyTimeSyncEnable, Revert: revertTimeSync})
+	register(TuneOp{Name: "rps_spread", Apply: applyRPSSpread, Revert: revertFile})
 }
 
 func register(op TuneOp) {

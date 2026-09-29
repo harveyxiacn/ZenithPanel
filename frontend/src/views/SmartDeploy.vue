@@ -146,6 +146,33 @@ const ramGB = computed(() =>
   probe.value ? (probe.value.hardware.ram_bytes / (1024 ** 3)).toFixed(1) : '?',
 )
 
+const cpuVendorLabel: Record<string, string> = { intel: 'Intel', amd: 'AMD', arm: 'Arm', ampere: 'Ampere' }
+
+// e.g. "Arm Neoverse-N1 · arm64 · AES ✓"
+const cpuSummary = computed(() => {
+  const c = probe.value?.hardware.cpu
+  if (!c || (!c.model && c.vendor === 'unknown')) return t('smartDeploy.values.unknown')
+  const vendor = cpuVendorLabel[c.vendor] ?? ''
+  const name = c.model.startsWith(vendor) ? c.model : `${vendor} ${c.model}`.trim()
+  const aes = c.aes && c.clmul ? t('smartDeploy.values.aesHw') : c.aes_hidden ? t('smartDeploy.values.aesHidden') : t('smartDeploy.values.aesSoft')
+  return `${name} · ${c.arch} · ${aes}`
+})
+
+const cpuTone = computed(() => {
+  const c = probe.value?.hardware.cpu
+  if (!c || (!c.model && c.vendor === 'unknown')) return 'neutral'
+  return c.aes && c.clmul ? 'good' : 'warn'
+})
+
+const nicSummary = computed(() => {
+  const n = probe.value?.nic
+  if (!n?.primary) return t('smartDeploy.values.unrecognized')
+  // virtio NICs report no link speed (-1); don't show "-1 Mbps".
+  const speed = n.link_speed_mbps > 0 ? ` · ${n.link_speed_mbps} Mbps` : ''
+  const q = n.rx_queues ? ` · ${t('smartDeploy.values.rxQueues', { n: n.rx_queues })}` : ''
+  return `${n.primary}${speed}${q}`
+})
+
 const blockers = computed(() => {
   if (!probe.value) return [] as string[]
   const out: string[] = []
@@ -219,8 +246,8 @@ const warnings = computed(() => {
             <Chip tone="neutral" :label="t('smartDeploy.chips.publicIp')" :value="probe.public_ip.v4 || t('smartDeploy.values.notDetected')" />
             <Chip tone="neutral" :label="t('smartDeploy.chips.cpuRam')"
                   :value="probe.hardware.cpu_cores + ' ' + t('smartDeploy.values.cores') + ' / ' + ramGB + ' GB'" />
-            <Chip tone="neutral" :label="t('smartDeploy.chips.primaryNic')"
-                  :value="probe.nic.primary ? `${probe.nic.primary} · ${probe.nic.link_speed_mbps} Mbps` : t('smartDeploy.values.unrecognized')" />
+            <Chip :tone="cpuTone" :label="t('smartDeploy.chips.cpuModel')" :value="cpuSummary" />
+            <Chip tone="neutral" :label="t('smartDeploy.chips.primaryNic')" :value="nicSummary" />
             <Chip :tone="probe.time_sync.synced ? 'good' : 'warn'"
                   :label="t('smartDeploy.chips.timeSync')" :value="probe.time_sync.service || 'none'" />
             <Chip tone="neutral" :label="t('smartDeploy.chips.firewall')" :value="probe.firewall.type" />
