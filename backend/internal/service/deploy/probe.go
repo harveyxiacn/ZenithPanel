@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/cpuinfo"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/system"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/mem"
 	"gorm.io/gorm"
@@ -162,15 +164,22 @@ func (p *Probe) detectHardware() HardwareResult {
 		CPUCores:  cores,
 		RAMBytes:  ram,
 		SwapBytes: swap,
+		CPU:       detectCPU(),
 	}
 }
+
+// Overridable in tests: the host CPU and a NIC's RX queue count.
+var (
+	detectCPU     = cpuinfo.Detect
+	countRxQueues = system.RxQueueCount
+)
 
 func (p *Probe) detectNIC() NICResult {
 	iface, mbps, err := p.runner.PrimaryNIC()
 	if err != nil {
 		return NICResult{}
 	}
-	return NICResult{Primary: iface, LinkSpeedMbps: mbps}
+	return NICResult{Primary: iface, LinkSpeedMbps: mbps, RxQueues: countRxQueues(iface)}
 }
 
 // portsToProbe is the fixed list of common proxy ports plus a sparse sample

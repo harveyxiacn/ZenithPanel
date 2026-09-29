@@ -3,6 +3,47 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.0] — 2026-09-29 — CPU-aware tuning
+
+### Added
+
+- **CPU detection** (`internal/pkg/cpuinfo`) for Intel, AMD, Arm Neoverse
+  (Graviton, Ampere Altra, Cobalt, Axion), AmpereOne and Kunpeng: model,
+  hardware AES + carry-less multiply (AES-NI/PCLMULQDQ, ARMv8 AES/PMULL),
+  AVX2/AVX-512/SVE/LSE, and **AES-NI hidden by the hypervisor** (generic
+  `qemu64`/`kvm64` CPU models on budget KVM VPSes). Exposed at
+  `GET /api/v1/system/cpu` and in the Smart Deploy probe (new *CPU* chip).
+  Measured on an Ampere A1 (Neoverse-N1, one core): AES-128-GCM 2533 MB/s vs
+  ChaCha20-Poly1305 485 MB/s; with AES hardware masked, AES-128-GCM drops to
+  90 MB/s — so the right cipher is worth 5–28×.
+- **CPU advice in Smart Deploy plans.** On CPUs without hardware AES the plan
+  recommends VLESS+Reality / Hysteria2 / TUIC (Go's TLS stack negotiates
+  ChaCha20 automatically there) and warns against Shadowsocks-2022, whose
+  multi-user mode is AES-only in both Xray and sing-box. When AES-NI is hidden
+  by the VM, the plan says so.
+- **RPS/RFS tuning op (`rps_spread`).** When the primary NIC has fewer RX
+  queues than CPUs (e.g. virtio with 2 queues on a 4-vCPU VPS), every preset
+  now spreads receive processing across all cores and enables flow steering.
+  Fully reversible via rollback. The probe reports `nic.rx_queues`.
+
+### Fixed
+
+- **Smart Deploy / BBR / network tuning was lost after every host reboot** in
+  the Docker deployment: the sysctl drop-ins live inside the container where
+  the host's systemd-sysctl never reads them. The panel now re-applies its
+  `99-zenith-*.conf` drop-ins and RPS masks at startup.
+- Smart Deploy no longer shows "-1 Mbps" for virtio NICs that report no link
+  speed.
+
+### Not changed (measured)
+
+- Tuning the engines' Go GC (`GOGC=200`) was benchmarked on VLESS+Reality
+  (3 GB through the tunnel, 3 runs each) and changed server CPU by ~2%, within
+  noise, at +4 MB RSS — so it was not shipped. Go's crypto and atomics already
+  dispatch on CPU features at runtime, so per-microarchitecture builds
+  (`GOAMD64=v3`, `GOARM64=v8.2`) would add little and break older / emulated
+  CPUs; the images stay on the portable baselines.
+
 ## [1.1.0] — 2026-09-29 — ARM64 support + security hardening
 
 ### Added

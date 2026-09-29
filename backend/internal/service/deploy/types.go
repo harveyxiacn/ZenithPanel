@@ -11,7 +11,11 @@
 // (Deployment, DeploymentOp) live in internal/model/deploy.go.
 package deploy
 
-import "time"
+import (
+	"time"
+
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/cpuinfo"
+)
 
 // ─────────────────────────────────────────────────────────────────────────
 // Probe
@@ -88,14 +92,16 @@ type PublicIPResult struct {
 }
 
 type HardwareResult struct {
-	CPUCores  int   `json:"cpu_cores"`
-	RAMBytes  int64 `json:"ram_bytes"`
-	SwapBytes int64 `json:"swap_bytes"`
+	CPUCores  int          `json:"cpu_cores"`
+	RAMBytes  int64        `json:"ram_bytes"`
+	SwapBytes int64        `json:"swap_bytes"`
+	CPU       cpuinfo.Info `json:"cpu"`
 }
 
 type NICResult struct {
 	Primary       string `json:"primary"`
 	LinkSpeedMbps int    `json:"link_speed_mbps"`
+	RxQueues      int    `json:"rx_queues"` // 0 = unknown
 }
 
 // PortAvailResult reports free/taken for a fixed set of probed ports. The
