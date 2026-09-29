@@ -12,10 +12,13 @@ import (
 )
 
 // defaultRealityTarget is the SNI Reality borrows when the user doesn't
-// override it. Microsoft's landing page is a stable, globally-reachable,
-// high-volume TLS endpoint — exactly the kind of traffic risk engines
-// treat as unremarkable.
-const defaultRealityTarget = "www.microsoft.com"
+// override it: a stable, globally-reachable, high-volume TLS 1.3 endpoint —
+// exactly the kind of traffic risk engines treat as unremarkable.
+// www.microsoft.com (the previous default) completes a normal TLS handshake
+// but REALITY authentication fails against it ("handshake did not complete
+// successfully" on the server), so nodes created with it could never pass
+// traffic. Verified end-to-end with Xray 26.2.6 (chrome + firefox).
+const defaultRealityTarget = "www.apple.com"
 
 // portFallbacks is the ordered list the preset engine walks when a
 // preferred port is taken in the probe snapshot.

@@ -31,7 +31,7 @@ Every deployment is reversible — one click rolls back all system changes (sysc
 Platform risk engines look at: IP stability, TLS fingerprint plausibility, datacenter/residential characteristics. The Stable Egress preset:
 
 - **Single IP, single port** — no rotation like commercial proxy pools
-- **Reality protocol** — handshake mimics a real site (default `www.microsoft.com`); TLS fingerprint matches Chrome
+- **Reality protocol** — handshake mimics a real site (default `www.apple.com`); TLS fingerprint matches Chrome
 - **TCP 443** — the most universally accepted port; UDP-filtering banks won't block it
 - **Your VPS's stable IP** — cleaner than shared residential proxies, more consistent than rotating pools
 
@@ -158,8 +158,8 @@ For full control, click **Add Node** and configure manually:
   "network": "tcp",
   "security": "reality",
   "realitySettings": {
-    "dest": "www.microsoft.com:443",
-    "serverNames": ["www.microsoft.com"],
+    "dest": "www.apple.com:443",
+    "serverNames": ["www.apple.com"],
     "publicKey": "YOUR_PUBLIC_KEY",
     "privateKey": "YOUR_PRIVATE_KEY",
     "shortIds": ["abcd1234"]
