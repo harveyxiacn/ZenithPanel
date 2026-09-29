@@ -60,7 +60,23 @@ func Expand(presetID string, probe ProbeResult, in Input) (DeployPlan, error) {
 		return plan, err
 	}
 	addHostSpecificTuning(&plan, probe)
+	setServerAddress(&plan, probe, in)
 	return plan, nil
+}
+
+// setServerAddress records the address clients should dial on every
+// planned inbound: the user's domain when given, else the probed public
+// IPv4.
+func setServerAddress(plan *DeployPlan, probe ProbeResult, in Input) {
+	addr := in.Domain
+	if addr == "" {
+		addr = probe.PublicIP.V4
+	}
+	for i := range plan.Inbounds {
+		if plan.Inbounds[i].ServerAddress == "" {
+			plan.Inbounds[i].ServerAddress = addr
+		}
+	}
 }
 
 // addHostSpecificTuning adapts a plan to the probed CPU and NIC, the same

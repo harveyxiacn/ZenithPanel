@@ -42,6 +42,8 @@ zenithctl --output table proxy test all
 - `proxy test all` 某行 stage=`not_bound` → 引擎没在那个端口上，多半是配置生成出错
 - stage=`tcp` → 内核拒了（防火墙没开？）
 - stage=`tls` → 证书/私钥对不上，看 §6
+- stage=`proxy` → 端口正常但流量不通（Reality 目标/密钥错误、客户端无法校验证书、链接有误），输出里会写明原因
+- `proxy test` 是端到端测试：端口检查后用第一个启用用户的订阅链接真实走一遍代理，显示 `E2E=passed` 和 `EXIT_IP`；`E2E=skipped` 表示该入站没有启用的用户；API 加 `?quick=1` 只做端口检查
 
 ---
 

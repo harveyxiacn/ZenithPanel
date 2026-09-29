@@ -841,6 +841,8 @@ func runProxyTestAll(c *Client, gf globalFlags) int {
 		Stage     string `json:"stage,omitempty"`
 		ElapsedMs int64  `json:"elapsed_ms,omitempty"`
 		Err       string `json:"err,omitempty"`
+		E2E       string `json:"e2e,omitempty"`
+		ExitIP    string `json:"exit_ip,omitempty"`
 	}
 	bad := 0
 	results := make([]row, 0, len(inbounds))
@@ -863,8 +865,12 @@ func runProxyTestAll(c *Client, gf globalFlags) int {
 			Stage     string `json:"stage"`
 			ElapsedMs int64  `json:"elapsed_ms"`
 			Err       string `json:"err"`
+			E2E       string `json:"e2e"`
+			ExitIP    string `json:"exit_ip"`
 		}
 		_ = json.Unmarshal(probeEnv.Data, &probe)
+		r.E2E = probe.E2E
+		r.ExitIP = probe.ExitIP
 		r.OK = probe.OK
 		r.Stage = probe.Stage
 		r.Transport = probe.Transport

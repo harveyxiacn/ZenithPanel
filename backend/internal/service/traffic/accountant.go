@@ -22,14 +22,13 @@ import (
 //
 //   - Sing-box: byte deltas already computed by proxyAggregator on every UI
 //     poll are drained every 30 s and added to the Client row.
-//   - Xray: every 30 s we exec "xray api statsquery -reset" against the
-//     internal API inbound, then add each returned counter to the Client row.
-//     "-reset" zeroes the counter on the Xray side so the next read is a
-//     delta — no separate previous-snapshot bookkeeping needed.
+//   - Xray: every 30 s (and right before Xray is stopped) we exec
+//     "xray api statsquery" against the internal API inbound and add the
+//     growth of each cumulative counter since the last persisted value.
 //
-// Both paths upsert against Client(email) using a GORM Updates clause so
-// repeated zero deltas are no-ops and concurrent writes serialize on the
-// SQLite-level lock. The accountant exits when ctx is cancelled.
+// Both paths update Client rows by ID, resolved from the per-client stats
+// identity the engine configs use (proxy.StatsIdentities). The accountant
+// exits when ctx is cancelled.
 type Accountant struct {
 	db         *gorm.DB
 	xm         *proxy.XrayManager
@@ -41,6 +40,15 @@ type Accountant struct {
 	lastFlush  time.Time
 	lastXrayOK time.Time
 	lastErr    string
+
+	// Xray counters are read cumulatively (no -reset) and diffed against
+	// the last values we successfully persisted, so a failed DB write is
+	// retried on the next flush instead of being lost. xrayStart identifies
+	// the Xray process the baseline belongs to; a restart zeroes Xray's
+	// counters, so the baseline is dropped when the start time changes.
+	xrayMu    sync.Mutex
+	xrayLast  map[string]pendingDelta
+	xrayStart time.Time
 }
 
 // NewAccountant wires the accountant to the running managers and the proxy
@@ -48,14 +56,22 @@ type Accountant struct {
 // the accountant treats nil as "no-op" and just exercises the polling code.
 // egress may be nil — the per-destination egress flush is then skipped.
 func NewAccountant(db *gorm.DB, xm *proxy.XrayManager, sm *proxy.SingboxManager, agg *proxyAggregator, egress *EgressCollector) *Accountant {
-	return &Accountant{
+	a := &Accountant{
 		db:       db,
 		xm:       xm,
 		sm:       sm,
 		agg:      agg,
 		egress:   egress,
 		interval: 30 * time.Second,
+		xrayLast: map[string]pendingDelta{},
 	}
+	if xm != nil {
+		// Capture Xray's in-memory counters before any stop/restart (e.g.
+		// "apply"), which would otherwise discard up to one interval of
+		// traffic.
+		xm.SetBeforeStop(a.flushXray)
+	}
+	return a
 }
 
 // Start launches the periodic flush goroutine. The first tick fires after
@@ -99,14 +115,30 @@ func (a *Accountant) flushSingbox() {
 	if len(pending) == 0 {
 		return
 	}
-	a.applyDeltas(pending, "singbox")
+	settled := a.applyDeltas(pending, "singbox")
+	for ident, d := range pending {
+		if !settled[ident] {
+			a.agg.requeue(ident, d) // DB error: retry on the next flush
+		}
+	}
 }
 
 func (a *Accountant) flushXray() {
 	if a.xm == nil || !a.xm.Status() {
 		return
 	}
-	stats, err := queryXrayStats(proxy.XrayStatsAPIPort())
+	a.xrayMu.Lock()
+	defer a.xrayMu.Unlock()
+
+	// Engine start time (to ~1 s): a different value means a new process
+	// whose counters restarted from zero.
+	start := time.Now().Add(-a.xm.Uptime()).Truncate(time.Second)
+	if d := start.Sub(a.xrayStart); d > time.Second || d < -time.Second {
+		a.xrayLast = map[string]pendingDelta{}
+		a.xrayStart = start
+	}
+
+	totals, err := queryXrayStats(proxy.XrayStatsAPIPort())
 	if err != nil {
 		a.mu.Lock()
 		a.lastErr = err.Error()
@@ -117,43 +149,94 @@ func (a *Accountant) flushXray() {
 	a.lastXrayOK = time.Now()
 	a.lastErr = ""
 	a.mu.Unlock()
-	if len(stats) == 0 {
-		return
+
+	deltas := xrayDeltas(totals, a.xrayLast)
+	for ident := range a.applyDeltas(deltas, "xray") {
+		a.xrayLast[ident] = totals[ident]
 	}
-	a.applyDeltas(stats, "xray")
+	// Identities with no new traffic are already in sync.
+	for ident, t := range totals {
+		if _, ok := deltas[ident]; !ok {
+			a.xrayLast[ident] = t
+		}
+	}
 }
 
-// applyDeltas adds per-email byte counts to the Client table. Skips users that
-// don't match any Client row — those are typically "(anonymous)" connections
-// or stale email keys from a previous config. Logs once per source per flush
-// when nothing matched, so a misconfigured stats inbound surfaces clearly.
-func (a *Accountant) applyDeltas(deltas map[string]pendingDelta, source string) {
-	if a.db == nil {
-		return
+// xrayDeltas diffs cumulative Xray counters against the last persisted
+// values. A counter below its baseline means it was reset, so the whole
+// current value is new traffic.
+func xrayDeltas(totals, last map[string]pendingDelta) map[string]pendingDelta {
+	out := map[string]pendingDelta{}
+	for ident, t := range totals {
+		l := last[ident]
+		var d pendingDelta
+		if t.up >= l.up {
+			d.up = t.up - l.up
+		} else {
+			d.up = t.up
+		}
+		if t.down >= l.down {
+			d.down = t.down - l.down
+		} else {
+			d.down = t.down
+		}
+		if d.up > 0 || d.down > 0 {
+			out[ident] = d
+		}
 	}
-	matched := 0
-	for email, d := range deltas {
-		if email == "" || email == "(anonymous)" {
+	return out
+}
+
+// applyDeltas adds per-user byte counts to the Client table and returns the
+// identities that are settled (written, or unattributable and deliberately
+// dropped); identities hit by a DB error are omitted so callers can retry.
+//
+// Engines report traffic per stats identity (see proxy.StatsIdentities),
+// which maps to exactly one Client row — updating by email instead credited
+// the same bytes to every row sharing that email.
+func (a *Accountant) applyDeltas(deltas map[string]pendingDelta, source string) map[string]bool {
+	settled := make(map[string]bool, len(deltas))
+	if a.db == nil {
+		return settled
+	}
+	var clients []model.Client
+	a.db.Select("id", "email").Find(&clients)
+	byIdent := map[string]uint{}
+	for id, ident := range proxy.StatsIdentities(clients) {
+		byIdent[ident] = id
+	}
+	matched, unmatched := 0, 0
+	for ident, d := range deltas {
+		id, ok := byIdent[ident]
+		if !ok {
+			// "(anonymous)" connections, deleted clients, or stale names.
+			settled[ident] = true
+			if ident != "" && ident != "(anonymous)" {
+				unmatched++
+			}
 			continue
 		}
 		if d.up == 0 && d.down == 0 {
+			settled[ident] = true
 			continue
 		}
 		res := a.db.Model(&model.Client{}).
-			Where("email = ?", email).
+			Where("id = ?", id).
 			Updates(map[string]any{
 				"up_load":   gorm.Expr("up_load + ?", d.up),
 				"down_load": gorm.Expr("down_load + ?", d.down),
 			})
 		if res.Error != nil {
-			log.Printf("traffic accountant (%s): update %s: %v", source, email, res.Error)
+			log.Printf("traffic accountant (%s): update %s: %v", source, ident, res.Error)
 			continue
 		}
+		settled[ident] = true
 		matched += int(res.RowsAffected)
 	}
-	if matched == 0 && len(deltas) > 0 {
-		log.Printf("traffic accountant (%s): %d deltas had no matching Client rows", source, len(deltas))
+	if matched == 0 && unmatched > 0 {
+		log.Printf("traffic accountant (%s): %d deltas had no matching Client rows", source, unmatched)
 	}
+	return settled
 }
 
 // Status returns last-flush metadata for the diagnostic endpoint. Used by the
@@ -182,8 +265,19 @@ type xrayStatsResponse struct {
 }
 
 type xrayStatEntry struct {
-	Name  string `json:"name"`
-	Value string `json:"value"`
+	Name  string        `json:"name"`
+	Value xrayStatValue `json:"value"`
+}
+
+// xrayStatValue accepts both encodings of a counter: older Xray releases
+// print "value": "1024" (string), v26+ prints "value": 1024 (number).
+// Decoding the number into a string field failed the whole response, which
+// silently stopped all Xray per-user accounting after the v26 bump.
+type xrayStatValue string
+
+func (v *xrayStatValue) UnmarshalJSON(b []byte) error {
+	*v = xrayStatValue(strings.Trim(string(b), `"`))
+	return nil
 }
 
 // queryXrayStats execs `xray api statsquery -reset` against the loopback API
@@ -192,8 +286,10 @@ type xrayStatEntry struct {
 // maintaining a previous-snapshot state map. Patterns are "user>>>EMAIL>>>traffic>>>uplink|downlink".
 func queryXrayStats(port int) (map[string]pendingDelta, error) {
 	server := "127.0.0.1:" + strconv.Itoa(port)
+	// No -reset: the accountant diffs cumulative values itself so that a
+	// failed DB write doesn't lose the bytes Xray already zeroed.
 	cmd := exec.Command("xray", "api", "statsquery",
-		"--server="+server, "-pattern", "user>>>", "-reset")
+		"--server="+server, "-pattern", "user>>>")
 	out, err := cmd.Output()
 	if err != nil {
 		// statsquery with no matching counters exits with status != 0 on some
@@ -247,7 +343,7 @@ func ingestXrayStatEntries(entries []xrayStatEntry, out map[string]pendingDelta)
 		}
 		email := parts[0]
 		direction := parts[2] // uplink / downlink
-		bytes, err := strconv.ParseUint(strings.TrimSpace(e.Value), 10, 64)
+		bytes, err := strconv.ParseUint(strings.TrimSpace(string(e.Value)), 10, 64)
 		if err != nil || bytes == 0 {
 			continue
 		}

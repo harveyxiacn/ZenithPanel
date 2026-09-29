@@ -204,6 +204,9 @@ func tryProbeAllArray(raw json.RawMessage) bool {
 		OK        bool   `json:"ok"`
 		Stage     string `json:"stage"`
 		ElapsedMs int64  `json:"elapsed_ms"`
+		E2E       string `json:"e2e"`
+		ExitIP    string `json:"exit_ip"`
+		Err       string `json:"err"`
 	}
 	if err := json.Unmarshal(raw, &rows); err != nil || len(rows) == 0 {
 		return false
@@ -224,15 +227,22 @@ func tryProbeAllArray(raw json.RawMessage) bool {
 	// Sort by id for stable output.
 	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
 	w := newTabWriter()
-	w.row("ID", "TAG", "PROTOCOL", "TRANSPORT", "OK", "STAGE", "ELAPSED")
+	w.row("ID", "TAG", "PROTOCOL", "TRANSPORT", "OK", "STAGE", "E2E", "EXIT_IP", "ELAPSED")
+	var errs []string
 	for _, r := range rows {
 		mark := "✓"
 		if !r.OK {
 			mark = "✗"
+			if r.Err != "" {
+				errs = append(errs, fmt.Sprintf("  #%d %s: %s", r.ID, r.Tag, r.Err))
+			}
 		}
-		w.row(r.ID, dash(r.Tag), dash(r.Protocol), dash(r.Transport), mark, dash(r.Stage), fmt.Sprintf("%dms", r.ElapsedMs))
+		w.row(r.ID, dash(r.Tag), dash(r.Protocol), dash(r.Transport), mark, dash(r.Stage), dash(r.E2E), dash(r.ExitIP), fmt.Sprintf("%dms", r.ElapsedMs))
 	}
 	_ = w.Flush()
+	for _, e := range errs {
+		fmt.Println(e)
+	}
 	return true
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -122,21 +123,85 @@ func InitDB(dbPath string) {
 		log.Printf("Warning: failed to migrate traffic-egress tables: %v", err)
 	}
 
+	purgeSoftDeletedProxyRows(database)
+
 	DB = database
 	log.Println("Database initialized and migrated successfully")
 }
 
+// purgeSoftDeletedProxyRows hard-deletes inbound/client/outbound rows that
+// older versions soft-deleted. Those rows kept their tag / (inbound, email)
+// in the unique indexes, so a deleted node or user could never be recreated
+// under the same name. Nothing reads soft-deleted rows.
+func purgeSoftDeletedProxyRows(db *gorm.DB) {
+	for _, m := range []any{&model.Client{}, &model.Inbound{}, &model.Outbound{}} {
+		res := db.Unscoped().Where("deleted_at IS NOT NULL").Delete(m)
+		if res.Error != nil {
+			log.Printf("Warning: purge soft-deleted %T: %v", m, res.Error)
+		} else if res.RowsAffected > 0 {
+			log.Printf("Purged %d soft-deleted %T row(s)", res.RowsAffected, m)
+		}
+	}
+	// Clients whose inbound no longer exists (older Smart Deploy rollbacks
+	// removed the inbound but left its users behind).
+	res := db.Unscoped().Where("inbound_id NOT IN (?)", db.Unscoped().Model(&model.Inbound{}).Select("id")).Delete(&model.Client{})
+	if res.Error == nil && res.RowsAffected > 0 {
+		log.Printf("Purged %d orphaned client row(s)", res.RowsAffected)
+	}
+}
+
+// settingCacheTTL bounds how stale GetSetting can be for writes that bypass
+// SetSetting (a few transactions write rows directly). Background loops read
+// the same handful of keys every 2–10 s; without the cache each read was a
+// SQLite query, most of them for keys that don't exist.
+const settingCacheTTL = 3 * time.Second
+
+type settingEntry struct {
+	value string
+	at    time.Time
+}
+
+var settingCache = struct {
+	sync.Mutex
+	db *gorm.DB // cache is only valid for this DB handle (tests swap DB)
+	m  map[string]settingEntry
+}{m: map[string]settingEntry{}}
+
 // GetSetting retrieves a setting value by key, returns empty string if not found
 func GetSetting(key string) string {
-	var s model.Setting
-	if err := DB.Where("`key` = ?", key).First(&s).Error; err != nil {
-		return ""
+	settingCache.Lock()
+	if settingCache.db != DB {
+		settingCache.db, settingCache.m = DB, map[string]settingEntry{}
 	}
-	return s.Value
+	if e, ok := settingCache.m[key]; ok && time.Since(e.at) < settingCacheTTL {
+		settingCache.Unlock()
+		return e.value
+	}
+	settingCache.Unlock()
+
+	var s model.Setting
+	value := ""
+	if err := DB.Where("`key` = ?", key).First(&s).Error; err == nil {
+		value = s.Value
+	}
+	settingCache.Lock()
+	if settingCache.db == DB {
+		settingCache.m[key] = settingEntry{value: value, at: time.Now()}
+	}
+	settingCache.Unlock()
+	return value
+}
+
+// invalidateSetting drops a cached key so the next GetSetting re-reads it.
+func invalidateSetting(key string) {
+	settingCache.Lock()
+	delete(settingCache.m, key)
+	settingCache.Unlock()
 }
 
 // SetSetting upserts a setting key-value pair
 func SetSetting(key, value string) error {
+	defer invalidateSetting(key)
 	var s model.Setting
 	result := DB.Where("`key` = ?", key).First(&s)
 	if result.Error != nil {

@@ -658,3 +658,74 @@ func TestBuildSingboxRoutingRulePortRangeUsesColon(t *testing.T) {
 		t.Errorf("port_range = %v, want [8443:9443]", ruleMap["port_range"])
 	}
 }
+
+func TestSingboxDNSServerTypedFormat(t *testing.T) {
+	cases := []struct {
+		in   string
+		want map[string]any
+	}{
+		{"8.8.8.8", map[string]any{"type": "udp", "server": "8.8.8.8"}},
+		{"udp://1.1.1.1", map[string]any{"type": "udp", "server": "1.1.1.1"}},
+		{"udp://1.1.1.1:5353", map[string]any{"type": "udp", "server": "1.1.1.1", "server_port": 5353}},
+		{"tcp://9.9.9.9", map[string]any{"type": "tcp", "server": "9.9.9.9"}},
+		{"tls://dns.google", map[string]any{"type": "tls", "server": "dns.google", "domain_resolver": "dns-local"}},
+		{"https://cloudflare-dns.com/dns-query", map[string]any{"type": "https", "server": "cloudflare-dns.com", "domain_resolver": "dns-local"}},
+		{"https://1.1.1.1/custom", map[string]any{"type": "https", "server": "1.1.1.1", "path": "/custom"}},
+		{"h3://dns.google/dns-query", map[string]any{"type": "h3", "server": "dns.google", "domain_resolver": "dns-local"}},
+		{"quic://[2606:4700::1111]:853", map[string]any{"type": "quic", "server": "2606:4700::1111", "server_port": 853}},
+		{"local", map[string]any{"type": "local"}},
+	}
+	for _, c := range cases {
+		got := singboxDNSServer("t", c.in)
+		if got["tag"] != "t" {
+			t.Errorf("%s: tag missing", c.in)
+		}
+		delete(got, "tag")
+		if len(got) != len(c.want) {
+			t.Errorf("%s: got %v, want %v", c.in, got, c.want)
+			continue
+		}
+		for k, v := range c.want {
+			if got[k] != v {
+				t.Errorf("%s: %s = %v, want %v", c.in, k, got[k], v)
+			}
+		}
+		if _, legacy := got["address"]; legacy {
+			t.Errorf("%s: legacy address field emitted", c.in)
+		}
+	}
+}
+
+func TestBuildSingboxRoutingRuleBlockIsRejectAction(t *testing.T) {
+	ruleMap, _, _ := buildSingboxRoutingRule(model.RoutingRule{RuleTag: "ads", Domain: "geosite:category-ads-all", OutboundTag: "block", Enable: true})
+	if ruleMap["action"] != "reject" {
+		t.Fatalf("action = %v, want reject", ruleMap["action"])
+	}
+	if _, has := ruleMap["outbound"]; has {
+		t.Fatalf("reject rule must not reference an outbound: %v", ruleMap)
+	}
+}
+
+func TestBuildSingboxWireGuardEndpoint(t *testing.T) {
+	ob := model.Outbound{Tag: "warp", Protocol: "wireguard",
+		Config: `{"private_key":"PRIV","public_key":"PUB","address":"172.16.0.2","endpoint":"162.159.192.1:2408","reserved_hex":"0a0b0c"}`}
+	ep := buildSingboxOutbound(ob)
+	if ep["type"] != "wireguard" || ep["private_key"] != "PRIV" {
+		t.Fatalf("bad endpoint: %v", ep)
+	}
+	if addr := ep["address"].([]string); len(addr) != 1 || addr[0] != "172.16.0.2/32" {
+		t.Errorf("address = %v, want [172.16.0.2/32]", ep["address"])
+	}
+	peer := ep["peers"].([]any)[0].(map[string]any)
+	if peer["address"] != "162.159.192.1" || peer["port"] != 2408 || peer["public_key"] != "PUB" {
+		t.Errorf("peer = %v", peer)
+	}
+	if r := peer["reserved"].([]int); len(r) != 3 || r[0] != 10 || r[1] != 11 || r[2] != 12 {
+		t.Errorf("reserved = %v, want [10 11 12]", peer["reserved"])
+	}
+	for _, legacy := range []string{"server", "server_port", "peer_public_key", "local_address"} {
+		if _, has := ep[legacy]; has {
+			t.Errorf("legacy outbound field %q emitted", legacy)
+		}
+	}
+}

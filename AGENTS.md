@@ -58,10 +58,17 @@ zenithctl --output table proxy test all
 # expect: all rows OK=✓ (column 5)
 ```
 
+`proxy test` is end-to-end: after the port check it pushes real traffic
+through the node with the first enabled user's share link and shows
+`E2E=passed` plus the `EXIT_IP`. `E2E=skipped` means the inbound has no
+enabled user. Add `?quick=1` to the API call for the port-only probe.
+
 If `proxy test all` shows a row failing on stage `not_bound`, the engine
 didn't actually bind that port — usually a config-generator error.
 `stage=tcp` means kernel-level refuse (firewall on the host?). `stage=tls`
-means cert/key mismatch — see §6.
+means cert/key mismatch — see §6. `stage=proxy` means the port is up but
+traffic doesn't flow (wrong Reality target/keys, certificate the client
+can't verify, broken link) — the printed error names the cause.
 
 ---
 
