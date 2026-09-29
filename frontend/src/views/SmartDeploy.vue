@@ -340,7 +340,7 @@ const warnings = computed(() => {
                 {{ t('smartDeploy.options.realitySniHint') }}
               </span>
             </label>
-            <input v-model="realityTarget" type="text" placeholder="www.microsoft.com"
+            <input v-model="realityTarget" type="text" placeholder="www.apple.com"
                    class="mt-1 w-full px-3 py-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900" />
           </div>
           <div>

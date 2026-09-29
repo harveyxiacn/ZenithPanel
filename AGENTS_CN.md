@@ -258,8 +258,8 @@ zenithctl raw POST /api/v1/inbounds --data "$(jq -nc \
   server_address:$ip,
   settings:({decryption:"none",flow:"xtls-rprx-vision"}|tostring),
   stream:({network:"tcp",security:"reality",realitySettings:{
-    target:"www.microsoft.com:443",
-    serverNames:["www.microsoft.com"],
+    target:"www.apple.com:443",
+    serverNames:["www.apple.com"],
     privateKey:$pk,shortIds:[$sid],
     settings:{publicKey:$pub,fingerprint:"chrome"}
   }}|tostring),

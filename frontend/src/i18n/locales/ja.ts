@@ -791,7 +791,7 @@ export default {
       domainHint: '— ドメインを指定すると ACME で実証明書を発行。空欄なら自己署名',
       email: 'メール（ACME 登録用）',
       realitySni: 'Reality ターゲット SNI（任意）',
-      realitySniHint: '— 既定は www.microsoft.com',
+      realitySniHint: '— 既定は www.apple.com',
       portOverride: 'ポート上書き（任意）',
       portOverrideHint: '— 空欄なら 443 または自動フォールバック',
     },

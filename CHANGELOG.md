@@ -3,6 +3,21 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.2.1] — 2026-09-29
+
+### Fixed
+
+- **VLESS+Reality nodes created with the defaults could not pass any traffic.**
+  The default Reality target `www.microsoft.com` completes an ordinary TLS
+  handshake, so the node looked healthy (port bound, `proxy test` ✓), but
+  REALITY authentication against it fails — the server logs `handshake did not
+  complete successfully` and resets every client. Verified with Xray 26.2.6 for
+  both chrome and firefox fingerprints, while `www.apple.com`,
+  `www.cloudflare.com` and `dl.google.com` all work. The default (Smart Deploy,
+  Quick Setup, inbound editor, docs, seed script) is now `www.apple.com`.
+  **Existing nodes using `www.microsoft.com` should switch target** (edit the
+  inbound → Reality target / SNI, then re-import the subscription).
+
 ## [1.2.0] — 2026-09-29 — CPU-aware tuning
 
 ### Added

@@ -791,7 +791,7 @@ export default {
       domainHint: '— 提供域名将使用 ACME 签发真实证书；留空使用自签',
       email: '邮箱 (ACME 注册用)',
       realitySni: 'Reality 目标 SNI (可选)',
-      realitySniHint: '— 默认 www.microsoft.com',
+      realitySniHint: '— 默认 www.apple.com',
       portOverride: '端口覆盖 (可选)',
       portOverrideHint: '— 留空使用 443 或自动回退',
     },

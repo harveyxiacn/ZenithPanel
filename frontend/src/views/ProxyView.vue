@@ -170,8 +170,8 @@ const vf = ref({
   certFile: '/opt/zenithpanel/data/certs/fullchain.pem',
   keyFile: '/opt/zenithpanel/data/certs/privkey.pem',
   // Reality
-  realityDest: 'www.microsoft.com:443',
-  realityServerNames: 'www.microsoft.com',
+  realityDest: 'www.apple.com:443',
+  realityServerNames: 'www.apple.com',
   realityPrivateKey: '',
   realityPublicKey: '',
   realityShortId: '',
@@ -190,7 +190,7 @@ function resetVisualForm() {
     sni: '', fingerprint: 'chrome', alpn: 'h2,http/1.1',
     certFile: '/opt/zenithpanel/data/certs/fullchain.pem',
     keyFile: '/opt/zenithpanel/data/certs/privkey.pem',
-    realityDest: 'www.microsoft.com:443', realityServerNames: 'www.microsoft.com',
+    realityDest: 'www.apple.com:443', realityServerNames: 'www.apple.com',
     realityPrivateKey: '', realityPublicKey: '', realityShortId: '',
     wsPath: '', wsHost: '', grpcServiceName: '',
   }
@@ -1144,8 +1144,8 @@ async function proceedToReview() {
         cfg.publicKey = ''
         cfg.shortId = randomHex(4)
       }
-      cfg.dest = 'www.microsoft.com:443'
-      cfg.serverNames = 'www.microsoft.com'
+      cfg.dest = 'www.apple.com:443'
+      cfg.serverNames = 'www.apple.com'
       cfg.flow = 'xtls-rprx-vision'
       cfg.fingerprint = 'chrome'
     }
@@ -1700,11 +1700,11 @@ onBeforeUnmount(() => {
               <div class="grid grid-cols-2 gap-3">
                 <div>
                   <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.destSni') }}</label>
-                  <input v-model="vf.realityDest" class="input-field text-sm w-full" placeholder="www.microsoft.com:443" />
+                  <input v-model="vf.realityDest" class="input-field text-sm w-full" placeholder="www.apple.com:443" />
                 </div>
                 <div>
                   <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.inbounds.serverNames') }}</label>
-                  <input v-model="vf.realityServerNames" class="input-field text-sm w-full" placeholder="www.microsoft.com" />
+                  <input v-model="vf.realityServerNames" class="input-field text-sm w-full" placeholder="www.apple.com" />
                 </div>
               </div>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -2350,11 +2350,11 @@ onBeforeUnmount(() => {
                     <div class="grid grid-cols-2 gap-3">
                       <div>
                         <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.destSni') }}</label>
-                        <input v-model="presetConfigs[id].dest" class="input-field text-sm w-full" placeholder="www.microsoft.com:443" />
+                        <input v-model="presetConfigs[id].dest" class="input-field text-sm w-full" placeholder="www.apple.com:443" />
                       </div>
                       <div>
                         <label class="block text-xs font-medium text-slate-500 mb-1">{{ $t('proxy.quickSetup.fields.serverNames') }}</label>
-                        <input v-model="presetConfigs[id].serverNames" class="input-field text-sm w-full" placeholder="www.microsoft.com" />
+                        <input v-model="presetConfigs[id].serverNames" class="input-field text-sm w-full" placeholder="www.apple.com" />
                       </div>
                     </div>
                     <div class="grid grid-cols-2 gap-3">
