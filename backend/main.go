@@ -90,6 +90,12 @@ func main() {
 		system.ReapplyPersistentTuning(context.Background())
 	}
 
+	// 3b. Optional public subscription listener (separate from the panel port).
+	api.StartSubscriptionServer()
+	if runtime.GOOS == "linux" && os.Geteuid() == 0 {
+		go api.EnsurePanelPortsOpen()
+	}
+
 	// 4. Initialize Managers
 	dm, err := docker.NewManager()
 	if err != nil {

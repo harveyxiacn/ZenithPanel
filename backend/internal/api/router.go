@@ -2183,6 +2183,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					})
 					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
 					recordAudit(c, "proxy.apply", engine)
+					EnsurePanelPortsOpen()
 				case "xray":
 					// Stop Sing-box first to free any ports it holds before Xray binds them.
 					if sm.Status() {
@@ -2211,6 +2212,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					})
 					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
 					recordAudit(c, "proxy.apply", engine)
+					EnsurePanelPortsOpen()
 				case "singbox", "sing-box":
 					// Stop Xray first to free any ports it holds before Sing-box binds them.
 					if xm.Status() {
@@ -2233,6 +2235,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 					})
 					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
 					recordAudit(c, "proxy.apply", engine)
+					EnsurePanelPortsOpen()
 				default:
 					c.JSON(http.StatusBadRequest, gin.H{
 						"code": 400,
@@ -3179,6 +3182,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		// Smart Deploy — preset-driven one-click egress with reversible
 		// tuning. See docs/superpowers/specs/2026-04-21-smart-deploy-design.md.
 		RegisterDeployRoutes(authGroup)
+
+		// Public subscription listener (admin-scoped settings).
+		registerSubscriptionServerRoutes(authGroup, func() string { return config.GetSetting("port") })
 
 		// Ad-block toggle: GET reports current state; PUT flips the setting,
 		// re-applies the managed routing rule, and triggers a proxy re-apply

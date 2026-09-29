@@ -174,6 +174,63 @@ func AddRule(protocol, port, action, source, comment string) error {
 	return nil
 }
 
+// blocksByDefault reports whether INPUT would reject traffic that no rule
+// accepts: a DROP policy or a catch-all DROP/REJECT rule.
+func blocksByDefault(spec string) bool {
+	if catchAllPosition(spec) > 0 {
+		return true
+	}
+	for _, line := range strings.Split(spec, "\n") {
+		if f := strings.Fields(line); len(f) == 3 && f[0] == "-P" && f[1] == "INPUT" && f[2] == "DROP" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAccept reports whether spec has an ACCEPT rule for proto/port
+// (as printed by `iptables -S`, e.g. "-p tcp -m tcp --dport 443 … -j ACCEPT").
+func hasAccept(spec, proto, port string) bool {
+	for _, line := range strings.Split(spec, "\n") {
+		f := strings.Fields(line)
+		var p, dport string
+		accept := false
+		for i := 0; i+1 < len(f); i++ {
+			switch f[i] {
+			case "-p":
+				p = f[i+1]
+			case "--dport":
+				dport = f[i+1]
+			case "-j":
+				accept = f[i+1] == "ACCEPT"
+			}
+		}
+		if accept && p == proto && dport == port {
+			return true
+		}
+	}
+	return false
+}
+
+// EnsureOpen makes sure proto/port is accepted on a host whose INPUT chain
+// blocks by default (e.g. Oracle Cloud images). It is a no-op when the
+// firewall is open anyway or the rule already exists. The panel calls it
+// for its own listeners at startup and after applying proxy configs: rules
+// added through iptables don't survive a host reboot, and the containerised
+// panel can't write the host's persistence files. Returns whether a rule
+// was added.
+func EnsureOpen(proto, port, comment string) (bool, error) {
+	out, err := exec.Command("iptables", "-S", "INPUT").Output()
+	if err != nil {
+		return false, fmt.Errorf("iptables: %w", err)
+	}
+	spec := string(out)
+	if !blocksByDefault(spec) || hasAccept(spec, proto, port) {
+		return false, nil
+	}
+	return true, AddRule(proto, port, "ACCEPT", "", comment)
+}
+
 // CloudflareIPv4Ranges contains the official Cloudflare IPv4 ranges.
 // Source: https://www.cloudflare.com/ips-v4/
 var CloudflareIPv4Ranges = []string{
