@@ -88,43 +88,11 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 		}
 	}
 
-	// Per-client bandwidth caps: emit a route rule for each client with SpeedLimit > 0.
-	// Sing-box v1.11 supports override_download_bandwidth / override_upload_bandwidth on
-	// route rules matching inbound + inbound_user.
-	inboundTagByID := make(map[uint]string, len(inbounds))
-	for _, in := range inbounds {
-		inboundTagByID[in.ID] = in.Tag
-	}
-	for _, clientList := range clientsByInbound {
-		for _, c := range clientList {
-			if c.SpeedLimit <= 0 || !c.Enable {
-				continue
-			}
-			tag, ok := inboundTagByID[c.InboundID]
-			if !ok {
-				continue
-			}
-			// Convert bytes/sec → Mbps (1 MB/s = 8 Mbps), minimum 1 mbps
-			mbps := (c.SpeedLimit * 8) / (1024 * 1024)
-			if mbps < 1 {
-				mbps = 1
-			}
-			routeRules = append(routeRules, map[string]any{
-				"type": "logical",
-				"mode": "and",
-				"rules": []any{
-					map[string]any{
-						"inbound":      []string{tag},
-						"inbound_user": []string{c.Email},
-					},
-				},
-				"action":                      "route",
-				"outbound":                    "direct",
-				"override_download_bandwidth": fmt.Sprintf("%d mbps", mbps),
-				"override_upload_bandwidth":   fmt.Sprintf("%d mbps", mbps),
-			})
-		}
-	}
+	// Per-client SpeedLimit is intentionally not emitted here: sing-box route
+	// rules have no per-user bandwidth action (and no `inbound_user` field —
+	// the matcher is `auth_user`), so the old rule made `sing-box check` fail
+	// with `unknown field "inbound_user"` and took every Hy2/TUIC inbound down
+	// as soon as any client had a limit set.
 
 	// System outbounds always present
 	outbounds := []any{
@@ -808,8 +776,9 @@ func buildSingboxRoutingRule(r model.RoutingRule) (map[string]any, []string, []s
 			var portRanges []string
 			for _, p := range ports {
 				if strings.Contains(p, "-") {
-					// Port range like "8443-9443" → use port_range
-					portRanges = append(portRanges, p)
+					// Port range like "8443-9443" (Xray syntax) → sing-box
+					// port_range, which requires "8443:9443".
+					portRanges = append(portRanges, strings.Replace(p, "-", ":", 1))
 				} else if n, err := strconv.Atoi(p); err == nil {
 					intPorts = append(intPorts, n)
 				}

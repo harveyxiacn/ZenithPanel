@@ -1,167 +1,134 @@
 #!/bin/bash
-# ZenithPanel 一键安装脚本
-# 用法: curl -fsSL https://raw.githubusercontent.com/harveyxiacn/ZenithPanel/main/scripts/install.sh | bash
-# 可选环境变量: ZENITH_VERSION=v1.2.3 (默认使用最新 release)
+# ZenithPanel 一键安装脚本 (Docker 部署, 支持 amd64 / arm64)
+# 用法: curl -fsSL https://raw.githubusercontent.com/harveyxiacn/ZenithPanel/main/scripts/install.sh | sudo bash
+#
+# 可选环境变量:
+#   ZENITH_VERSION=v1.2.3   镜像标签 (默认 latest)
+#   ZENITH_PORT=31310       面板端口 (默认首次启动随机生成, 之后保存在数据库中)
+#   ZENITH_DATA=/opt/zenithpanel/data   数据目录 (升级/重装都会保留)
+#   ZENITH_IMAGE=ghcr.io/harveyxiacn/zenithpanel   镜像仓库 (可改为镜像加速地址或本地构建的镜像)
+#
+# 面板以 --network host 运行, Xray / Sing-box 直接监听宿主机端口;
+# 需要 --privileged 以便面板管理 iptables / sysctl / BBR。
 
 set -euo pipefail
 
 REPO="harveyxiacn/ZenithPanel"
-INSTALL_DIR="/opt/zenithpanel"
-SERVICE_NAME="zenithpanel"
-BINARY_NAME="zenithpanel"
-
-# ─── 辅助函数 ────────────────────────────────────────────────────────────────
+IMAGE="${ZENITH_IMAGE:-ghcr.io/harveyxiacn/zenithpanel}"
+CONTAINER="zenithpanel"
+TAG="${ZENITH_VERSION:-latest}"
+DATA_DIR="${ZENITH_DATA:-/opt/zenithpanel/data}"
 
 log()  { echo "[ZenithPanel] $*"; }
 ok()   { echo "[ZenithPanel] ✓ $*"; }
+warn() { echo "[ZenithPanel] ! $*" >&2; }
 err()  { echo "[ZenithPanel] ✗ $*" >&2; exit 1; }
-
-# 检测系统架构 → amd64 / arm64
-detect_arch() {
-  case "$(uname -m)" in
-    x86_64)           echo "amd64" ;;
-    aarch64 | arm64)  echo "arm64" ;;
-    *)  err "不支持的系统架构: $(uname -m)" ;;
-  esac
-}
-
-# 获取 GitHub 最新 release 版本号
-fetch_latest_version() {
-  local version
-  version=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
-  [ -n "$version" ] || err "无法从 GitHub API 获取最新版本号，请检查网络或手动指定 ZENITH_VERSION 环境变量"
-  echo "$version"
-}
-
-# ─── 主流程 ──────────────────────────────────────────────────────────────────
 
 echo "========================================================="
 echo "         ZenithPanel 一键安装脚本"
 echo "========================================================="
 
-# 检查 root 权限
-[ "$EUID" -eq 0 ] || err "请使用 root 用户运行此脚本"
+[ "$(id -u)" -eq 0 ] || err "请使用 root 用户运行此脚本 (sudo bash install.sh)"
 
-# 检查必要工具
-for cmd in curl tar; do
-  command -v "$cmd" &>/dev/null || err "缺少依赖命令: $cmd"
-done
-
-ARCH=$(detect_arch)
+case "$(uname -m)" in
+  x86_64 | amd64)   ARCH=amd64 ;;
+  aarch64 | arm64)  ARCH=arm64 ;;
+  *) err "不支持的系统架构: $(uname -m) (仅支持 amd64 / arm64)" ;;
+esac
 log "系统架构: $ARCH"
 
-# 确定目标版本
-VERSION="${ZENITH_VERSION:-}"
-if [ -z "$VERSION" ]; then
-  log "正在获取最新版本号..."
-  VERSION=$(fetch_latest_version)
-fi
-log "目标版本: $VERSION"
+command -v curl &>/dev/null || err "缺少依赖命令: curl"
 
-# 构造下载 URL（优先使用本地包）
-TARBALL="zenithpanel-${VERSION}-linux-${ARCH}.tar.gz"
-TARBALL_SHA="${TARBALL}.sha256"
-DOWNLOAD_BASE="https://github.com/${REPO}/releases/download/${VERSION}"
-
-if [ -f "$TARBALL" ]; then
-  ok "检测到本地包 $TARBALL，跳过下载"
-else
-  log "正在下载 $TARBALL ..."
-  curl -fsSL --progress-bar -o "$TARBALL" "${DOWNLOAD_BASE}/${TARBALL}" \
-    || err "下载失败: ${DOWNLOAD_BASE}/${TARBALL}"
-
-  # 校验 SHA256（如果 release 包含 .sha256 文件）
-  if curl -fsSL -o "$TARBALL_SHA" "${DOWNLOAD_BASE}/${TARBALL_SHA}" 2>/dev/null; then
-    log "正在校验 SHA256..."
-    sha256sum -c "$TARBALL_SHA" || err "SHA256 校验失败，请重试或检查下载完整性"
-    ok "SHA256 校验通过"
-    rm -f "$TARBALL_SHA"
-  else
-    log "未找到 SHA256 文件，跳过校验"
-  fi
-fi
-
-# 安装基础依赖（apt / yum 自动判断）
-log "正在安装系统依赖..."
-if command -v apt-get &>/dev/null; then
-  apt-get update -y -qq
-  apt-get install -y -qq curl wget jq sysstat lsof tar
-elif command -v yum &>/dev/null; then
-  yum install -y -q curl wget jq sysstat lsof tar
-elif command -v dnf &>/dev/null; then
-  dnf install -y -q curl wget jq sysstat lsof tar
-else
-  log "警告: 未识别的包管理器，跳过依赖安装"
-fi
-
-# 安装 Docker
+# ─── Docker ──────────────────────────────────────────────────────────────────
 if ! command -v docker &>/dev/null; then
   log "正在安装 Docker..."
-  curl -fsSL https://get.docker.com | bash
-  systemctl enable docker
-  systemctl start docker
+  if ! curl -fsSL https://get.docker.com | sh; then
+    warn "get.docker.com 安装失败, 尝试使用发行版软件源..."
+    if command -v apt-get &>/dev/null; then
+      apt-get update -y -qq && apt-get install -y -qq docker.io
+    elif command -v dnf &>/dev/null; then
+      dnf install -y -q docker
+    elif command -v yum &>/dev/null; then
+      yum install -y -q docker
+    else
+      err "无法自动安装 Docker, 请手动安装后重试"
+    fi
+  fi
   ok "Docker 安装完成"
 else
-  ok "Docker 已安装，跳过"
+  ok "Docker 已安装, 跳过"
+fi
+systemctl enable --now docker &>/dev/null || true
+docker info &>/dev/null || err "Docker 守护进程未运行"
+
+# 旧版本 (二进制 + systemd) 安装会占用同一端口, 先停用
+if systemctl list-unit-files zenithpanel.service &>/dev/null \
+   && systemctl is-enabled --quiet zenithpanel.service 2>/dev/null; then
+  warn "检测到旧的 systemd 服务 zenithpanel.service, 正在停用 (数据保留)"
+  systemctl disable --now zenithpanel.service || true
 fi
 
-# 部署二进制
-log "正在部署 ZenithPanel 到 $INSTALL_DIR ..."
-mkdir -p "$INSTALL_DIR"
-
-# 停止旧服务（如果已运行）
-if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-  log "正在停止旧版本服务..."
-  systemctl stop "$SERVICE_NAME"
+# ─── 部署容器 ────────────────────────────────────────────────────────────────
+log "正在拉取镜像 ${IMAGE}:${TAG} ..."
+if ! docker pull "${IMAGE}:${TAG}"; then
+  docker image inspect "${IMAGE}:${TAG}" &>/dev/null || err "镜像拉取失败: ${IMAGE}:${TAG}"
+  warn "拉取失败, 使用本地已有镜像 ${IMAGE}:${TAG}"
 fi
 
-tar -xzf "$TARBALL" -C "$INSTALL_DIR" --strip-components=0
-chmod +x "$INSTALL_DIR/$BINARY_NAME"
-ok "二进制文件部署完成"
+mkdir -p "$DATA_DIR"
 
-# 生成 Systemd 服务
-log "配置 Systemd 服务..."
-cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
-[Unit]
-Description=ZenithPanel Management System
-Documentation=https://github.com/${REPO}
-After=network.target docker.service
+if docker container inspect "$CONTAINER" &>/dev/null; then
+  log "正在替换已有容器 $CONTAINER (数据目录 $DATA_DIR 保留)..."
+  docker rm -f "$CONTAINER" >/dev/null
+fi
 
-[Service]
-Type=simple
-WorkingDirectory=${INSTALL_DIR}
-ExecStart=${INSTALL_DIR}/${BINARY_NAME}
-Restart=on-failure
-RestartSec=5s
-LimitNOFILE=65536
+RUN_ARGS=(
+  -d --name "$CONTAINER"
+  --restart always
+  --network host
+  --pid host
+  --privileged
+  -v "$DATA_DIR:/opt/zenithpanel/data"
+  -v /var/run/docker.sock:/var/run/docker.sock
+)
+[ -n "${ZENITH_PORT:-}" ] && RUN_ARGS+=(-e "ZENITH_PORT=${ZENITH_PORT}")
 
-[Install]
-WantedBy=multi-user.target
+docker run "${RUN_ARGS[@]}" "${IMAGE}:${TAG}" >/dev/null
+ok "容器已启动"
+
+# 便于在宿主机上使用 zenithctl
+cat > /usr/local/bin/zenithctl <<EOF
+#!/bin/sh
+exec docker exec -i $CONTAINER /opt/zenithpanel/zenithpanel ctl "\$@"
 EOF
+chmod +x /usr/local/bin/zenithctl
 
-systemctl daemon-reload
-systemctl enable "$SERVICE_NAME"
-systemctl start "$SERVICE_NAME"
-
-# 等待服务就绪
-sleep 2
-if systemctl is-active --quiet "$SERVICE_NAME"; then
-  ok "服务启动成功"
-else
-  log "服务状态:"
-  systemctl status "$SERVICE_NAME" --no-pager || true
-fi
+# ─── 等待就绪并输出访问信息 ──────────────────────────────────────────────────
+PORT=""
+for _ in $(seq 1 30); do
+  PORT=$(docker logs "$CONTAINER" 2>&1 | grep -oE 'listening on [^ ]*:[0-9]+' | tail -1 | grep -oE '[0-9]+$' || true)
+  [ -z "$PORT" ] && PORT=$(docker logs "$CONTAINER" 2>&1 | grep -oE 'http://<YOUR_IP>:[0-9]+' | tail -1 | grep -oE '[0-9]+$' || true)
+  [ -n "$PORT" ] && break
+  sleep 1
+done
 
 echo "========================================================="
-echo " ✓ ZenithPanel $VERSION 安装完成！"
+echo " ✓ ZenithPanel ($TAG, $ARCH) 安装完成！"
 echo ""
-echo " 访问面板: http://<你的服务器IP>:8080"
-echo " 查看初始安全密码:"
-echo "   journalctl -u zenithpanel -n 50 --no-pager"
+if docker logs "$CONTAINER" 2>&1 | grep -q "zenith-setup-"; then
+  echo " 首次安装 — 请打开以下设置向导 URL 并使用一次性密码完成初始化:"
+  docker logs "$CONTAINER" 2>&1 | grep -E "URL:|Password:" | tail -2 | sed 's/^/ /'
+else
+  echo " 面板端口: ${PORT:-<见 docker logs $CONTAINER>}"
+fi
+echo ""
+echo " 注意: 若服务器启用了防火墙 (ufw / iptables / 云厂商安全组),"
+echo "       需放行面板端口; 更安全的做法是仅通过 SSH 隧道访问:"
+echo "       ssh -L ${PORT:-<port>}:127.0.0.1:${PORT:-<port>} user@<服务器IP>"
 echo ""
 echo " 管理命令:"
-echo "   systemctl status $SERVICE_NAME    # 查看状态"
-echo "   systemctl restart $SERVICE_NAME   # 重启服务"
-echo "   journalctl -u $SERVICE_NAME -f    # 实时日志"
+echo "   docker logs -f $CONTAINER      # 实时日志"
+echo "   docker restart $CONTAINER      # 重启"
+echo "   zenithctl status               # 命令行管理"
+echo " 项目主页: https://github.com/${REPO}"
 echo "========================================================="

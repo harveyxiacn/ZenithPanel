@@ -635,3 +635,26 @@ func TestSingboxConfigIsValidJSON(t *testing.T) {
 		t.Fatalf("output is not valid JSON: %v\n%s", err, raw)
 	}
 }
+
+// TestBuildSingboxRoutingRulePortRangeUsesColon pins the Xray→sing-box port
+// range translation: routing rules store ranges in Xray form ("8443-9443"),
+// but sing-box's port_range only accepts "8443:9443" and refuses to start
+// ("bad port range") otherwise.
+func TestBuildSingboxRoutingRulePortRangeUsesColon(t *testing.T) {
+	r := model.RoutingRule{
+		RuleTag:     "ports",
+		Port:        "443, 8443-9443",
+		OutboundTag: "direct",
+		Enable:      true,
+	}
+	ruleMap, _, _ := buildSingboxRoutingRule(r)
+	if ruleMap == nil {
+		t.Fatalf("expected non-nil ruleMap")
+	}
+	if got, ok := ruleMap["port"].([]int); !ok || len(got) != 1 || got[0] != 443 {
+		t.Errorf("port = %v, want [443]", ruleMap["port"])
+	}
+	if got, ok := ruleMap["port_range"].([]string); !ok || len(got) != 1 || got[0] != "8443:9443" {
+		t.Errorf("port_range = %v, want [8443:9443]", ruleMap["port_range"])
+	}
+}

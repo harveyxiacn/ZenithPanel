@@ -126,12 +126,18 @@ const lockoutDuration = 15 * time.Minute
 func checkIPLockout(ip string) (bool, time.Duration) {
 	loginFailures.RLock()
 	rec, exists := loginFailures.m[ip]
+	var count int
+	var lockedAt time.Time
+	if exists {
+		// Copy under the lock: recordLoginFailure mutates *rec concurrently.
+		count, lockedAt = rec.count, rec.lockedAt
+	}
 	loginFailures.RUnlock()
 	if !exists {
 		return false, 0
 	}
-	if rec.count >= maxLoginFailures {
-		remaining := lockoutDuration - time.Since(rec.lockedAt)
+	if count >= maxLoginFailures {
+		remaining := lockoutDuration - time.Since(lockedAt)
 		if remaining > 0 {
 			return true, remaining
 		}
@@ -657,6 +663,13 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			cfg := config.GetConfig()
+			// Once setup has completed (or after any restart post-setup) the
+			// one-time token is empty; without this guard an empty password
+			// would match it and mint an admin-equivalent JWT.
+			if cfg.IsSetupComplete || cfg.SetupOneTimeToken == "" {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Endpoint not found"})
+				return
+			}
 			// Constant-time comparison to prevent timing attacks on the one-time password
 			if subtle.ConstantTimeCompare([]byte(req.Password), []byte(cfg.SetupOneTimeToken)) != 1 {
 				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid one-time password"})
@@ -664,7 +677,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 
 			// Issue real JWT for setup process
-			token, err := jwtutil.GenerateToken("setup-admin", "admin", time.Minute*30)
+			token, err := jwtutil.GenerateToken(middleware.SetupAdminUserID, "admin", time.Minute*30)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate token"})
 				return
@@ -674,6 +687,10 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		})
 
 		setupGroup.POST("/complete", middleware.JWTAuthMiddleware(), func(c *gin.Context) {
+			if config.GetConfig().IsSetupComplete || c.GetString("user_id") != middleware.SetupAdminUserID {
+				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Endpoint not found"})
+				return
+			}
 			var req struct {
 				Username     string `json:"username"`
 				Password     string `json:"password"`
@@ -736,6 +753,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 			cfg := config.GetConfig()
 			cfg.IsSetupComplete = true
+			cfg.SetupOneTimeToken = "" // one-time: never usable again
 			if req.PanelPath != "" {
 				cfg.PanelPrefix = req.PanelPath
 			}
@@ -898,7 +916,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 	// Protected API (Post-Setup) - Needs JWT
 	// ======================================
 	authGroup := r.Group("/api/v1")
-	authGroup.Use(middleware.AuthMiddleware())
+	authGroup.Use(middleware.AuthMiddleware(), middleware.ScopeMiddleware())
 	{
 		authGroup.GET("/system/monitor", func(c *gin.Context) {
 			stats, err := monitor.GetSystemStats()
