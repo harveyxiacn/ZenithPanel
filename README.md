@@ -92,7 +92,18 @@ Current server panels (like 1Panel, BT) focus on website hosting and general mai
 
 ## 🚀 Quick Start
 
-### Docker (Recommended)
+Images are published for **linux/amd64** and **linux/arm64** (Oracle Ampere, AWS Graviton, …).
+
+### One-line install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/harveyxiacn/ZenithPanel/main/scripts/install.sh | sudo bash
+# optional: ZENITH_PORT=31310 ZENITH_VERSION=v1.1.0 before `bash`
+```
+
+Installs Docker if needed, runs the panel with host networking and prints the setup-wizard URL.
+
+### Docker (manual)
 
 ```bash
 docker run -d \

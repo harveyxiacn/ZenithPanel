@@ -72,7 +72,7 @@ func ListRules() ([]Rule, error) {
 			continue
 		}
 		fields := strings.Fields(line)
-		if len(fields) < 9 {
+		if len(fields) < 10 {
 			continue
 		}
 		r := Rule{
@@ -97,13 +97,49 @@ func ListRules() ([]Rule, error) {
 	return rules, nil
 }
 
-// AddRule appends a validated rule to the INPUT chain
+// catchAllPosition returns the 1-based INPUT position of the first
+// unconditional DROP/REJECT rule in `iptables -S INPUT` output, or 0 if the
+// chain has none. Cloud images (Oracle Cloud's Ubuntu/OL images in
+// particular) end INPUT with `-j REJECT --reject-with icmp-host-prohibited`;
+// anything appended after it never matches.
+func catchAllPosition(spec string) int {
+	pos := 0
+	for _, line := range strings.Split(spec, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "-A" {
+			continue
+		}
+		pos++
+		rest := fields[2:]
+		if len(rest) < 2 || rest[0] != "-j" || (rest[1] != "DROP" && rest[1] != "REJECT") {
+			continue
+		}
+		// Only `-j REJECT [--reject-with X]` / `-j DROP` counts as a catch-all.
+		if len(rest) == 2 || (len(rest) == 4 && rest[2] == "--reject-with") {
+			return pos
+		}
+	}
+	return 0
+}
+
+// AddRule adds a validated rule to the INPUT chain. It is inserted just
+// before any catch-all DROP/REJECT rule so it actually takes effect;
+// otherwise it is appended.
 func AddRule(protocol, port, action, source, comment string) error {
 	if err := validateRule(protocol, port, action, source); err != nil {
 		return err
 	}
+	proto := strings.ToLower(protocol)
+	if port != "" && proto != "tcp" && proto != "udp" {
+		return fmt.Errorf("invalid rule: a port requires protocol tcp or udp")
+	}
 
 	args := []string{"-A", "INPUT"}
+	if out, err := exec.Command("iptables", "-S", "INPUT").Output(); err == nil {
+		if pos := catchAllPosition(string(out)); pos > 0 {
+			args = []string{"-I", "INPUT", strconv.Itoa(pos)}
+		}
+	}
 	if protocol != "" && strings.ToLower(protocol) != "all" {
 		args = append(args, "-p", strings.ToLower(protocol))
 	}
@@ -236,6 +272,11 @@ func DeleteRule(r Rule) error {
 	if r.Port != "" {
 		args = append(args, "--dport", r.Port)
 	}
+	// `iptables -D` matches the full rule spec, so a rule carrying a comment
+	// can only be deleted if the comment match is included too.
+	if c := ruleComment(r.Extra); c != "" {
+		args = append(args, "-m", "comment", "--comment", c)
+	}
 	if r.Target == "" {
 		return fmt.Errorf("rule target is required")
 	}
@@ -245,4 +286,18 @@ func DeleteRule(r Rule) error {
 		return fmt.Errorf("iptables: %s (%w)", strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// ruleComment extracts the `/* comment */` annotation from the trailing
+// column of `iptables -L -v` output.
+func ruleComment(extra string) string {
+	start := strings.Index(extra, "/* ")
+	if start == -1 {
+		return ""
+	}
+	end := strings.Index(extra[start+3:], " */")
+	if end == -1 {
+		return ""
+	}
+	return extra[start+3 : start+3+end]
 }

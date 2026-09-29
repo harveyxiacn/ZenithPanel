@@ -35,8 +35,71 @@ func TestNormalizeUsageProfileDefaultsToMixed(t *testing.T) {
 	}
 }
 
+// setupLogin exchanges the one-time password for a setup-wizard JWT.
+func setupLogin(t *testing.T, router *gin.Engine, password string) (int, string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"password": password})
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	var resp struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	return rec.Code, resp.Data.Token
+}
+
+func TestSetupLoginRejectedAfterSetupComplete(t *testing.T) {
+	router, _ := setupRouterValidationTestServer(t, true)
+
+	// Simulates a restart after setup: the one-time token is empty in memory.
+	config.GetConfig().SetupOneTimeToken = ""
+	if code, token := setupLogin(t, router, ""); code == http.StatusOK || token != "" {
+		t.Fatalf("empty-password setup login after setup must fail, got %d token=%q", code, token)
+	}
+}
+
+func TestSetupTokenCannotCallProtectedAPI(t *testing.T) {
+	router, _ := setupRouterValidationTestServer(t, false)
+
+	code, setupToken := setupLogin(t, router, "one-time-test-token")
+	if code != http.StatusOK || setupToken == "" {
+		t.Fatalf("setup login failed: %d", code)
+	}
+	// Pretend setup finished so the setup guard lets /api/v1 through.
+	config.GetConfig().IsSetupComplete = true
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/access", nil)
+	req.Header.Set("Authorization", "Bearer "+setupToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("setup token on /api/v1 should be 401, got %d", rec.Code)
+	}
+}
+
+func TestSetupCompleteRequiresSetupToken(t *testing.T) {
+	router, adminToken := setupRouterValidationTestServer(t, false)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/setup/complete", bytes.NewBufferString(`{"username":"adminuser","password":"password123"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK {
+		t.Fatalf("setup/complete must only accept setup-wizard tokens")
+	}
+}
+
 func TestApplySetupCompletePersistsUsageProfile(t *testing.T) {
-	router, token := setupRouterValidationTestServer(t, false)
+	router, _ := setupRouterValidationTestServer(t, false)
+	code, token := setupLogin(t, router, "one-time-test-token")
+	if code != http.StatusOK {
+		t.Fatalf("setup login failed: %d", code)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/setup/complete", bytes.NewBufferString(`{
 		"username":"adminuser",
@@ -54,6 +117,9 @@ func TestApplySetupCompletePersistsUsageProfile(t *testing.T) {
 	}
 	if got := config.GetSetting("usage_profile"); got != "personal_proxy" {
 		t.Fatalf("expected usage_profile=personal_proxy, got %q", got)
+	}
+	if code, _ := setupLogin(t, router, "one-time-test-token"); code == http.StatusOK {
+		t.Fatalf("one-time password must be unusable after setup completes")
 	}
 }
 

@@ -190,6 +190,11 @@ jobs:
         with:
           cosign-release: 'v3.0.5'
 
+      # QEMU is only needed for the arm64 runtime stage (apk/unzip); the
+      # frontend and Go stages cross-compile natively on the amd64 runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4.0.0
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4.0.0
 
@@ -229,6 +234,7 @@ jobs:
         uses: docker/build-push-action@v7.0.0
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           build-args: |
             VERSION=${{ steps.ver.outputs.value }}

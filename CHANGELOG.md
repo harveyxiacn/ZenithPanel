@@ -3,9 +3,66 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [1.1.0] — 2026-09-29 — ARM64 support + security hardening
+
+### Added
+
+- **Multi-arch Docker image (`linux/amd64` + `linux/arm64`).** The Dockerfile
+  previously hard-coded `GOARCH=amd64` and the amd64 Xray / sing-box downloads,
+  so the image could not start on ARM servers (Oracle Ampere A1, AWS Graviton,
+  Hetzner CAX…). The frontend and Go stages now cross-compile natively on the
+  build host and the runtime stage fetches the matching engine binaries
+  (`Xray-linux-arm64-v8a`, `sing-box-…-linux-arm64`). CI publishes both
+  platforms under the same tags. Verified end-to-end on an Ampere Neoverse-N1.
+- **API-token scope enforcement.** Scopes documented in `docs/cli_design.md` §6
+  are now enforced for every `/api/v1` route (previously only 5 routes checked
+  them, so a `read` token could call `fs/write`, `docker run` or `/terminal`).
+  Shell / file / cron / `admin/*` access requires `admin`; mutations need
+  `write` (or `firewall` / `system` / `proxy:apply` for those areas). Browser
+  sessions and the unix socket are unaffected (`*`).
+- `ZENITH_TRUSTED_PROXIES` (comma-separated IPs/CIDRs) to opt in to
+  `X-Forwarded-For` when the panel sits behind a reverse proxy.
+
+### Changed
+
+- **`scripts/install.sh` deploys the Docker image** (`--network host`,
+  persistent `/opt/zenithpanel/data`) instead of downloading release tarballs
+  that were never published — the old script 404'd on every machine and would
+  not have installed Xray / sing-box anyway. Supports `ZENITH_VERSION`,
+  `ZENITH_PORT`, `ZENITH_DATA`, `ZENITH_IMAGE`, installs a `zenithctl` wrapper
+  and prints the setup-wizard URL.
+
+### Security
+
+- **Setup-wizard login bypass (critical).** After setup completed and the panel
+  restarted, the in-memory one-time token was empty, so
+  `POST /api/setup/login {"password":""}` succeeded and returned a JWT that the
+  normal auth middleware accepted as a full admin (terminal, file write, docker).
+  Before a restart the one-time password printed in the logs also stayed valid
+  forever. Setup endpoints now return 404 once setup is complete, the one-time
+  token is cleared on completion, setup-wizard JWTs are rejected on `/api/v1`,
+  and `/api/setup/complete` only accepts setup-wizard tokens.
+- **Client-IP spoofing.** Gin trusted `X-Forwarded-For` from any peer, letting a
+  client bypass the panel IP whitelist and the login lockout by forging the
+  header. No proxy is trusted by default now.
+- JWTs in `?token=` (terminal WebSocket) are no longer written to the access log.
+- JWT validation pins the signing method to HS256.
+- Fixed a data race reading login-lockout records.
 
 ### Fixed
+
+- **Firewall rules added from the panel had no effect on hosts whose INPUT chain
+  ends in a catch-all REJECT/DROP** (e.g. Oracle Cloud images). Rules are now
+  inserted just before that catch-all instead of appended after it. Deleting
+  rules that carry a comment (Cloudflare protection) also works now — the
+  comment match was missing from `iptables -D`, so removal always failed.
+- **sing-box refused to start when any client had a speed limit.** The
+  generator emitted `inbound_user` / `override_*_bandwidth`, which sing-box does
+  not support (`unknown field "inbound_user"`), taking every Hy2/TUIC inbound
+  down. The invalid rule is no longer emitted (per-client speed limits are not
+  enforced by sing-box).
+- **sing-box refused routing rules with port ranges** (`bad port range:
+  8443-9443`). Ranges are now converted to sing-box's `8443:9443` syntax.
 
 - **DB logger flood that could fill the disk.** The GORM connection now uses an
   explicit logger at `Warn` level with `IgnoreRecordNotFoundError` enabled and

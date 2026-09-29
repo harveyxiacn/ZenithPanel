@@ -235,6 +235,18 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
+	// By default gin trusts X-Forwarded-For from any peer, which would let a
+	// client spoof c.ClientIP() past the IP whitelist and login lockout.
+	// Only honour it from proxies the operator explicitly lists.
+	var trustedProxies []string
+	for _, p := range strings.Split(os.Getenv("ZENITH_TRUSTED_PROXIES"), ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			trustedProxies = append(trustedProxies, p)
+		}
+	}
+	if err := r.SetTrustedProxies(trustedProxies); err != nil {
+		log.Fatalf("invalid ZENITH_TRUSTED_PROXIES: %v", err)
+	}
 	r.Use(gin.Recovery())
 	// Promotes the unix-socket request-context marker into c.Set("trusted_local").
 	// No-op for TCP requests; safe to mount globally.
@@ -249,9 +261,12 @@ func main() {
 			if strings.HasPrefix(p.Path, "/api/v1/sub/") {
 				return ""
 			}
+			// p.Path includes the query string; drop it so ?token=<jwt>
+			// (used by the terminal WebSocket) never lands in the logs.
+			path, _, _ := strings.Cut(p.Path, "?")
 			return fmt.Sprintf("[%s] %3d | %6v | %s %s\n",
 				p.TimeStamp.Format("2006-01-02 15:04:05"),
-				p.StatusCode, p.Latency, p.Method, p.Path)
+				p.StatusCode, p.Latency, p.Method, path)
 		},
 	}))
 

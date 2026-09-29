@@ -13,6 +13,10 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
 )
 
+// SetupAdminUserID is the JWT subject issued by the one-time setup login.
+// Such tokens may only complete the setup wizard, never call /api/v1.
+const SetupAdminUserID = "setup-admin"
+
 // AuthMiddleware accepts three principal types:
 //
 //  1. trusted_local — request arrived on the unix socket; no header needed
@@ -87,6 +91,11 @@ func AuthMiddleware() gin.HandlerFunc {
 		// 3) Existing JWT path
 		claims, err := jwtutil.ValidateToken(token)
 		if err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid or expired token"})
+			return
+		}
+		// Setup-wizard tokens are only valid for /api/setup/complete.
+		if claims.UserID == SetupAdminUserID {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid or expired token"})
 			return
 		}

@@ -92,7 +92,18 @@
 
 ## 🚀 快速开始
 
-### Docker 部署（推荐）
+镜像同时提供 **linux/amd64** 与 **linux/arm64**（Oracle Ampere、AWS Graviton 等）。
+
+### 一键安装
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/harveyxiacn/ZenithPanel/main/scripts/install.sh | sudo bash
+# 可选: 在 bash 前加 ZENITH_PORT=31310 ZENITH_VERSION=v1.1.0
+```
+
+自动安装 Docker、以 host 网络模式运行面板，并输出设置向导 URL。
+
+### Docker 部署（手动）
 
 ```bash
 docker run -d \
