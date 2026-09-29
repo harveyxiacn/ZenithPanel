@@ -3,6 +3,18 @@
 All notable changes to ZenithPanel are documented here. Dates use ISO 8601
 (`YYYY-MM-DD`). The project loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.3.2] — 2026-09-29
+
+### Fixed
+
+- **Subscription links / Clash QR showed `http://127.0.0.1:…` when the panel
+  is opened through an SSH tunnel**, even with the public subscription
+  listener enabled: the page read the listener status one level too deep
+  (`apiClient` already unwraps the response body), silently failed and fell
+  back to the browser origin. Saving the listener settings also reported an
+  error although they were saved. Verified in a real browser (Playwright):
+  links now use `https://<domain>:2096/<secret>/<uuid>`.
+
 ## [1.3.1] — 2026-09-29
 
 ### Added
