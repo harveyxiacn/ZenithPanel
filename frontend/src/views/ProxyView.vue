@@ -688,18 +688,21 @@ const subBase = computed(() => (subServer.value?.running && subServer.value.base
 
 async function loadSubServer() {
   try {
-    const res = await getSubscriptionServer()
-    subServer.value = res.data.data
-    subServerForm.value = { enabled: res.data.data.enabled, port: res.data.data.port, public_host: res.data.data.public_host || '', cert_domain: res.data.data.cert_domain || '' }
+    // apiClient's interceptor already unwraps the axios response: `res` is
+    // the JSON body ({ code, data }).
+    const res: any = await getSubscriptionServer()
+    const st: SubscriptionServerStatus = res.data
+    subServer.value = st
+    subServerForm.value = { enabled: st.enabled, port: st.port, public_host: st.public_host || '', cert_domain: st.cert_domain || '' }
   } catch { /* non-admin tokens can't read it — fall back to panel links */ }
 }
 
 async function saveSubServer(regenerate = false) {
   subServerSaving.value = true
   try {
-    const res = await updateSubscriptionServer({ ...subServerForm.value, regenerate_secret: regenerate })
-    subServer.value = res.data.data.status
-    subServerNotes.value = res.data.data.notes || []
+    const res: any = await updateSubscriptionServer({ ...subServerForm.value, regenerate_secret: regenerate })
+    subServer.value = res.data.status
+    subServerNotes.value = res.data.notes || []
     toast.success(t('proxy.subServer.saved'))
   } catch (e: any) {
     toast.error(e?.response?.data?.msg || e?.message || t('common.errorOccurred'))

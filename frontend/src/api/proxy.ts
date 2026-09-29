@@ -120,11 +120,11 @@ export interface SubscriptionServerStatus {
 }
 
 export function getSubscriptionServer() {
-  return apiClient.get<{ code: number; data: SubscriptionServerStatus }>('/v1/admin/subscription')
+  return apiClient.get('/v1/admin/subscription')
 }
 
 export function updateSubscriptionServer(body: { enabled: boolean; port?: number; public_host?: string; cert_domain?: string; regenerate_secret?: boolean }) {
-  return apiClient.put<{ code: number; msg: string; data: { status: SubscriptionServerStatus; notes: string[] } }>('/v1/admin/subscription', body)
+  return apiClient.put('/v1/admin/subscription', body)
 }
 
 export function getClashApiStatus() {
