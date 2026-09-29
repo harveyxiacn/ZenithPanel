@@ -297,7 +297,7 @@ zenithctl raw POST /api/v1/inbounds --data '{
   "network": "tcp",
   "server_address": "<vps-public-ip>",
   "settings": "{\"decryption\":\"none\",\"flow\":\"xtls-rprx-vision\"}",
-  "stream": "{\"network\":\"tcp\",\"security\":\"reality\",\"realitySettings\":{\"show\":false,\"target\":\"www.microsoft.com:443\",\"serverNames\":[\"www.microsoft.com\"],\"privateKey\":\"<from-step-1>\",\"shortIds\":[\"<from-step-1>\"],\"settings\":{\"publicKey\":\"<from-step-1>\",\"fingerprint\":\"chrome\"}}}",
+  "stream": "{\"network\":\"tcp\",\"security\":\"reality\",\"realitySettings\":{\"show\":false,\"target\":\"www.apple.com:443\",\"serverNames\":[\"www.apple.com\"],\"privateKey\":\"<from-step-1>\",\"shortIds\":[\"<from-step-1>\"],\"settings\":{\"publicKey\":\"<from-step-1>\",\"fingerprint\":\"chrome\"}}}",
   "enable": true
 }'
 
@@ -371,8 +371,8 @@ zenithctl raw POST /api/v1/inbounds --data "$(jq -nc \
   server_address:$ip,
   settings:({decryption:"none",flow:"xtls-rprx-vision"}|tostring),
   stream:({network:"tcp",security:"reality",realitySettings:{
-    target:"www.microsoft.com:443",
-    serverNames:["www.microsoft.com"],
+    target:"www.apple.com:443",
+    serverNames:["www.apple.com"],
     privateKey:$pk, shortIds:[$sid],
     settings:{publicKey:$pub,fingerprint:"chrome"}
   }}|tostring),

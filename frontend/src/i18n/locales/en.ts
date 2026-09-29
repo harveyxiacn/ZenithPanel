@@ -804,7 +804,7 @@ export default {
       domainHint: '— providing a domain issues a real certificate via ACME; leave empty for self-signed',
       email: 'Email (for ACME registration)',
       realitySni: 'Reality target SNI (optional)',
-      realitySniHint: '— defaults to www.microsoft.com',
+      realitySniHint: '— defaults to www.apple.com',
       portOverride: 'Port override (optional)',
       portOverrideHint: '— leave empty to use 443 or auto-fallback',
     },

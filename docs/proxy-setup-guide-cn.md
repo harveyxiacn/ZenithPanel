@@ -31,7 +31,7 @@
 平台的风控引擎看的是：IP 是否稳定、TLS 指纹是否像真实浏览器、是否有数据中心出口的典型特征。智能部署的"稳定出口"预设：
 
 - **单 IP 单端口**：只有你的 VPS 一个出口，不会像商用代理那样 IP 轮换
-- **Reality 协议**：握手时伪装成你指定的真实网站（默认 `www.microsoft.com`），TLS 指纹与 Chrome 一致
+- **Reality 协议**：握手时伪装成你指定的真实网站（默认 `www.apple.com`），TLS 指纹与 Chrome 一致
 - **TCP 443**：最普适的端口，避免银行 App 阻断 UDP
 - **VPS IP 较数据中心**：比共享住宅代理更稳定，比商用 IP 池更干净
 
@@ -158,8 +158,8 @@ docker run -d \
   "network": "tcp",
   "security": "reality",
   "realitySettings": {
-    "dest": "www.microsoft.com:443",
-    "serverNames": ["www.microsoft.com"],
+    "dest": "www.apple.com:443",
+    "serverNames": ["www.apple.com"],
     "publicKey": "你的公钥",
     "privateKey": "你的私钥",
     "shortIds": ["abcd1234"]
