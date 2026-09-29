@@ -498,7 +498,7 @@ const clientsLoading = ref(false)
 const showClientForm = ref(false)
 const selectedClientIds = ref<number[]>([])
 const bulkBusy = ref(false)
-const clientForm = ref<any>({ email: '', inbound_id: 0, total: 0, enable: true, speed_limit_mbps: 0, reset_day: 0 })
+const clientForm = ref<any>({ email: '', inbound_id: 0, total: 0, enable: true, reset_day: 0 })
 const copiedUuid = ref('')
 
 async function fetchClients() {
@@ -520,11 +520,10 @@ async function saveClient() {
       enable: f.enable,
       reset_day: f.reset_day ?? 0,
       // Convert MB/s → bytes/sec for the backend (1 MB/s = 1,048,576 B/s)
-      speed_limit: Math.max(0, Math.round((f.speed_limit_mbps || 0) * 1024 * 1024)),
     }
     await createClient(payload)
     showClientForm.value = false
-    clientForm.value = { email: '', inbound_id: 0, total: 0, enable: true, speed_limit_mbps: 0, reset_day: 0 }
+    clientForm.value = { email: '', inbound_id: 0, total: 0, enable: true, reset_day: 0 }
     await fetchClients()
     await loadProxyStatus()
     toast.success(t('common.created'))
@@ -635,7 +634,7 @@ async function toggleClashApi() {
 
 function addClientForInbound(inboundId: number) {
   switchTab('users')
-  clientForm.value = { email: '', inbound_id: inboundId, total: 0, enable: true, speed_limit_mbps: 0, reset_day: 0 }
+  clientForm.value = { email: '', inbound_id: inboundId, total: 0, enable: true, reset_day: 0 }
   showClientForm.value = true
 }
 
@@ -2057,10 +2056,6 @@ onBeforeUnmount(() => {
           </div>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div>
-              <label class="text-xs text-slate-500 block mb-1">Speed Limit (MB/s, 0 = unlimited)</label>
-              <input v-model.number="clientForm.speed_limit_mbps" type="number" min="0" step="0.5" class="input-field text-sm w-full" />
-            </div>
-            <div>
               <label class="text-xs text-slate-500 block mb-1">Monthly Reset Day (1-28, 0 = off)</label>
               <input v-model.number="clientForm.reset_day" type="number" min="0" max="28" class="input-field text-sm w-full" />
             </div>
@@ -2094,7 +2089,7 @@ onBeforeUnmount(() => {
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.email') }}</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.inbounds.tag') }}</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.traffic') }}</th>
-              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Speed</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.resetColumn') }}</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.clients.status') }}</th>
               <th class="relative px-6 py-3"><span class="sr-only">Actions</span></th>
             </tr>
@@ -2139,8 +2134,7 @@ onBeforeUnmount(() => {
                 </template>
               </td>
               <td class="px-6 py-4 text-sm text-slate-500">
-                <div>{{ user.speed_limit > 0 ? ((user.speed_limit / (1024 * 1024)).toFixed(1) + ' MB/s') : '∞' }}</div>
-                <div v-if="user.reset_day > 0" class="text-xs text-slate-400">Resets day {{ user.reset_day }}</div>
+                <div>{{ user.reset_day > 0 ? $t('proxy.clients.resetsOnDay', { day: user.reset_day }) : '—' }}</div>
               </td>
               <td class="px-6 py-4">
                 <span :class="[user.enable ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-800', 'px-2 inline-flex text-xs leading-5 font-semibold rounded-full']">

@@ -299,6 +299,8 @@ export default {
       presets: 'クイック追加プリセット：',
     },
     clients: {
+      resetColumn: '通信量リセット',
+      resetsOnDay: '毎月 {day} 日',
       title: 'クライアント管理',
       addClient: 'クライアント追加',
       email: 'メール',

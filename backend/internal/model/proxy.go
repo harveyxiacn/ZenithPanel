@@ -26,17 +26,20 @@ type Inbound struct {
 
 // Client represents a proxy user with traffic tracking
 type Client struct {
-	ID         uint           `gorm:"primaryKey" json:"id"`
-	InboundID  uint           `gorm:"not null;index;uniqueIndex:idx_clients_inbound_email,priority:1" json:"inbound_id"` // Matches Inbound.ID
-	Email      string         `gorm:"not null;uniqueIndex:idx_clients_inbound_email,priority:2" json:"email"`            // User identifier (standard in xray/v2ray)
-	UUID       string         `gorm:"not null;index" json:"uuid"`                                                        // Password / UUID for the user
-	Enable     bool           `gorm:"default:true" json:"enable"`
-	UpLoad     int64          `gorm:"default:0" json:"up_load"`     // Bytes uploaded
-	DownLoad   int64          `gorm:"default:0" json:"down_load"`   // Bytes downloaded
-	Total      int64          `gorm:"default:0" json:"total"`       // Traffic limit (0 = unlimited)
-	ExpiryTime int64          `gorm:"default:0" json:"expiry_time"` // Unix timestamp (0 = never expires)
-	SpeedLimit int64          `gorm:"default:0" json:"speed_limit"` // bytes/sec outbound cap (0 = unlimited)
-	ResetDay   int            `gorm:"default:0" json:"reset_day"`   // day-of-month for monthly traffic reset (0 = off)
+	ID         uint   `gorm:"primaryKey" json:"id"`
+	InboundID  uint   `gorm:"not null;index;uniqueIndex:idx_clients_inbound_email,priority:1" json:"inbound_id"` // Matches Inbound.ID
+	Email      string `gorm:"not null;uniqueIndex:idx_clients_inbound_email,priority:2" json:"email"`            // User identifier (standard in xray/v2ray)
+	UUID       string `gorm:"not null;index" json:"uuid"`                                                        // Password / UUID for the user
+	Enable     bool   `gorm:"default:true" json:"enable"`
+	UpLoad     int64  `gorm:"default:0" json:"up_load"`     // Bytes uploaded
+	DownLoad   int64  `gorm:"default:0" json:"down_load"`   // Bytes downloaded
+	Total      int64  `gorm:"default:0" json:"total"`       // Traffic limit (0 = unlimited)
+	ExpiryTime int64  `gorm:"default:0" json:"expiry_time"` // Unix timestamp (0 = never expires)
+	// SpeedLimit is kept for API/backup compatibility but is NOT enforced:
+	// neither Xray nor the official sing-box builds can rate-limit per user,
+	// so the UI no longer offers it.
+	SpeedLimit int64          `gorm:"default:0" json:"speed_limit"`
+	ResetDay   int            `gorm:"default:0" json:"reset_day"` // day-of-month for monthly traffic reset (0 = off)
 	Remark     string         `json:"remark"`
 	CreatedAt  time.Time      `json:"created_at"`
 	UpdatedAt  time.Time      `json:"updated_at"`

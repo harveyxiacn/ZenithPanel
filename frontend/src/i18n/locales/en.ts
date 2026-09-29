@@ -306,6 +306,8 @@ export default {
       presets: 'Quick Add Presets:',
     },
     clients: {
+      resetColumn: 'Traffic reset',
+      resetsOnDay: 'Day {day} monthly',
       title: 'Client Management',
       addClient: 'Add Client',
       email: 'Email',

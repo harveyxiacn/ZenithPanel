@@ -299,6 +299,8 @@ export default {
       presets: '快速新增預設：',
     },
     clients: {
+      resetColumn: '流量重置',
+      resetsOnDay: '每月 {day} 日',
       title: '用戶端管理',
       addClient: '新增用戶端',
       email: '電子郵件',
