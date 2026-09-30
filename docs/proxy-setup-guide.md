@@ -22,7 +22,7 @@ Every deployment is reversible — one click rolls back all system changes (sysc
 | Preset | Protocols | When to use |
 |---|---|---|
 | **Stable Egress** ⭐ | VLESS + Reality · TCP 443 | Fixed IP for fintech/e-commerce accounts; no domain required |
-| **Speed** | Hysteria2 · UDP 443 | Low latency, high throughput; ACME cert if domain provided |
+| **Speed** | Hysteria2 · UDP 443 | Low latency, high throughput; ACME cert if domain provided, otherwise self-signed + `insecure=1` |
 | **Combo** | Reality (TCP) + Hysteria2 (UDP) | TCP + UDP inbounds so the client can switch per network |
 | **Weak Network** | Hysteria2 + TUIC · two UDP ports | Mobile 4G/5G or lossy links |
 
@@ -93,8 +93,10 @@ The easiest way — one-click auto-configuration:
 | VLESS + WS + TLS | 2083 | Yes | Xray / Sing-box | CDN (Cloudflare) compatible |
 | VMess + WS + TLS | 2087 | Yes | Xray / Sing-box | Wide client support |
 | Trojan + TLS | 2096 | Yes | Xray / Sing-box | Simple, fast |
-| Hysteria2 | 8443 | Yes | **Sing-box only** | UDP/QUIC, ultra fast |
+| Hysteria2 | 8443 | Recommended† | **Sing-box only** | UDP/QUIC, ultra fast |
 | Shadowsocks | 8388 | No | Xray / Sing-box | Lightweight |
+
+> † **Hysteria2 without a domain is supported** — leave the Domain field blank in Quick Setup and the panel falls back to a self-signed cert (CN = server IP). The subscription URL is automatically built with `insecure=1`, and clients must accept the untrusted cert. You lose strict TLS verification and the cert fingerprint is easy to flag via DPI; provide a domain (with a Let's Encrypt cert — see [qr_setup_guide.md §3](qr_setup_guide.md#3-issue-a-real-lets-encrypt-cert)) whenever you can.
 
 > **Important**: Hysteria2 is only supported by the Sing-box engine. If you use Hysteria2 with Xray, the Hysteria2 inbound will be automatically skipped and a warning displayed. Switch to Sing-box engine via the **Apply** dropdown to use Hysteria2.
 
