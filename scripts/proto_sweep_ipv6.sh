@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Exercise a live VLESS+Reality or Hysteria2 inbound over IPv6. VLESS+Reality
-# uses Xray because Xray 26.10.21 rejects sing-box 1.14.2's REALITY ClientHello.
+# uses Xray because Xray 26.10.21 rejects sing-box 1.14.x's REALITY ClientHello.
 # Unlike `zenithctl proxy test`, this proves an authenticated client tunnel.
 set -euo pipefail
 umask 077

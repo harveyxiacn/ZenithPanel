@@ -166,10 +166,10 @@ jobs:
           echo '0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978  /tmp/zenith-ipv6-e2e/xray.zip' | sha256sum -c -
           unzip -q /tmp/zenith-ipv6-e2e/xray.zip xray -d /tmp/zenith-ipv6-e2e
           chmod 755 /tmp/zenith-ipv6-e2e/xray
-          curl -fsSL -o /tmp/zenith-ipv6-e2e/sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-linux-amd64.tar.gz
-          echo 'a684484d7477d1437282ee411f4d131d0340aaad60a7868841ebd5d87dd8a0c6  /tmp/zenith-ipv6-e2e/sing-box.tar.gz' | sha256sum -c -
+          curl -fsSL -o /tmp/zenith-ipv6-e2e/sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64.tar.gz
+          echo '699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968  /tmp/zenith-ipv6-e2e/sing-box.tar.gz' | sha256sum -c -
           tar -xzf /tmp/zenith-ipv6-e2e/sing-box.tar.gz -C /tmp/zenith-ipv6-e2e
-          cp /tmp/zenith-ipv6-e2e/sing-box-1.14.2-linux-amd64/sing-box /tmp/zenith-ipv6-e2e/sing-box
+          cp /tmp/zenith-ipv6-e2e/sing-box-1.14.4-linux-amd64/sing-box /tmp/zenith-ipv6-e2e/sing-box
           chmod 755 /tmp/zenith-ipv6-e2e/sing-box
 
       - name: Exercise IPv6 VLESS and Hysteria2 data paths
@@ -290,7 +290,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: sigstore/cosign-installer@v4.1.2
         with:
-          cosign-release: 'v3.0.6'
+          cosign-release: 'v3.1.4'
 
       # QEMU is only needed for the arm64 runtime stage (apk/unzip); the
       # frontend and Go stages cross-compile natively on the amd64 runner.

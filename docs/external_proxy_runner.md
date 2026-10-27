@@ -81,9 +81,10 @@ Schedule a maintenance window and take a backup first.
   Xray's cumulative accounting baseline is committed with client totals so
   panel replacement cannot charge the same traffic twice. The first adoption
   of this baseline seeds existing counters without charging historical bytes.
-  Sing-box seeds live connections on its first post-replacement snapshot, so
-  a newly opened connection that also closes before the following 2-second
-  poll can remain unattributed rather than duplicate historical bytes.
+  Sing-box seeds live connections on its first post-replacement snapshot to
+  avoid duplicate charges. Per-client traffic between the old panel's last
+  sample and the new panel's first snapshot is not reconstructed; connections
+  that open and close between its 2-second polls can also remain unattributed.
   The optional host socket egress sampler can have reduced process visibility
   across container PID namespaces; treat it as best-effort in this deployment.
 - Do not use this mode with a missing persistent data mount, bridge networking,
