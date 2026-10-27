@@ -86,7 +86,7 @@ jobs:
           awk -v total="$total" 'BEGIN { if (total < 30) { printf "coverage %.1f%% is below 30%% baseline\n", total; exit 1 } }'
 
       - name: Upload backend coverage
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: backend-coverage
           path: backend/coverage.out
