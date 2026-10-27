@@ -358,8 +358,11 @@ apply_started=$(date +%s)
 docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q proxy apply >/dev/null
 apply_elapsed=$(( $(date +%s) - apply_started ))
 [ "$apply_elapsed" -ge 2 ] || { echo "external apply did not wait for delayed core listeners" >&2; exit 1; }
-docker logs "$runner" 2>&1 | grep -q 'runner e2e: delaying xray server start' || { echo "xray delayed-listener fixture was not used" >&2; exit 1; }
-docker logs "$runner" 2>&1 | grep -q 'runner e2e: delaying sing-box server start' || { echo "sing-box delayed-listener fixture was not used" >&2; exit 1; }
+# Do not use grep -q here: with pipefail it may exit after the first match,
+# causing docker logs to receive SIGPIPE and turning a successful assertion
+# into a false failure. Plain grep drains the complete log stream.
+docker logs "$runner" 2>&1 | grep -F 'runner e2e: delaying xray server start' >/dev/null || { echo "xray delayed-listener fixture was not used" >&2; exit 1; }
+docker logs "$runner" 2>&1 | grep -F 'runner e2e: delaying sing-box server start' >/dev/null || { echo "sing-box delayed-listener fixture was not used" >&2; exit 1; }
 seed_manual_runtime_fixture
 docker restart "$runner" >/dev/null
 wait_for_runner_cores

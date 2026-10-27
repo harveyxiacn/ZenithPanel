@@ -31,7 +31,7 @@ import subprocess
 import sys
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 
 PREFIX = "clash-dual-"
@@ -61,6 +61,62 @@ TAG_PROTOCOL = {
 
 class ProvisioningError(RuntimeError):
     """An expected, operator-actionable provisioning stop."""
+
+
+def _run_ufw_status() -> tuple[int, str]:
+    """Read UFW's status without changing host firewall state."""
+    environment = os.environ.copy()
+    environment["LC_ALL"] = "C"
+    try:
+        completed = subprocess.run(
+            ["ufw", "status"],
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 127, ""
+    return completed.returncode, completed.stdout
+
+
+# Test code replaces this seam with deterministic command output. Keeping the
+# fallback read-only and optional means a host without UFW remains advisory.
+ufw_status_runner: Callable[[], tuple[int, str]] = _run_ufw_status
+
+
+def ufw_public_accepts() -> dict[str, set[tuple[str, str]]]:
+    """Return exact all-source UFW accepts, split by address family.
+
+    ``ufw status`` is parsed with a fixed C locale. The source column must be
+    exactly ``Anywhere`` for IPv4 or ``Anywhere (v6)`` for IPv6, and the
+    destination must include the requested protocol and (for IPv6) the v6
+    marker. Interface- or source-restricted rules therefore never count as a
+    public firewall accept.
+    """
+    status, output = ufw_status_runner()
+    if status != 0 or not re.search(r"(?m)^Status:\s*active\s*$", output):
+        return {"ipv4": set(), "ipv6": set()}
+    accepts: dict[str, set[tuple[str, str]]] = {"ipv4": set(), "ipv6": set()}
+    for line in output.splitlines():
+        match = re.match(
+            r"^\s*(?P<port>[0-9]+/(?P<protocol>tcp|udp))(?P<v6>\s+\(v6\))?\s+ALLOW\s+(?P<source>.+?)\s*$",
+            line,
+            re.IGNORECASE,
+        )
+        if not match:
+            continue
+        ipv6 = bool(match.group("v6"))
+        family = "ipv6" if ipv6 else "ipv4"
+        expected_source = "Anywhere (v6)" if ipv6 else "Anywhere"
+        # UFW appends an optional human comment after the source column. Strip
+        # only that comment suffix; source and interface restrictions remain
+        # part of the value being compared and therefore never match.
+        source = re.sub(r"\s+#.*$", "", match.group("source"))
+        if source == expected_source:
+            accepts[family].add((match.group("protocol").lower(), match.group("port").split("/", 1)[0]))
+    return accepts
 
 
 def compact_json(value: Any) -> str:
@@ -402,6 +458,8 @@ def preflight(api: PanelAPI, args: argparse.Namespace, state: dict[str, Any] | N
         ("tcp", str(args.subscription_port)),
     }
     missing: list[str] = []
+    ufw_accepts = {"ipv4": set(), "ipv6": set()}
+    ufw_checked = False
     for family in ("ipv4", "ipv6"):
         rules = api.call("GET", f"/api/v1/firewall/rules?family={family}")
         if not isinstance(rules, list):
@@ -411,7 +469,12 @@ def preflight(api: PanelAPI, args: argparse.Namespace, state: dict[str, Any] | N
             for rule in rules if isinstance(rule, dict) and str(rule.get("target", "")).upper() == "ACCEPT"
         }
         for proto, port in sorted(needed):
-            if (proto, port) not in accepts:
+            if (proto, port) in accepts:
+                continue
+            if not ufw_checked:
+                ufw_accepts = ufw_public_accepts()
+                ufw_checked = True
+            if (proto, port) not in ufw_accepts[family]:
                 missing.append(f"{family} {proto}/{port}")
 
     # Reject a different active listener before creating any inbounds.  The

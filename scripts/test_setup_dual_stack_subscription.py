@@ -28,6 +28,7 @@ class MockPanelAPI:
         self.next_client_id = 100
         self.subscription = {"enabled": False, "port": 2096, "public_host": "", "cert_domain": ""}
         self.fail_probe = False
+        self.firewall_rules: dict[str, list[dict]] | None = None
 
     def readable_file(self, _path: str) -> bool:
         return True
@@ -68,6 +69,9 @@ class MockPanelAPI:
             }
             return {"status": copy.deepcopy(self.subscription)}
         if method == "GET" and path.startswith("/api/v1/firewall/rules?"):
+            if self.firewall_rules is not None:
+                family = path.rsplit("=", 1)[1]
+                return copy.deepcopy(self.firewall_rules.get(family, []))
             return [{"target": "ACCEPT", "protocol": proto, "port": port} for proto, port in {
                 ("tcp", "443"), ("tcp", "31402"), ("tcp", "31403"), ("tcp", "31404"),
                 ("udp", "31404"), ("udp", "8443"), ("udp", "31406"), ("tcp", "2096"),
@@ -86,6 +90,64 @@ def args() -> object:
 
 
 class SetupDualStackSubscriptionTest(unittest.TestCase):
+    def test_ufw_parser_requires_active_and_unrestricted_family_rules(self) -> None:
+        original = provision.ufw_status_runner
+        try:
+            provision.ufw_status_runner = lambda: (0, """Status: active
+
+To                         Action      From
+--                         ------      ----
+443/tcp                    ALLOW       Anywhere                   # ZenithPanel dual-stack
+8443/udp (v6)              ALLOW       Anywhere (v6)       # ZenithPanel dual-stack
+31402/tcp                 ALLOW       203.0.113.5
+31403/tcp (v6)            ALLOW       Anywhere (v6) on eth0
+31405/tcp on eth0         ALLOW       Anywhere
+31405/tcp (v6) on eth0    ALLOW       Anywhere (v6)
+""")
+            self.assertEqual(
+                {"tcp/443"},
+                {f"{protocol}/{port}" for protocol, port in provision.ufw_public_accepts()["ipv4"]},
+            )
+            self.assertEqual(
+                {"udp/8443"},
+                {f"{protocol}/{port}" for protocol, port in provision.ufw_public_accepts()["ipv6"]},
+            )
+            provision.ufw_status_runner = lambda: (0, "Status: inactive\n")
+            self.assertEqual({"ipv4": set(), "ipv6": set()}, provision.ufw_public_accepts())
+        finally:
+            provision.ufw_status_runner = original
+
+    def test_preflight_accepts_unrestricted_ufw_rules_when_panel_rules_missing(self) -> None:
+        api = MockPanelAPI()
+        api.firewall_rules = {"ipv4": [], "ipv6": []}
+        ufw_output = """Status: active
+
+To                         Action      From
+--                         ------      ----
+443/tcp                    ALLOW       Anywhere
+31402/tcp                  ALLOW       Anywhere
+31403/tcp                  ALLOW       Anywhere
+31404/tcp                  ALLOW       Anywhere
+31404/udp                  ALLOW       Anywhere
+8443/udp                   ALLOW       Anywhere
+31406/udp                  ALLOW       Anywhere
+2096/tcp                   ALLOW       Anywhere
+443/tcp (v6)              ALLOW       Anywhere (v6)
+31402/tcp (v6)            ALLOW       Anywhere (v6)
+31403/tcp (v6)            ALLOW       Anywhere (v6)
+31404/tcp (v6)            ALLOW       Anywhere (v6)
+31404/udp (v6)            ALLOW       Anywhere (v6)
+8443/udp (v6)             ALLOW       Anywhere (v6)
+31406/udp (v6)            ALLOW       Anywhere (v6)
+2096/tcp (v6)             ALLOW       Anywhere (v6)
+"""
+        original = provision.ufw_status_runner
+        try:
+            provision.ufw_status_runner = lambda: (0, ufw_output)
+            self.assertEqual([], provision.preflight(api, args(), None))
+        finally:
+            provision.ufw_status_runner = original
+
     def test_idempotent_resources_are_not_posted_twice(self) -> None:
         api = MockPanelAPI()
         state = provision.initial_state(args())
