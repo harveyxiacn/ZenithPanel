@@ -168,3 +168,44 @@ func TestSplitClosedRemainder(t *testing.T) {
 		t.Errorf("no closed connections → nothing to attribute")
 	}
 }
+
+func TestExternalSingboxFirstSnapshotSeedsLiveConnections(t *testing.T) {
+	t.Setenv("ZENITH_PROXY_RUNTIME", "external")
+	a := newProxyAggregator()
+	user := "client#1"
+	first := clashConn{ID: "long-lived", Upload: 100, Download: 200, Chains: []string{"user:" + user}}
+	firstByID := map[string]clashConn{first.ID: first}
+	firstByUser := map[string][]clashConn{user: {first}}
+	now := time.Now()
+
+	a.processConnections(now, nil, map[string]*ProxyUserSample{}, firstByUser, firstByID, pendingDelta{up: 100, down: 200})
+	if pending := a.drainPending(); len(pending) != 0 {
+		t.Fatalf("first external snapshot charged pre-update bytes: %+v", pending)
+	}
+
+	grew := first
+	grew.Upload, grew.Download = 130, 220
+	a.processConnections(now.Add(proxyTickInterval), nil, map[string]*ProxyUserSample{}, map[string][]clashConn{user: {grew}}, map[string]clashConn{grew.ID: grew}, pendingDelta{up: 130, down: 220})
+	if pending := a.drainPending(); pending[user] != (pendingDelta{up: 30, down: 20}) {
+		t.Fatalf("post-baseline growth = %+v, want 30/20", pending)
+	}
+
+	// A runner restart while this panel is still alive must not seed again;
+	// new connection counters are fresh traffic and should be accounted.
+	fresh := clashConn{ID: "after-restart", Upload: 5, Download: 7, Chains: []string{"user:" + user}}
+	a.processConnections(now.Add(2*proxyTickInterval), nil, map[string]*ProxyUserSample{}, map[string][]clashConn{user: {fresh}}, map[string]clashConn{fresh.ID: fresh}, pendingDelta{up: 5, down: 7})
+	if pending := a.drainPending(); pending[user] != (pendingDelta{up: 5, down: 7}) {
+		t.Fatalf("runner-restart traffic = %+v, want 5/7", pending)
+	}
+}
+
+func TestInternalSingboxFirstSnapshotStillAccountsNewConnection(t *testing.T) {
+	t.Setenv("ZENITH_PROXY_RUNTIME", "")
+	a := newProxyAggregator()
+	user := "client#1"
+	conn := clashConn{ID: "new", Upload: 100, Download: 200, Chains: []string{"user:" + user}}
+	a.processConnections(time.Now(), nil, map[string]*ProxyUserSample{}, map[string][]clashConn{user: {conn}}, map[string]clashConn{conn.ID: conn}, pendingDelta{up: 100, down: 200})
+	if pending := a.drainPending(); pending[user] != (pendingDelta{up: 100, down: 200}) {
+		t.Fatalf("internal first snapshot = %+v, want 100/200", pending)
+	}
+}

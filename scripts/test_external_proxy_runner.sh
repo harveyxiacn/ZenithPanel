@@ -29,15 +29,32 @@ workdir=$(mktemp -d)
 runner_pid=""
 xray_pid=""
 singbox_pid=""
+failure_reported=0
+
+dump_container_logs() {
+  local container
+  for container in "$probe" "$vless_client" "$hy2_client" "$origin" "$panel" "$panel_old" "$runner"; do
+    docker inspect "$container" >/dev/null 2>&1 || continue
+    printf '\n--- %s (last 100 lines) ---\n' "$container" >&2
+    docker logs --tail 100 "$container" >&2 || true
+  done
+}
+
+report_failure() {
+  [ "$failure_reported" = 1 ] || dump_container_logs
+  failure_reported=1
+}
 
 cleanup() {
   local status=$?
+  [ "$status" -eq 0 ] || report_failure
   docker rm -f "$probe" "$vless_client" "$hy2_client" "$origin" "$panel" "$panel_old" "$runner" >/dev/null 2>&1 || true
   docker volume rm "$volume" >/dev/null 2>&1 || true
   rm -rf "$workdir"
   exit "$status"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 # Container names and ports are unique per invocation so concurrent CI jobs do
 # not share resources. A listener collision still fails closed during startup.
@@ -100,10 +117,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from time import monotonic, sleep
 
 class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     def log_message(self, *_): pass
     def do_GET(self):
+        print(f"origin: request from {self.client_address}", flush=True)
         self.send_response(200)
         self.send_header("Content-Length", "13")
+        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(b"first\n")
         self.wfile.flush()
@@ -120,31 +140,17 @@ class Handler(BaseHTTPRequestHandler):
             sleep(0.1)
         self.wfile.write(b"second\n")
         self.wfile.flush()
+        print("origin: released second chunk", flush=True)
 
 ThreadingHTTPServer(("127.0.0.1", int(os.environ["ORIGIN_PORT"])), Handler).serve_forever()
 EOF
 cat > "$workdir/probe.py" <<'EOF'
 import os, socket, struct
 
-def open_stream(label, socks_port):
-    sock = socket.create_connection(("127.0.0.1", socks_port), timeout=10)
-    # Keep the application stream alive long enough to span the panel swap and
-    # its health check, while still failing deterministically if that swap hangs.
-    sock.settimeout(60)
-    sock.sendall(b"\x05\x01\x00")
-    if recv_exact_from(sock, 2) != b"\x05\x00": raise SystemExit(f"{label}: SOCKS authentication failed")
-    sock.sendall(b"\x05\x01\x00\x01" + socket.inet_aton("127.0.0.1") + struct.pack("!H", int(os.environ["ORIGIN_PORT"])))
-    reply = recv_exact_from(sock, 10)
-    if len(reply) < 2 or reply[1] != 0: raise SystemExit(f"{label}: SOCKS connect failed")
-    sock.sendall(b"GET / HTTP/1.1\r\nHost: origin\r\nConnection: close\r\n\r\n")
-    data = b""
-    while b"first\n" not in data:
-        chunk = sock.recv(4096)
-        if not chunk: raise SystemExit(f"{label}: origin closed before first chunk")
-        data += chunk
-    return sock, data
+def progress(message):
+    print(message, flush=True)
 
-def recv_exact_from(sock, size):
+def recv_exact(sock, size):
     result = b""
     while len(result) < size:
         chunk = sock.recv(size - len(result))
@@ -152,17 +158,53 @@ def recv_exact_from(sock, size):
         result += chunk
     return result
 
+def recv_socks_reply(sock, label):
+    header = recv_exact(sock, 4)
+    if header[0] != 5 or header[1] != 0:
+        raise SystemExit(f"{label}: SOCKS connect failed ({header[1]})")
+    atyp = header[3]
+    if atyp == 1:
+        recv_exact(sock, 6)
+    elif atyp == 4:
+        recv_exact(sock, 18)
+    elif atyp == 3:
+        recv_exact(sock, recv_exact(sock, 1)[0] + 2)
+    else:
+        raise SystemExit(f"{label}: SOCKS returned unknown ATYP {atyp}")
+
+def open_stream(label, socks_port):
+    progress(f"{label}: connecting to SOCKS")
+    sock = socket.create_connection(("127.0.0.1", socks_port), timeout=10)
+    # Keep the application stream alive long enough to span the panel swap and
+    # its health check, while still failing deterministically if that swap hangs.
+    sock.settimeout(60)
+    sock.sendall(b"\x05\x01\x00")
+    if recv_exact(sock, 2) != b"\x05\x00": raise SystemExit(f"{label}: SOCKS authentication failed")
+    sock.sendall(b"\x05\x01\x00\x01" + socket.inet_aton("127.0.0.1") + struct.pack("!H", int(os.environ["ORIGIN_PORT"])))
+    recv_socks_reply(sock, label)
+    progress(f"{label}: SOCKS tunnel established")
+    sock.sendall(b"GET / HTTP/1.1\r\nHost: origin\r\nConnection: close\r\n\r\n")
+    data = b""
+    while b"first\n" not in data:
+        chunk = sock.recv(4096)
+        if not chunk: raise SystemExit(f"{label}: origin closed before first chunk")
+        data += chunk
+    progress(f"{label}: received first chunk")
+    return sock, data
+
 streams = [
     ("vless", *open_stream("vless", int(os.environ["VLESS_SOCKS_PORT"]))),
     ("hysteria2", *open_stream("hysteria2", int(os.environ["HY2_SOCKS_PORT"]))),
 ]
 open("/test/first", "w").write("received\n")
+progress("both: first chunks received")
 for label, sock, data in streams:
     while True:
         chunk = sock.recv(4096)
         if not chunk: break
         data += chunk
     if b"first\nsecond\n" not in data: raise SystemExit(f"{label}: stream did not survive to second chunk")
+    progress(f"{label}: received second chunk")
 open("/test/complete", "w").write("received\n")
 EOF
 
@@ -215,8 +257,8 @@ for _ in $(seq 1 20); do
   [ -f "$workdir/first" ] && break
   sleep 1
 done
-[ -f "$workdir/first" ] || { docker logs "$probe" >&2 || true; exit 1; }
-[ "$(docker inspect --format '{{.State.Running}}' "$probe")" = "true" ] || { docker logs "$probe" >&2 || true; exit 1; }
+[ -f "$workdir/first" ] || { report_failure; exit 1; }
+[ "$(docker inspect --format '{{.State.Running}}' "$probe")" = "true" ] || { report_failure; exit 1; }
 
 panel_mount=$(docker inspect --format '{{.HostConfig.NetworkMode}}|{{range .Mounts}}{{if eq .Destination "/opt/zenithpanel/data"}}{{.Name}}:{{.Source}}:{{.RW}}{{end}}{{end}}' "$panel")
 runner_mount=$(docker inspect --format '{{.HostConfig.NetworkMode}}|{{range .Mounts}}{{if eq .Destination "/opt/zenithpanel/data"}}{{.Name}}:{{.Source}}:{{.RW}}{{end}}{{end}}' "$runner")
@@ -243,14 +285,14 @@ docker exec "$panel" wget -qO- "http://127.0.0.1:${panel_port}/api/v1/health" | 
 # The origin cannot release the response's second half before this point.
 # Confirm the probe is still attached, then let its already-established VLESS
 # and Hysteria2 streams read their second halves after replacement completes.
-[ "$(docker inspect --format '{{.State.Running}}' "$probe")" = "true" ] || { docker logs "$probe" >&2 || true; exit 1; }
+[ "$(docker inspect --format '{{.State.Running}}' "$probe")" = "true" ] || { report_failure; exit 1; }
 : > "$workdir/replacement_complete"
 
 for _ in $(seq 1 20); do
   [ -f "$workdir/complete" ] && break
   sleep 1
 done
-[ -f "$workdir/complete" ] || { docker logs "$probe" >&2 || true; exit 1; }
-[ "$(docker wait "$probe")" = 0 ] || { docker logs "$probe" >&2; exit 1; }
+[ -f "$workdir/complete" ] || { report_failure; exit 1; }
+[ "$(docker wait "$probe")" = 0 ] || { report_failure; exit 1; }
 
 echo "external runner E2E passed: VLESS and Hysteria2 streams survived a real panel container replacement"

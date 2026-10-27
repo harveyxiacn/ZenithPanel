@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Local Linux CI coverage for actual IPv6 VLESS+Reality and Hysteria2 flows.
+# Local Linux CI coverage for actual IPv6 VLESS+Reality (Xray client) and
+# Hysteria2 (sing-box client) flows.
 set -euo pipefail
 umask 077
 : "${XRAY_BIN:?set XRAY_BIN}"; : "${SINGBOX_BIN:?set SINGBOX_BIN}"
@@ -96,10 +97,10 @@ cat >"$tmpdir/xray.json" <<EOF
 EOF
 "$XRAY_BIN" run -c "$tmpdir/xray.json" >"$tmpdir/xray.log" 2>&1 & pids+=("$!"); wait_alive "${pids[-1]}" xray
 cat >"$tmpdir/vless-client.json" <<EOF
-{"log":{"level":"debug"},"inbounds":[{"type":"socks","listen":"::1","listen_port":48183}],"outbounds":[{"type":"vless","tag":"proxy","server":"::1","server_port":48181,"uuid":"$uuid","flow":"xtls-rprx-vision","tls":{"enabled":true,"server_name":"localhost","alpn":["h2"],"reality":{"enabled":true,"public_key":"$reality_public","short_id":"0123456789abcdef"},"utls":{"enabled":true,"fingerprint":"chrome"}}}],"route":{"final":"proxy"}}
+{"log":{"loglevel":"debug"},"inbounds":[{"listen":"::1","port":48183,"protocol":"socks","settings":{"auth":"noauth","udp":false}}],"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"::1","port":48181,"users":[{"id":"$uuid","encryption":"none","flow":"xtls-rprx-vision"}]}]},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"serverName":"localhost","fingerprint":"chrome","publicKey":"$reality_public","shortId":"0123456789abcdef","spiderX":"/"}}}]}
 EOF
-"$SINGBOX_BIN" check -c "$tmpdir/vless-client.json" >/dev/null
-"$SINGBOX_BIN" run -c "$tmpdir/vless-client.json" >"$tmpdir/vless-client.log" 2>&1 & pids+=("$!"); wait_alive "${pids[-1]}" vless-client
+"$XRAY_BIN" run -test -c "$tmpdir/vless-client.json" >/dev/null
+"$XRAY_BIN" run -c "$tmpdir/vless-client.json" >"$tmpdir/vless-client.log" 2>&1 & pids+=("$!"); wait_alive "${pids[-1]}" vless-client
 through_socks 48183 || { report_failure; exit 1; }
 
 cat >"$tmpdir/hy2-server.json" <<EOF

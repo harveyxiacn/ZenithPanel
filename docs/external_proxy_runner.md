@@ -26,23 +26,38 @@ Migration cannot preserve existing sessions: the old panel owns the listening
 processes, so starting a runner on the same ports requires a planned handoff.
 Schedule a maintenance window and take a backup first.
 
-1. Update the panel image to a version that includes `proxy-runner.sh`, then
-   run `zenithctl proxy apply` once so the current configuration is validated.
-   Record the current image ID (`docker inspect -f '{{.Image}}' zenithpanel`)
-   and the original container configuration, including mounts and environment.
-2. Stop the old panel container during the maintenance window, then start an
-   initially idle runner from the recorded image, using host networking and
-   the exact same writable data mount. The example assumes the original mount
-   is `/opt/zenithpanel/data` on the host:
+1. Before pulling or updating anything, export a backup and record the running
+   panel's image ID (`docker inspect -f '{{.Image}}' zenithpanel`), mounts,
+   networking and environment. Keep that exact image for the first runner.
+   This preserves the working proxy binaries and client compatibility.
+2. Pull the new panel image, then copy its runner script from an **unstarted**
+   helper container. Do not update the running panel yet:
+
+   ```sh
+   docker pull ghcr.io/harveyxiacn/zenithpanel:main
+   docker create --name zenith-runner-script ghcr.io/harveyxiacn/zenithpanel:main
+   docker cp zenith-runner-script:/opt/zenithpanel/scripts/proxy-runner.sh /opt/zenithpanel/proxy-runner.sh
+   docker rm zenith-runner-script
+   chmod 700 /opt/zenithpanel/proxy-runner.sh
+   ```
+
+   Stop the old panel during the maintenance window, then start an initially
+   idle runner from the **recorded old image ID**, using host networking and
+   the original writable data mount. Mounting the script also works with old
+   images which do not contain it. The example assumes the original host data
+   mount is `/opt/zenithpanel/data`. For a named volume, replace the data
+   mount with its exact name (for example, `-v zenith-data:/opt/zenithpanel/data`).
+   A different mount would create an empty panel database:
 
    ```sh
    docker run -d --name zenith-proxy --restart unless-stopped --network host \
      -v /opt/zenithpanel/data:/opt/zenithpanel/data \
-     --entrypoint /opt/zenithpanel/scripts/proxy-runner.sh \
-     <recorded-image-id>
+     -v /opt/zenithpanel/proxy-runner.sh:/opt/zenithpanel/scripts/proxy-runner.sh:ro \
+     --entrypoint /bin/sh <recorded-old-image-id> \
+     /opt/zenithpanel/scripts/proxy-runner.sh
    ```
 
-3. Rename the stopped old container and recreate the panel with its original
+3. Rename the stopped old container and recreate the panel from the new image with its original
    host configuration, Docker socket, data mounts and environment, adding
    `-e ZENITH_PROXY_RUNTIME=external`. Retain the stopped old container for
    rollback. Reconstruct the original configuration carefully; Docker cannot
@@ -66,6 +81,9 @@ Schedule a maintenance window and take a backup first.
   Xray's cumulative accounting baseline is committed with client totals so
   panel replacement cannot charge the same traffic twice. The first adoption
   of this baseline seeds existing counters without charging historical bytes.
+  Sing-box seeds live connections on its first post-replacement snapshot, so
+  a newly opened connection that also closes before the following 2-second
+  poll can remain unattributed rather than duplicate historical bytes.
   The optional host socket egress sampler can have reduced process visibility
   across container PID namespaces; treat it as best-effort in this deployment.
 - Do not use this mode with a missing persistent data mount, bridge networking,
@@ -73,3 +91,17 @@ Schedule a maintenance window and take a backup first.
 - If external apply reports `rollback_unverified`, old engine markers were
   restored but old listener readiness could not be confirmed; inspect the
   runner and verify connectivity before treating the service as recovered.
+
+## Reality client compatibility
+
+Xray 26.10.21 requires the `X25519MLKEM768` key share for Reality. The official
+sing-box 1.14.x client removes that share, so it cannot authenticate to this
+Xray version. This is an upstream protocol compatibility issue, independent
+of IPv4/IPv6. The panel's Reality self-test uses Xray, while Hysteria2 uses
+sing-box. See the [upstream report](https://github.com/SagerNet/sing-box/issues/4520).
+
+If existing clients use sing-box or their core version is unknown, follow the
+migration above to retain the existing runner image. A panel-only update then
+preserves its core versions. Upgrade the runner separately only after testing
+all deployed clients with the candidate core. Passing the bundled Xray-client
+test does not establish compatibility for a different client implementation.

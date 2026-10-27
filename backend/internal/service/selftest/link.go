@@ -1,6 +1,6 @@
 // Package selftest verifies that a proxy node actually carries traffic: it
-// turns the exact share link a user imports into a sing-box client, starts
-// it, and fetches a URL through it. Unlike the port probe in
+// turns the exact share link a user imports into a compatible local client,
+// starts it, and fetches a URL through it. Unlike the port probe in
 // service/diagnostic, this catches credential, Reality-target, TLS and
 // subscription-generator mistakes that leave the port open but the node
 // unusable.

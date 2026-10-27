@@ -82,7 +82,11 @@ type proxyAggregator struct {
 	lastConnDelta map[string]pendingDelta
 	pendingFlush  map[string]pendingDelta
 	pendingDest   map[destAggKey]pendingDelta // per-(user,dest) deltas for egress logging
-	httpc         *http.Client
+	// A panel-only update leaves the external runner's connections and their
+	// cumulative Clash counters alive. Seed the first successful snapshot so
+	// those historical bytes are not charged by the replacement panel.
+	externalBaselinePending bool
+	httpc                   *http.Client
 }
 
 // pendingDelta accumulates bytes per user since the last DB flush. Held inside
@@ -94,10 +98,11 @@ type pendingDelta struct {
 
 func newProxyAggregator() *proxyAggregator {
 	return &proxyAggregator{
-		lastConn:      map[string]clashConn{},
-		lastConnDelta: map[string]pendingDelta{},
-		pendingFlush:  map[string]pendingDelta{},
-		pendingDest:   map[destAggKey]pendingDelta{},
+		lastConn:                map[string]clashConn{},
+		lastConnDelta:           map[string]pendingDelta{},
+		pendingFlush:            map[string]pendingDelta{},
+		pendingDest:             map[destAggKey]pendingDelta{},
+		externalBaselinePending: proxy.ExternalRuntimeEnabled(),
 		// Short timeout: the Clash API is local; if it hangs longer than this
 		// the panel UI should see an error and we should not block the loop.
 		httpc: &http.Client{Timeout: 2 * time.Second},
@@ -168,13 +173,23 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 		out := flatten(users)
 		return out, err
 	}
+	return a.processConnections(now, clientTotals, users, connsByUser, byID, totals), nil
+}
 
+// processConnections applies one successfully fetched Clash snapshot. It is
+// separate from fetchConnections so the accounting boundary is testable without
+// a live Sing-box process.
+func (a *proxyAggregator) processConnections(now time.Time, clientTotals map[string]clientTotals, users map[string]*ProxyUserSample, connsByUser map[string][]clashConn, byID map[string]clashConn, totals pendingDelta) []ProxyUserSample {
 	// Compute deltas vs the last snapshot.
 	a.mu.Lock()
 	prev := a.lastConn
 	dt := now.Sub(a.lastAt).Seconds()
 	a.lastConn = byID
 	a.lastAt = now
+	seedExternalBaseline := a.externalBaselinePending
+	if seedExternalBaseline {
+		a.externalBaselinePending = false
+	}
 	a.mu.Unlock()
 
 	if dt <= 0 || dt > 30 { // 30s gap → no meaningful rate this tick
@@ -218,18 +233,20 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 			// every tick — even after a gap, when only the *rate* is
 			// meaningless — so no bytes are dropped from accounting.
 			var cUp, cDown uint64
-			if old, ok := prev[c.ID]; ok {
-				if c.Upload >= old.Upload {
-					cUp = c.Upload - old.Upload
+			if !seedExternalBaseline {
+				if old, ok := prev[c.ID]; ok {
+					if c.Upload >= old.Upload {
+						cUp = c.Upload - old.Upload
+					}
+					if c.Download >= old.Download {
+						cDown = c.Download - old.Download
+					}
+				} else {
+					// New connection — count whatever has already flowed since
+					// it opened. Better signal than zero on the first tick.
+					cUp = c.Upload
+					cDown = c.Download
 				}
-				if c.Download >= old.Download {
-					cDown = c.Download - old.Download
-				}
-			} else {
-				// New connection — count whatever has already flowed since
-				// it opened. Better signal than zero on the first tick.
-				cUp = c.Upload
-				cDown = c.Download
 			}
 			deltaUp += cUp
 			deltaDown += cDown
@@ -266,7 +283,7 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 	// ~30 MB/s that lost well over half of a 100 MB download. The global
 	// totals do include them: credit the remainder to the users whose
 	// connections disappeared since the previous poll.
-	if a.haveTotals && totals.up >= a.lastTotals.up && totals.down >= a.lastTotals.down {
+	if !seedExternalBaseline && a.haveTotals && totals.up >= a.lastTotals.up && totals.down >= a.lastTotals.down {
 		remUp := subFloor(totals.up-a.lastTotals.up, sumUp)
 		remDown := subFloor(totals.down-a.lastTotals.down, sumDown)
 		if remUp > 0 || remDown > 0 {
@@ -282,7 +299,7 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 	a.lastConnDelta = curConnDelta
 	a.mu.Unlock()
 
-	return flatten(users), nil
+	return flatten(users)
 }
 
 func subFloor(a, b uint64) uint64 {
