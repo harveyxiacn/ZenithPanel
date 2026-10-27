@@ -482,11 +482,48 @@ func verifyExternalRuntime(ctx context.Context, targets []runtimeTarget, enabled
 		if mode == "xray" && !IsXraySupported(in.Protocol) {
 			continue
 		}
-		if result := diagnostic.ProbeInbound(in); !result.OK {
-			return fmt.Errorf("inbound %q failed at %s: %s", in.Tag, result.Stage, result.Err)
+		if err := waitForExternalInbound(ctx, in); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+var probeExternalInbound = diagnostic.ProbeInbound
+
+var (
+	externalInboundReadyTimeout  = 10 * time.Second
+	externalInboundRetryInterval = 200 * time.Millisecond
+)
+
+// waitForExternalInbound bridges the small interval between the runner's PID
+// becoming observable and an older core binding its listeners. The runner
+// restart itself is already complete at this point; retry only transient
+// listener states and retain the final diagnostic if the bounded wait expires.
+func waitForExternalInbound(ctx context.Context, in model.Inbound) error {
+	deadline := time.NewTimer(externalInboundReadyTimeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(externalInboundRetryInterval)
+	defer ticker.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		result := probeExternalInbound(in)
+		if result.OK {
+			return nil
+		}
+		if result.Stage != "not_bound" && result.Stage != "tcp" {
+			return fmt.Errorf("inbound %q failed at %s: %s", in.Tag, result.Stage, result.Err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("inbound %q failed at %s: %s", in.Tag, result.Stage, result.Err)
+		case <-ticker.C:
+		}
+	}
 }
 
 func waitForExternalEngine(ctx context.Context, engine string) bool {

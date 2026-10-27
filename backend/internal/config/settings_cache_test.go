@@ -2,17 +2,22 @@ package config
 
 import (
 	"fmt"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"gorm.io/gorm"
 )
 
+var settingsDBSequence uint64
+
 func newSettingsDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := fmt.Sprintf("file:settings_%d?mode=memory&cache=shared", time.Now().UnixNano())
+	// Use a process-unique name instead of wall-clock time. On Windows the
+	// clock can have coarser resolution than two adjacent test setup calls,
+	// causing separate handles to accidentally share the same in-memory DB.
+	dsn := fmt.Sprintf("file:settings_%d?mode=memory&cache=shared", atomic.AddUint64(&settingsDBSequence, 1))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)

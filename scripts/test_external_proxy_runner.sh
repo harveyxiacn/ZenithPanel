@@ -70,6 +70,7 @@ seed_manual_runtime_fixture() {
     printf "enabled\\n" > /data/runtime/xray.enabled
     printf "enabled\\n" > /data/runtime/singbox.enabled
     printf "e2e-unmanaged\\n" > /data/runtime/external-managed
+    rm -f /data/runtime/e2e-delay-core-start
   '
 }
 
@@ -167,6 +168,28 @@ cat > "$workdir/hy2_inbound.json" <<EOF
   "stream": "{\\"network\\":\\"udp\\",\\"security\\":\\"tls\\",\\"tlsSettings\\":{\\"serverName\\":\\"localhost\\",\\"alpn\\":[\\"h3\\"],\\"certificates\\":[{\\"certificateFile\\":\\"/opt/zenithpanel/data/hy2.crt\\",\\"keyFile\\":\\"/opt/zenithpanel/data/hy2.key\\"}]}}", "enable": true
 }
 EOF
+mkdir -p "$workdir/delay-bin"
+cat > "$workdir/delay-bin/xray" <<'EOF'
+#!/bin/sh
+delay_server_start=1
+for arg in "$@"; do
+  [ "$arg" = '-test' ] && delay_server_start=0
+done
+if [ "$delay_server_start" = 1 ] && [ -f /opt/zenithpanel/data/runtime/e2e-delay-core-start ]; then
+  echo 'runner e2e: delaying xray server start' >&2
+  sleep 3
+fi
+exec /usr/local/bin/xray "$@"
+EOF
+cat > "$workdir/delay-bin/sing-box" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" != 'check' ] && [ -f /opt/zenithpanel/data/runtime/e2e-delay-core-start ]; then
+  echo 'runner e2e: delaying sing-box server start' >&2
+  sleep 3
+fi
+exec /usr/local/bin/sing-box "$@"
+EOF
+chmod 755 "$workdir/delay-bin/xray" "$workdir/delay-bin/sing-box"
 cat > "$workdir/origin.py" <<'EOF'
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -271,7 +294,9 @@ seed_manual_runtime_fixture
 # container in CI.  All host-network listeners use the private random range
 # selected above.
 docker run -d --name "$origin" --network host -v "$workdir:/test:ro" -e ORIGIN_PORT="$origin_port" python:3.12-alpine python /test/origin.py >/dev/null
-docker run -d --name "$runner" --network host -v "$volume:/opt/zenithpanel/data" --entrypoint /opt/zenithpanel/scripts/proxy-runner.sh "$image" >/dev/null
+docker run -d --name "$runner" --network host -v "$volume:/opt/zenithpanel/data" -v "$workdir/delay-bin:/test/delay-bin:ro" \
+  -e PATH=/test/delay-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  --entrypoint /opt/zenithpanel/scripts/proxy-runner.sh "$image" >/dev/null
 wait_for_runner_cores
 
 docker run -d --name "$vless_client" --network host -v "$workdir/vless_client.json:/test/client.json:ro" --entrypoint xray "$image" run -c /test/client.json >/dev/null
@@ -328,7 +353,13 @@ seeded_clients=$(docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host un
 # restore the deterministic loopback fixture for the actual stream test: the
 # Xray version under test deliberately blocks private egress except the narrow
 # fixture rule, which is not a production policy relaxation.
+docker run --rm -v "$volume:/data" busybox:1.36 sh -ceu 'touch /data/runtime/e2e-delay-core-start'
+apply_started=$(date +%s)
 docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q proxy apply >/dev/null
+apply_elapsed=$(( $(date +%s) - apply_started ))
+[ "$apply_elapsed" -ge 2 ] || { echo "external apply did not wait for delayed core listeners" >&2; exit 1; }
+docker logs "$runner" 2>&1 | grep -q 'runner e2e: delaying xray server start' || { echo "xray delayed-listener fixture was not used" >&2; exit 1; }
+docker logs "$runner" 2>&1 | grep -q 'runner e2e: delaying sing-box server start' || { echo "sing-box delayed-listener fixture was not used" >&2; exit 1; }
 seed_manual_runtime_fixture
 docker restart "$runner" >/dev/null
 wait_for_runner_cores

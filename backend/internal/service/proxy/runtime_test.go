@@ -5,12 +5,84 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/diagnostic"
 	"gorm.io/gorm"
 )
+
+func TestWaitForExternalInboundRetriesDelayedListener(t *testing.T) {
+	oldProbe, oldTimeout, oldInterval := probeExternalInbound, externalInboundReadyTimeout, externalInboundRetryInterval
+	t.Cleanup(func() {
+		probeExternalInbound, externalInboundReadyTimeout, externalInboundRetryInterval = oldProbe, oldTimeout, oldInterval
+	})
+	externalInboundReadyTimeout, externalInboundRetryInterval = time.Second, time.Millisecond
+	attempts := 0
+	probeExternalInbound = func(model.Inbound) diagnostic.InboundProbeResult {
+		attempts++
+		if attempts < 3 {
+			return diagnostic.InboundProbeResult{Stage: "not_bound", Err: "listener not ready"}
+		}
+		return diagnostic.InboundProbeResult{OK: true}
+	}
+	if err := waitForExternalInbound(context.Background(), model.Inbound{Tag: "vless-reality"}); err != nil {
+		t.Fatalf("delayed listener was not retried: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("probe attempts = %d, want 3", attempts)
+	}
+}
+
+func TestWaitForExternalInboundHonorsCanceledContextBeforeProbe(t *testing.T) {
+	oldProbe := probeExternalInbound
+	t.Cleanup(func() { probeExternalInbound = oldProbe })
+	called := false
+	probeExternalInbound = func(model.Inbound) diagnostic.InboundProbeResult {
+		called = true
+		return diagnostic.InboundProbeResult{OK: true}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitForExternalInbound(ctx, model.Inbound{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context error = %v, want context.Canceled", err)
+	}
+	if called {
+		t.Fatal("probe ran after context cancellation")
+	}
+}
+
+func TestWaitForExternalInboundTimeoutKeepsLastDiagnostic(t *testing.T) {
+	oldProbe, oldTimeout, oldInterval := probeExternalInbound, externalInboundReadyTimeout, externalInboundRetryInterval
+	t.Cleanup(func() {
+		probeExternalInbound, externalInboundReadyTimeout, externalInboundRetryInterval = oldProbe, oldTimeout, oldInterval
+	})
+	externalInboundReadyTimeout, externalInboundRetryInterval = 3*time.Millisecond, time.Millisecond
+	probeExternalInbound = func(model.Inbound) diagnostic.InboundProbeResult {
+		return diagnostic.InboundProbeResult{Stage: "not_bound", Err: "still loading geodata"}
+	}
+	err := waitForExternalInbound(context.Background(), model.Inbound{Tag: "vless-reality"})
+	if err == nil || !strings.Contains(err.Error(), "not_bound") || !strings.Contains(err.Error(), "still loading geodata") {
+		t.Fatalf("timeout lost final diagnostic: %v", err)
+	}
+}
+
+func TestWaitForExternalInboundDoesNotRetryTLSFailure(t *testing.T) {
+	oldProbe, oldTimeout := probeExternalInbound, externalInboundReadyTimeout
+	t.Cleanup(func() { probeExternalInbound, externalInboundReadyTimeout = oldProbe, oldTimeout })
+	externalInboundReadyTimeout = time.Second
+	attempts := 0
+	probeExternalInbound = func(model.Inbound) diagnostic.InboundProbeResult {
+		attempts++
+		return diagnostic.InboundProbeResult{Stage: "tls", Err: "certificate rejected"}
+	}
+	err := waitForExternalInbound(context.Background(), model.Inbound{Tag: "vless-reality"})
+	if err == nil || !strings.Contains(err.Error(), "tls") || attempts != 1 {
+		t.Fatalf("TLS failure was retried or lost: attempts=%d err=%v", attempts, err)
+	}
+}
 
 type fakeRuntimeEngine struct {
 	value                            engineSnapshot
