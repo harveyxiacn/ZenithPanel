@@ -45,9 +45,11 @@ uuid=$(cat /proc/sys/kernel/random/uuid)
 read -r reality_private reality_public < <("$XRAY_BIN" x25519 | awk -F': ' '/^Private([[:space:]]key|Key):/{p=$2}/^(Public[[:space:]]key|Password)( \(PublicKey\))?:/{u=$2}END{print p, u}')
 [[ -n "$reality_private" && -n "$reality_public" ]] || { echo "xray did not generate Reality keys" >&2; exit 1; }
 # Reality validates the target through a normal TLS 1.3 handshake before
-# forwarding the authenticated VLESS stream.  Pin h2 on both sides: it avoids
-# depending on OpenSSL's ALPN default and matches a normal browser target.
-openssl s_server -quiet -tls1_3 -alpn h2 -accept '[::1]:48182' -cert "$tmpdir/server.crt" -key "$tmpdir/server.key" >"$tmpdir/reality-target.log" 2>&1 & pids+=("$!"); wait_alive "${pids[-1]}" reality-target
+# forwarding the authenticated VLESS stream. Xray also probes a target on
+# startup without offering ALPN, so this fixture must accept both that probe
+# and the client's browser-like h2 offer; OpenSSL's `-alpn` would reject the
+# former with `no application protocol`.
+openssl s_server -quiet -tls1_3 -accept '[::1]:48182' -cert "$tmpdir/server.crt" -key "$tmpdir/server.key" >"$tmpdir/reality-target.log" 2>&1 & pids+=("$!"); wait_alive "${pids[-1]}" reality-target
 cat >"$tmpdir/xray.json" <<EOF
 {"log":{"loglevel":"debug"},"inbounds":[{"listen":"::1","port":48181,"protocol":"vless","settings":{"clients":[{"id":"$uuid","email":"zc:1","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"show":false,"target":"[::1]:48182","serverNames":["localhost"],"privateKey":"$reality_private","shortIds":["0123456789abcdef"]}}}],"outbounds":[{"protocol":"freedom","tag":"direct"}]}
 EOF
@@ -56,7 +58,7 @@ cat >"$tmpdir/vless-client.json" <<EOF
 {"log":{"level":"debug"},"inbounds":[{"type":"socks","listen":"::1","listen_port":48183}],"outbounds":[{"type":"vless","tag":"proxy","server":"::1","server_port":48181,"uuid":"$uuid","flow":"xtls-rprx-vision","tls":{"enabled":true,"server_name":"localhost","alpn":["h2"],"reality":{"enabled":true,"public_key":"$reality_public","short_id":"0123456789abcdef"},"utls":{"enabled":true,"fingerprint":"chrome"}}}],"route":{"final":"proxy"}}
 EOF
 "$SINGBOX_BIN" check -c "$tmpdir/vless-client.json" >/dev/null
-"$SINGBOX_BIN" run -c "$tmpdir/vless-client.json" >"$tmpdir/vless-client.log" 2>&1 & pids+=("$!"); wait_alive "${pids[-1]}" vless-client
+SSL_CERT_FILE="$tmpdir/ca.crt" "$SINGBOX_BIN" run -c "$tmpdir/vless-client.json" >"$tmpdir/vless-client.log" 2>&1 & pids+=("$!"); wait_alive "${pids[-1]}" vless-client
 through_socks 48183 || { report_failure; exit 1; }
 
 cat >"$tmpdir/hy2-server.json" <<EOF
