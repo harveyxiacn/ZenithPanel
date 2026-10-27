@@ -57,6 +57,37 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
+seed_manual_runtime_fixture() {
+  # This is intentionally a test-only reload.  The preceding supported panel
+  # apply validates the generated external-runtime candidate and topology;
+  # before opening the held streams, restore the deterministic loopback
+  # transport fixture that permits only this test's origin port.
+  docker run --rm -v "$volume:/data" -v "$workdir:/seed:ro" busybox:1.36 sh -ceu '
+    mkdir -p /data/runtime
+    cp /seed/xray_config.json /data/xray_config.json
+    cp /seed/singbox_config.json /data/singbox_config.json
+    cp /seed/hy2.crt /seed/hy2.key /data/
+    printf "enabled\\n" > /data/runtime/xray.enabled
+    printf "enabled\\n" > /data/runtime/singbox.enabled
+    printf "e2e-unmanaged\\n" > /data/runtime/external-managed
+  '
+}
+
+wait_for_runner_cores() {
+  runner_pid=""
+  xray_pid=""
+  singbox_pid=""
+  for _ in $(seq 1 30); do
+    runner_pid=$(docker inspect --format '{{.State.Pid}}' "$runner")
+    xray_pid=$(docker exec "$runner" sh -c 'cat /opt/zenithpanel/data/runtime/xray.pid 2>/dev/null || true')
+    singbox_pid=$(docker exec "$runner" sh -c 'cat /opt/zenithpanel/data/runtime/singbox.pid 2>/dev/null || true')
+    if [ -n "$runner_pid" ] && [ -n "$xray_pid" ] && [ -n "$singbox_pid" ] && docker exec "$runner" sh -c "kill -0 $xray_pid && kill -0 $singbox_pid"; then return 0; fi
+    sleep 1
+  done
+  docker logs "$runner" >&2 || true
+  return 1
+}
+
 # Container names and ports are unique per invocation so concurrent CI jobs do
 # not share resources. A listener collision still fails closed during startup.
 port_base=$((20000 + (RANDOM % 10000)))
@@ -234,30 +265,14 @@ open("/test/complete", "w").write("received\n")
 EOF
 
 docker volume create "$volume" >/dev/null
-docker run --rm -v "$volume:/data" -v "$workdir:/seed:ro" busybox:1.36 sh -ceu '
-  mkdir -p /data/runtime
-  cp /seed/xray_config.json /data/xray_config.json
-  cp /seed/singbox_config.json /data/singbox_config.json
-  cp /seed/hy2.crt /seed/hy2.key /data/
-  printf "enabled\n" > /data/runtime/xray.enabled
-  printf "enabled\n" > /data/runtime/singbox.enabled
-  printf "e2e-unmanaged\n" > /data/runtime/external-managed
-'
+seed_manual_runtime_fixture
 
 # This test never uses :8080, which is reserved by the existing zsmoke
 # container in CI.  All host-network listeners use the private random range
 # selected above.
 docker run -d --name "$origin" --network host -v "$workdir:/test:ro" -e ORIGIN_PORT="$origin_port" python:3.12-alpine python /test/origin.py >/dev/null
 docker run -d --name "$runner" --network host -v "$volume:/opt/zenithpanel/data" --entrypoint /opt/zenithpanel/scripts/proxy-runner.sh "$image" >/dev/null
-
-for _ in $(seq 1 30); do
-  runner_pid=$(docker inspect --format '{{.State.Pid}}' "$runner")
-  xray_pid=$(docker exec "$runner" sh -c 'cat /opt/zenithpanel/data/runtime/xray.pid 2>/dev/null || true')
-  singbox_pid=$(docker exec "$runner" sh -c 'cat /opt/zenithpanel/data/runtime/singbox.pid 2>/dev/null || true')
-  if [ -n "$runner_pid" ] && [ -n "$xray_pid" ] && [ -n "$singbox_pid" ] && docker exec "$runner" sh -c "kill -0 $xray_pid && kill -0 $singbox_pid"; then break; fi
-  sleep 1
-done
-[ -n "$runner_pid" ] && [ -n "$xray_pid" ] && [ -n "$singbox_pid" ] || { docker logs "$runner" >&2; exit 1; }
+wait_for_runner_cores
 
 docker run -d --name "$vless_client" --network host -v "$workdir/vless_client.json:/test/client.json:ro" --entrypoint xray "$image" run -c /test/client.json >/dev/null
 docker run -d --name "$hy2_client" --network host -v "$workdir/hy2_client.json:/test/client.json:ro" -v "$workdir/ca.crt:/test/ca.crt:ro" -e SSL_CERT_FILE=/test/ca.crt --entrypoint sing-box "$image" run -c /test/client.json >/dev/null
@@ -306,6 +321,17 @@ seeded_inbounds=$(docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host u
 seeded_clients=$(docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q client list)
 [[ "$seeded_inbounds" == *'"tag":"runner-e2e-vless"'* && "$seeded_inbounds" == *'"tag":"runner-e2e-hysteria2"'* ]] || { echo "enabled runner inbounds were not persisted" >&2; exit 1; }
 [[ "$seeded_clients" == *'"email":"runner-e2e-vless"'* && "$seeded_clients" == *'"email":"runner-e2e-hysteria2"'* ]] || { echo "runner clients were not persisted" >&2; exit 1; }
+
+# Exercise the production external apply path while no user stream exists.
+# It must inspect the real host-network runner topology, generate and validate
+# both enabled protocol configs, and restart the runner successfully.  Then
+# restore the deterministic loopback fixture for the actual stream test: the
+# Xray version under test deliberately blocks private egress except the narrow
+# fixture rule, which is not a production policy relaxation.
+docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q proxy apply >/dev/null
+seed_manual_runtime_fixture
+docker restart "$runner" >/dev/null
+wait_for_runner_cores
 
 docker run -d --name "$probe" --network host -v "$workdir:/test" -e VLESS_SOCKS_PORT="$vless_socks_port" -e HY2_SOCKS_PORT="$hy2_socks_port" -e ORIGIN_PORT="$origin_port" python:3.12-alpine python /test/probe.py >/dev/null
 

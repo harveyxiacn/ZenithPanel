@@ -29,6 +29,11 @@ const (
 
 var dockerContainerName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
+// Seams keep container identity detection testable without depending on the
+// test process's own cgroup or hostname.
+var readContainerIdentityFile = os.ReadFile
+var containerIdentityHostname = os.Hostname
+
 // runRunnerDocker is a test seam. Production panels use the Docker CLI already
 // bundled in the image and its mounted /var/run/docker.sock.
 var runRunnerDocker = func(ctx context.Context, args ...string) ([]byte, error) {
@@ -128,14 +133,13 @@ func RequireExternalRuntime(ctx context.Context) error {
 
 // RequireExternalRuntimeTopology verifies the two containers share host
 // networking and the same writable data mount before Apply writes configs.
-// Hostname is the Docker container identifier for supported panel deployments;
-// a custom hostname that cannot be inspected fails closed rather than risking a
-// runner restart against a different volume.
+// Detect the container identity from Docker mounts/cgroups before falling back
+// to the hostname, which host-network deployments can share with the host.
 func RequireExternalRuntimeTopology(ctx context.Context) error {
 	if err := RequireExternalRuntime(ctx); err != nil || !ExternalRuntimeEnabled() {
 		return err
 	}
-	panelID, err := os.Hostname()
+	panelID, err := externalPanelContainerID()
 	if err != nil || strings.TrimSpace(panelID) == "" {
 		return fmt.Errorf("determine panel container identity for external runtime")
 	}
@@ -159,6 +163,43 @@ func RequireExternalRuntimeTopology(ctx context.Context) error {
 		return fmt.Errorf("external proxy runner must share host networking and the panel's writable /opt/zenithpanel/data mount")
 	}
 	return nil
+}
+
+// externalPanelContainerID mirrors the updater's Docker identity discovery.
+// Host networking commonly retains the host's hostname, so hostname alone is
+// not a safe panel-container identity there. Docker's /etc/hostname bind
+// source in mountinfo is available even when cgroup paths are obscured.
+func externalPanelContainerID() (string, error) {
+	if data, err := readContainerIdentityFile("/proc/self/mountinfo"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if idx := strings.Index(line, "/docker/containers/"); idx >= 0 {
+				rest := line[idx+len("/docker/containers/"):]
+				if slash := strings.Index(rest, "/"); slash >= 0 && len(rest[:slash]) >= 12 {
+					return rest[:slash], nil
+				}
+			}
+		}
+	}
+	if data, err := readContainerIdentityFile("/proc/self/cgroup"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if idx := strings.LastIndex(line, "/docker/"); idx >= 0 {
+				id := strings.TrimSpace(line[idx+len("/docker/"):])
+				if len(id) >= 12 {
+					return id, nil
+				}
+			}
+			if idx := strings.Index(line, "docker-"); idx >= 0 {
+				id := strings.TrimSpace(line[idx+len("docker-"):])
+				if dot := strings.Index(id, "."); dot >= 0 {
+					id = id[:dot]
+				}
+				if len(id) >= 12 {
+					return id, nil
+				}
+			}
+		}
+	}
+	return containerIdentityHostname()
 }
 
 // RequireExternalRuntimeReady additionally verifies that every engine needed

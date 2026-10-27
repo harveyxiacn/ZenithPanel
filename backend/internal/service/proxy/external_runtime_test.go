@@ -17,6 +17,13 @@ func withRunnerDocker(t *testing.T, f func(context.Context, ...string) ([]byte, 
 	t.Cleanup(func() { runRunnerDocker = old })
 }
 
+func withExternalContainerIdentity(t *testing.T, read func(string) ([]byte, error), hostname func() (string, error)) {
+	t.Helper()
+	oldRead, oldHostname := readContainerIdentityFile, containerIdentityHostname
+	readContainerIdentityFile, containerIdentityHostname = read, hostname
+	t.Cleanup(func() { readContainerIdentityFile, containerIdentityHostname = oldRead, oldHostname })
+}
+
 func TestExternalRuntimeRequiresExplicitOptIn(t *testing.T) {
 	t.Setenv(externalRuntimeEnv, "")
 	if ExternalRuntimeEnabled() {
@@ -99,6 +106,33 @@ func TestExternalTopologyRejectsSelfAndReadOnlyMounts(t *testing.T) {
 				t.Fatalf("got error %v; wanted success=%v", err, tc.ok)
 			}
 		})
+	}
+}
+
+func TestExternalTopologyUsesMountinfoContainerIDBeforeHostHostname(t *testing.T) {
+	t.Setenv(externalRuntimeEnv, "external")
+	t.Setenv(runnerNameEnv, "runner")
+	const panelID = "0123456789abcdef0123456789abcdef"
+	withExternalContainerIdentity(t, func(path string) ([]byte, error) {
+		if path == "/proc/self/mountinfo" {
+			return []byte("42 21 0:42 /docker/containers/" + panelID + "/hostname /etc/hostname rw - ext4 /dev/sda rw\n"), nil
+		}
+		return nil, os.ErrNotExist
+	}, func() (string, error) { return "vps-hostname", nil })
+	withRunnerDocker(t, func(_ context.Context, args ...string) ([]byte, error) {
+		if strings.Contains(args[2], ".State.Running") {
+			return []byte("true"), nil
+		}
+		if args[len(args)-1] == "runner" {
+			return []byte("runner-id|host|volume:zenith-data::true"), nil
+		}
+		if args[len(args)-1] != panelID {
+			t.Fatalf("panel inspect used %q, want mountinfo container ID", args[len(args)-1])
+		}
+		return []byte(panelID + "|host|volume:zenith-data::true"), nil
+	})
+	if err := RequireExternalRuntimeTopology(context.Background()); err != nil {
+		t.Fatalf("topology rejected valid mountinfo identity: %v", err)
 	}
 }
 
