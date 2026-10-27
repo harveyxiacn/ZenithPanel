@@ -77,5 +77,14 @@ Those probes verify the server's local data paths. Client-side node tests also
 check the actual Internet path and provider firewall. IPv6 access to the VPS
 does not force every destination connection leaving the VPS to use IPv6.
 
+After provisioning, `scripts/verify_mihomo_dual_stack_subscription.py` can test
+the exact HTTPS subscription with a verified Mihomo binary. Pass the private
+URL file via `--subscription-url-file`, the binary via `--mihomo`, and a private
+working directory via `--home`. It starts an isolated loopback controller,
+requires all twelve protocol/address-family entries, and makes HTTPS requests
+through each node. Failed runs retain private diagnostics; successful runs
+remove their temporary process and files. Running this on the VPS still tests
+local ingress, so test from the intended client network as well.
+
 Normal Clash and Base64 URLs without `dual_stack=1` retain their existing
 single-endpoint output.
