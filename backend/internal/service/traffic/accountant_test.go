@@ -232,6 +232,84 @@ func TestXrayDeltas(t *testing.T) {
 	}
 }
 
+func TestExternalXrayBaselineSurvivesRestartAndRetriesAtomically(t *testing.T) {
+	db := newTestDB(t)
+	if err := db.AutoMigrate(&model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	client := model.Client{Email: "external@example", InboundID: 1, Enable: true}
+	if err := db.Create(&client).Error; err != nil {
+		t.Fatal(err)
+	}
+	ident := proxy.ClientIdentity(client.ID)
+	firstEpoch := time.Unix(1_700_000_000, 0)
+	preMigrationTotals := map[string]pendingDelta{ident: {up: 100, down: 200}}
+
+	// The first panel that knows about a still-running external runner seeds
+	// the old cumulative values instead of charging its entire history.
+	a1 := &Accountant{db: db, xrayLast: map[string]pendingDelta{}}
+	if err := a1.persistExternalXraySnapshot(preMigrationTotals, nil, firstEpoch); err != nil {
+		t.Fatalf("seed external baseline: %v", err)
+	}
+	assertClientTraffic(t, db, client.ID, 0, 0)
+
+	// A replacement panel restores the baseline. Equal counters must not be
+	// charged again; only the delta after the replacement is added.
+	a2 := &Accountant{db: db}
+	if err := a2.loadExternalXrayBaseline(); err != nil {
+		t.Fatalf("restore external baseline: %v", err)
+	}
+	if err := a2.persistExternalXraySnapshot(preMigrationTotals, xrayDeltas(preMigrationTotals, a2.xrayLast), firstEpoch); err != nil {
+		t.Fatalf("persist unchanged totals: %v", err)
+	}
+	assertClientTraffic(t, db, client.ID, 0, 0)
+	grewTotals := map[string]pendingDelta{ident: {up: 130, down: 220}}
+	if err := a2.persistExternalXraySnapshot(grewTotals, xrayDeltas(grewTotals, a2.xrayLast), firstEpoch); err != nil {
+		t.Fatalf("persist growth: %v", err)
+	}
+	assertClientTraffic(t, db, client.ID, 30, 20)
+
+	// The runner epoch changes when its container restarts. Its new cumulative
+	// counters are all new traffic, rather than a negative diff from the old
+	// process.
+	secondEpoch := firstEpoch.Add(time.Hour)
+	restartedTotals := map[string]pendingDelta{ident: {up: 5, down: 7}}
+	if err := a2.persistExternalXraySnapshot(restartedTotals, xrayDeltas(restartedTotals, map[string]pendingDelta{}), secondEpoch); err != nil {
+		t.Fatalf("persist restarted runner: %v", err)
+	}
+	assertClientTraffic(t, db, client.ID, 35, 27)
+
+	// Baseline and Client increments share one transaction. A failed baseline
+	// write rolls back the Client update and leaves the in-memory snapshot at
+	// the old value, making the next attempt safe to replay.
+	if err := db.Migrator().DropTable(&model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	retryTotals := map[string]pendingDelta{ident: {up: 9, down: 11}}
+	if err := a2.persistExternalXraySnapshot(retryTotals, xrayDeltas(retryTotals, a2.xrayLast), secondEpoch); err == nil {
+		t.Fatal("expected snapshot write to fail without settings table")
+	}
+	assertClientTraffic(t, db, client.ID, 35, 27)
+	if err := db.AutoMigrate(&model.Setting{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a2.persistExternalXraySnapshot(retryTotals, xrayDeltas(retryTotals, a2.xrayLast), secondEpoch); err != nil {
+		t.Fatalf("retry snapshot write: %v", err)
+	}
+	assertClientTraffic(t, db, client.ID, 39, 31)
+}
+
+func assertClientTraffic(t *testing.T, db *gorm.DB, id uint, up, down int64) {
+	t.Helper()
+	var client model.Client
+	if err := db.First(&client, id).Error; err != nil {
+		t.Fatal(err)
+	}
+	if client.UpLoad != up || client.DownLoad != down {
+		t.Fatalf("client traffic = %d/%d, want %d/%d", client.UpLoad, client.DownLoad, up, down)
+	}
+}
+
 // Xray v26 prints counter values as JSON numbers; older builds as strings.
 // Decoding numbers used to fail the whole response (no Xray accounting).
 func TestParseXrayStatsNumericValues(t *testing.T) {

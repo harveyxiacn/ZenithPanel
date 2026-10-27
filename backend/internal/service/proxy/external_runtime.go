@@ -64,20 +64,31 @@ func ExternalRuntimeRunning(ctx context.Context) bool {
 	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
+// ExternalRuntimeStartedAt returns the runner container epoch. It is stable
+// across panel replacements, unlike deriving it from a Docker inspect round
+// trip and time.Now at separate instants.
+func ExternalRuntimeStartedAt(ctx context.Context) (time.Time, bool) {
+	name, err := ExternalRunnerName()
+	if err != nil {
+		return time.Time{}, false
+	}
+	out, err := runRunnerDocker(ctx, "inspect", "--format", "{{.State.StartedAt}}", name)
+	if err != nil {
+		return time.Time{}, false
+	}
+	started, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(out)))
+	if err != nil || started.IsZero() {
+		return time.Time{}, false
+	}
+	return started, true
+}
+
 // ExternalRuntimeUptime is the runner's observed process lifetime. The
 // external runner starts its enabled engines together, so this is a useful
 // engine uptime only when the corresponding engine pid is still alive.
 func ExternalRuntimeUptime(ctx context.Context) (time.Duration, bool) {
-	name, err := ExternalRunnerName()
-	if err != nil {
-		return 0, false
-	}
-	out, err := runRunnerDocker(ctx, "inspect", "--format", "{{.State.StartedAt}}", name)
-	if err != nil {
-		return 0, false
-	}
-	started, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(out)))
-	if err != nil || started.IsZero() {
+	started, ok := ExternalRuntimeStartedAt(ctx)
+	if !ok {
 		return 0, false
 	}
 	return time.Since(started), true

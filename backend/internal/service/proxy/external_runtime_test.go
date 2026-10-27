@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func withRunnerDocker(t *testing.T, f func(context.Context, ...string) ([]byte, error)) {
@@ -48,6 +49,25 @@ func TestRequireExternalRuntimeRejectsStoppedRunner(t *testing.T) {
 	withRunnerDocker(t, func(_ context.Context, _ ...string) ([]byte, error) { return []byte("false"), nil })
 	if err := RequireExternalRuntime(context.Background()); err == nil {
 		t.Fatal("expected stopped runner rejection")
+	}
+}
+
+func TestExternalRuntimeStartedAtIsStableRunnerEpoch(t *testing.T) {
+	t.Setenv(runnerNameEnv, "runner-1")
+	const raw = "2026-10-27T01:02:03.456789Z"
+	withRunnerDocker(t, func(_ context.Context, args ...string) ([]byte, error) {
+		if len(args) != 4 || args[0] != "inspect" || args[2] != "{{.State.StartedAt}}" || args[3] != "runner-1" {
+			t.Fatalf("unexpected docker invocation: %#v", args)
+		}
+		return []byte(raw), nil
+	})
+	got, ok := ExternalRuntimeStartedAt(context.Background())
+	if !ok {
+		t.Fatal("expected runner epoch")
+	}
+	want, _ := time.Parse(time.RFC3339Nano, raw)
+	if !got.Equal(want) {
+		t.Fatalf("epoch = %s, want %s", got, want)
 	}
 }
 

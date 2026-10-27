@@ -153,6 +153,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6.0.2
 
+      - name: Set up Go for local Reality target
+        uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+
       - name: Download pinned protocol engines
         run: |
           mkdir -p /tmp/zenith-ipv6-e2e

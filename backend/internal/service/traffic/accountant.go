@@ -15,6 +15,7 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Accountant turns engine-level traffic counters into durable per-Client
@@ -48,9 +49,27 @@ type Accountant struct {
 	xrayMu    sync.Mutex
 	xrayLast  map[string]pendingDelta
 	xrayStart time.Time
+	// An external runner survives a panel container replacement. Keep its
+	// cumulative Xray counters in the same database transaction as Client
+	// traffic so a freshly started panel cannot charge its complete history
+	// again.
+	xrayBaselineLoaded bool
+	xrayBaselineFound  bool
 }
 
 const accountantWriteTimeout = 5 * time.Second
+
+const xrayBaselineSettingKey = "traffic_xray_baseline_v1"
+
+type persistedXrayBaseline struct {
+	Epoch  int64                            `json:"epoch"`
+	Totals map[string]persistedXrayCounters `json:"totals"`
+}
+
+type persistedXrayCounters struct {
+	Up   uint64 `json:"up"`
+	Down uint64 `json:"down"`
+}
 
 // NewAccountant wires the accountant to the running managers and the proxy
 // aggregator that already polls Clash API. db may be nil under unit tests;
@@ -131,12 +150,43 @@ func (a *Accountant) flushXray() {
 	a.xrayMu.Lock()
 	defer a.xrayMu.Unlock()
 
-	// Engine start time (to ~1 s): a different value means a new process
-	// whose counters restarted from zero.
-	start := time.Now().Add(-a.xm.Uptime()).Truncate(time.Second)
-	if d := start.Sub(a.xrayStart); d > time.Second || d < -time.Second {
+	external := proxy.ExternalRuntimeEnabled()
+	// An external runner's StartedAt is its durable epoch. Do not derive it
+	// from time.Now()-Uptime(): Docker inspect latency makes that value drift
+	// between polls and would reset the baseline without an engine restart.
+	var start time.Time
+	if external {
+		ctx, cancel := context.WithTimeout(context.Background(), accountantWriteTimeout)
+		started, ok := proxy.ExternalRuntimeStartedAt(ctx)
+		cancel()
+		if !ok {
+			a.mu.Lock()
+			a.lastErr = "read external Xray runner epoch"
+			a.mu.Unlock()
+			return
+		}
+		start = started.Truncate(time.Second)
+	} else {
+		// Preserve the legacy local-process tolerance: its start is derived
+		// from a duration and can wobble slightly between polls.
+		start = time.Now().Add(-a.xm.Uptime()).Truncate(time.Second)
+	}
+	if external && !a.xrayBaselineLoaded {
+		if err := a.loadExternalXrayBaseline(); err != nil {
+			a.mu.Lock()
+			a.lastErr = err.Error()
+			a.mu.Unlock()
+			return
+		}
+	}
+
+	changedEpoch := xrayEpoch(start) != xrayEpoch(a.xrayStart)
+	if !external {
+		d := start.Sub(a.xrayStart)
+		changedEpoch = d > time.Second || d < -time.Second
+	}
+	if changedEpoch {
 		a.xrayLast = map[string]pendingDelta{}
-		a.xrayStart = start
 	}
 
 	totals, err := queryXrayStats(proxy.XrayStatsAPIPort())
@@ -150,6 +200,28 @@ func (a *Accountant) flushXray() {
 	a.lastXrayOK = time.Now()
 	a.lastErr = ""
 	a.mu.Unlock()
+	if external {
+		// A pre-baseline external runner may have accumulated traffic while an
+		// older panel was running. Seed it once rather than charging that entire
+		// history to the new panel. Later snapshots are committed atomically
+		// with their Client deltas.
+		seed := !a.xrayBaselineFound
+		deltas := map[string]pendingDelta{}
+		if !seed {
+			deltas = xrayDeltas(totals, a.xrayLast)
+		}
+		if err := a.persistExternalXraySnapshot(totals, deltas, start); err != nil {
+			a.mu.Lock()
+			a.lastErr = err.Error()
+			a.mu.Unlock()
+			return
+		}
+		return
+	}
+
+	if changedEpoch {
+		a.xrayStart = start
+	}
 	deltas := xrayDeltas(totals, a.xrayLast)
 	for ident := range a.applyDeltas(deltas, "xray") {
 		a.xrayLast[ident] = totals[ident]
@@ -160,6 +232,88 @@ func (a *Accountant) flushXray() {
 			a.xrayLast[ident] = t
 		}
 	}
+}
+
+func xrayEpoch(start time.Time) int64 {
+	if start.IsZero() {
+		return 0
+	}
+	return start.Truncate(time.Second).Unix()
+}
+
+func xraySnapshot(totals map[string]pendingDelta, start time.Time) (string, error) {
+	persisted := persistedXrayBaseline{
+		Epoch:  xrayEpoch(start),
+		Totals: make(map[string]persistedXrayCounters, len(totals)),
+	}
+	for ident, counter := range totals {
+		persisted.Totals[ident] = persistedXrayCounters{Up: counter.up, Down: counter.down}
+	}
+	raw, err := json.Marshal(persisted)
+	if err != nil {
+		return "", fmt.Errorf("encode Xray traffic baseline: %w", err)
+	}
+	return string(raw), nil
+}
+
+// loadExternalXrayBaseline restores the durable external-runner snapshot. It
+// is called under xrayMu. A missing baseline is the first migration from a
+// panel that only kept this state in memory, not an error.
+func (a *Accountant) loadExternalXrayBaseline() error {
+	if a.db == nil {
+		return fmt.Errorf("load Xray traffic baseline: database unavailable")
+	}
+	var setting model.Setting
+	err := a.db.Where("`key` = ?", xrayBaselineSettingKey).First(&setting).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			a.xrayBaselineLoaded = true
+			a.xrayBaselineFound = false
+			return nil
+		}
+		return fmt.Errorf("load Xray traffic baseline: %w", err)
+	}
+	var persisted persistedXrayBaseline
+	if err := json.Unmarshal([]byte(setting.Value), &persisted); err != nil {
+		return fmt.Errorf("decode Xray traffic baseline: %w", err)
+	}
+	last := make(map[string]pendingDelta, len(persisted.Totals))
+	for ident, counter := range persisted.Totals {
+		last[ident] = pendingDelta{up: counter.Up, down: counter.Down}
+	}
+	a.xrayLast = last
+	a.xrayStart = time.Unix(persisted.Epoch, 0)
+	a.xrayBaselineLoaded = true
+	a.xrayBaselineFound = true
+	return nil
+}
+
+// persistExternalXraySnapshot atomically applies deltas and advances the
+// external-runner baseline. Keeping those writes together means a failed DB
+// write leaves both values unchanged, so the exact same delta is retried.
+// Called under xrayMu.
+func (a *Accountant) persistExternalXraySnapshot(totals, deltas map[string]pendingDelta, start time.Time) error {
+	raw, err := xraySnapshot(totals, start)
+	if err != nil {
+		return err
+	}
+	_, err = a.applyDeltasWithPersist(deltas, func(tx *gorm.DB) error {
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "key"}},
+			DoUpdates: clause.AssignmentColumns([]string{"value"}),
+		}).Create(&model.Setting{Key: xrayBaselineSettingKey, Value: raw}).Error
+	})
+	if err != nil {
+		return fmt.Errorf("persist Xray traffic snapshot: %w", err)
+	}
+	a.xrayLast = make(map[string]pendingDelta, len(totals))
+	for ident, counter := range totals {
+		a.xrayLast[ident] = counter
+	}
+	a.xrayStart = start
+	a.xrayBaselineLoaded = true
+	a.xrayBaselineFound = true
+	return nil
 }
 
 // xrayDeltas diffs cumulative Xray counters against the last persisted
@@ -198,6 +352,23 @@ func (a *Accountant) applyDeltas(deltas map[string]pendingDelta, source string) 
 	settled := make(map[string]bool, len(deltas))
 	if a.db == nil {
 		return settled
+	}
+	committed, err := a.applyDeltasWithPersist(deltas, nil)
+	if err != nil {
+		log.Printf("traffic accountant (%s): transactional update: %v", source, err)
+		return settled
+	}
+	return committed
+}
+
+// applyDeltasWithPersist resolves both canonical and legacy Xray identities,
+// applies Client deltas, then runs persist in the same transaction. The latter
+// is used by the external Xray runner baseline; it must not be separated from
+// the client updates or a panel restart can double-count traffic.
+func (a *Accountant) applyDeltasWithPersist(deltas map[string]pendingDelta, persist func(*gorm.DB) error) (map[string]bool, error) {
+	settled := make(map[string]bool, len(deltas))
+	if a.db == nil {
+		return settled, fmt.Errorf("database unavailable")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), accountantWriteTimeout)
 	defer cancel()
@@ -242,16 +413,20 @@ func (a *Accountant) applyDeltas(deltas map[string]pendingDelta, source string) 
 			committed[ident] = true
 			matched++
 		}
+		if persist != nil {
+			if err := persist(tx); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
-		log.Printf("traffic accountant (%s): transactional update: %v", source, err)
-		return settled
+		return settled, err
 	}
 	if matched == 0 && unmatched > 0 {
-		log.Printf("traffic accountant (%s): %d deltas had no matching Client rows", source, unmatched)
+		log.Printf("traffic accountant: %d deltas had no matching Client rows", unmatched)
 	}
-	return committed
+	return committed, nil
 }
 
 // Status returns last-flush metadata for the diagnostic endpoint. Used by the

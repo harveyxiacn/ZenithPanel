@@ -63,6 +63,9 @@ Schedule a maintenance window and take a backup first.
   requires a planned proxy restart. There is no single-host drain mechanism in
   this mode.
 - Xray statistics and sing-box Clash API remain reachable over host loopback.
+  Xray's cumulative accounting baseline is committed with client totals so
+  panel replacement cannot charge the same traffic twice. The first adoption
+  of this baseline seeds existing counters without charging historical bytes.
   The optional host socket egress sampler can have reduced process visibility
   across container PID namespaces; treat it as best-effort in this deployment.
 - Do not use this mode with a missing persistent data mount, bridge networking,
