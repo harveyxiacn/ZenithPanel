@@ -46,7 +46,7 @@ RUN chmod 755 ./build.sh && go mod download all
 RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} SINGBOX_OUTPUT=/out/sing-box ./build.sh
 
 # Final Runtime Image
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 WORKDIR /opt/zenithpanel
 
 # Pinned proxy engine versions — update these when a new release is desired.
