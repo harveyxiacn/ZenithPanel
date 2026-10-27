@@ -14,6 +14,7 @@ image=${1:?usage: test_external_proxy_runner.sh IMAGE}
 command -v docker >/dev/null || { echo "docker is required" >&2; exit 2; }
 docker info >/dev/null 2>&1 || { echo "a running Linux Docker daemon is required" >&2; exit 2; }
 command -v openssl >/dev/null || { echo "openssl is required" >&2; exit 2; }
+command -v curl >/dev/null || { echo "curl is required" >&2; exit 2; }
 
 suffix="${RANDOM}${RANDOM}$$"
 prefix="zenith-runner-e2e-${suffix}"
@@ -117,6 +118,22 @@ cat > "$workdir/hy2_client.json" <<EOF
     "tls": {"enabled": true, "server_name": "localhost", "alpn": ["h3"]}
   }],
   "route": {"final": "proxy"}
+}
+EOF
+cat > "$workdir/vless_inbound.json" <<EOF
+{
+  "tag": "runner-e2e-vless", "protocol": "vless", "listen": "127.0.0.1",
+  "server_address": "127.0.0.1", "port": ${vless_port}, "network": "tcp",
+  "settings": "{\\"decryption\\":\\"none\\"}",
+  "stream": "{\\"network\\":\\"tcp\\",\\"security\\":\\"none\\"}", "enable": true
+}
+EOF
+cat > "$workdir/hy2_inbound.json" <<EOF
+{
+  "tag": "runner-e2e-hysteria2", "protocol": "hysteria2", "listen": "127.0.0.1",
+  "server_address": "127.0.0.1", "port": ${hy2_port}, "network": "udp",
+  "settings": "{\\"obfs\\":{\\"type\\":\\"salamander\\",\\"password\\":\\"runner-e2e-obfs\\"},\\"up_mbps\\":100,\\"down_mbps\\":100}",
+  "stream": "{\\"network\\":\\"udp\\",\\"security\\":\\"tls\\",\\"tlsSettings\\":{\\"serverName\\":\\"localhost\\",\\"alpn\\":[\\"h3\\"],\\"certificates\\":[{\\"certificateFile\\":\\"/opt/zenithpanel/data/hy2.crt\\",\\"keyFile\\":\\"/opt/zenithpanel/data/hy2.key\\"}]}}", "enable": true
 }
 EOF
 cat > "$workdir/origin.py" <<'EOF'
@@ -250,7 +267,7 @@ for _ in $(seq 1 20); do
 done
 docker exec "$vless_client" ss -ltn "sport = :$vless_socks_port" | grep -q ":$vless_socks_port" || { docker logs "$vless_client" >&2; exit 1; }
 docker exec "$hy2_client" ss -ltn "sport = :$hy2_socks_port" | grep -q ":$hy2_socks_port" || { docker logs "$hy2_client" >&2; exit 1; }
-docker run -d --name "$panel" --network host -v /var/run/docker.sock:/var/run/docker.sock -v "$volume:/opt/zenithpanel/data" \
+docker run -d --name "$panel" --network host -v /var/run/docker.sock:/var/run/docker.sock -v "$volume:/opt/zenithpanel/data" -v "$workdir:/test:ro" \
   -e ZENITH_PORT="$panel_port" -e ZENITH_PROXY_RUNTIME=external -e ZENITH_PROXY_RUNNER_CONTAINER="$runner" "$image" >/dev/null
 
 for _ in $(seq 1 30); do
@@ -258,6 +275,36 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 docker exec "$panel" wget -qO- "http://127.0.0.1:${panel_port}/api/v1/health" | grep -q '"status":"ok"' || { docker logs "$panel" >&2; exit 1; }
+
+# Seed the enabled rows through the panel's supported setup and local CLI
+# surfaces.  The runtime files remain the deliberately hand-written fixture:
+# this specifically verifies that a replacement panel sees enabled inbounds
+# but does not auto-apply/restart the separately managed runner.
+setup_password=""
+for _ in $(seq 1 20); do
+  setup_password=$(docker logs "$panel" 2>&1 | sed -n 's/^[[:space:]]*Password:[[:space:]]*//p' | tail -n 1)
+  [ -n "$setup_password" ] && break
+  sleep 1
+done
+[ -n "$setup_password" ] || { echo "failed to obtain setup password from panel logs" >&2; exit 1; }
+setup_cookie="$workdir/setup.cookie"
+curl --fail --silent --show-error --cookie-jar "$setup_cookie" -H 'Content-Type: application/json' \
+  --data "{\"password\":\"${setup_password}\"}" "http://127.0.0.1:${panel_port}/api/setup/login" | grep -q '"code":200'
+curl --fail --silent --show-error --cookie "$setup_cookie" -H 'Content-Type: application/json' \
+  --data '{"username":"runneradmin","password":"runner-e2e-password","usage_profile":"vps_ops"}' \
+  "http://127.0.0.1:${panel_port}/api/setup/complete" | grep -q '"code":200'
+
+vless_inbound=$(docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q inbound create --file /test/vless_inbound.json)
+hy2_inbound=$(docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q inbound create --file /test/hy2_inbound.json)
+vless_inbound_id=$(printf '%s\n' "$vless_inbound" | sed -nE 's/.*"id"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' | head -n 1)
+hy2_inbound_id=$(printf '%s\n' "$hy2_inbound" | sed -nE 's/.*"id"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' | head -n 1)
+[ -n "$vless_inbound_id" ] && [ -n "$hy2_inbound_id" ] || { echo "failed to parse seeded inbound IDs" >&2; exit 1; }
+docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q client add --inbound "$vless_inbound_id" --email runner-e2e-vless --uuid "$uuid" >/dev/null
+docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q client add --inbound "$hy2_inbound_id" --email runner-e2e-hysteria2 --uuid "$uuid" >/dev/null
+seeded_inbounds=$(docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q inbound list)
+seeded_clients=$(docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q client list)
+[[ "$seeded_inbounds" == *'"tag":"runner-e2e-vless"'* && "$seeded_inbounds" == *'"tag":"runner-e2e-hysteria2"'* ]] || { echo "enabled runner inbounds were not persisted" >&2; exit 1; }
+[[ "$seeded_clients" == *'"email":"runner-e2e-vless"'* && "$seeded_clients" == *'"email":"runner-e2e-hysteria2"'* ]] || { echo "runner clients were not persisted" >&2; exit 1; }
 
 docker run -d --name "$probe" --network host -v "$workdir:/test" -e VLESS_SOCKS_PORT="$vless_socks_port" -e HY2_SOCKS_PORT="$hy2_socks_port" -e ORIGIN_PORT="$origin_port" python:3.12-alpine python /test/probe.py >/dev/null
 
@@ -271,6 +318,7 @@ done
 panel_mount=$(docker inspect --format '{{.HostConfig.NetworkMode}}|{{range .Mounts}}{{if eq .Destination "/opt/zenithpanel/data"}}{{.Name}}:{{.Source}}:{{.RW}}{{end}}{{end}}' "$panel")
 runner_mount=$(docker inspect --format '{{.HostConfig.NetworkMode}}|{{range .Mounts}}{{if eq .Destination "/opt/zenithpanel/data"}}{{.Name}}:{{.Source}}:{{.RW}}{{end}}{{end}}' "$runner")
 [ "$panel_mount" = "$runner_mount" ] && [[ "$panel_mount" == host\|*:true ]] || { echo "panel/runner topology mismatch" >&2; exit 1; }
+runtime_configs_before=$(docker exec "$runner" sh -c 'sha256sum /opt/zenithpanel/data/xray_config.json /opt/zenithpanel/data/singbox_config.json')
 
 # This is the same stop/rename/create boundary used by the OTA helper. The
 # image stays local because testing a registry pull is outside this invariant.
@@ -289,6 +337,12 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 docker exec "$panel" wget -qO- "http://127.0.0.1:${panel_port}/api/v1/health" | grep -q '"status":"ok"' || { docker logs "$panel" >&2; exit 1; }
+runtime_configs_after=$(docker exec "$runner" sh -c 'sha256sum /opt/zenithpanel/data/xray_config.json /opt/zenithpanel/data/singbox_config.json')
+[ "$runtime_configs_after" = "$runtime_configs_before" ] || { echo "panel replacement rewrote external runtime configs" >&2; exit 1; }
+seeded_inbounds=$(docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q inbound list)
+seeded_clients=$(docker exec "$panel" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q client list)
+[[ "$seeded_inbounds" == *'"tag":"runner-e2e-vless"'* && "$seeded_inbounds" == *'"tag":"runner-e2e-hysteria2"'* ]] || { echo "replacement panel lost enabled inbounds" >&2; exit 1; }
+[[ "$seeded_clients" == *'"email":"runner-e2e-vless"'* && "$seeded_clients" == *'"email":"runner-e2e-hysteria2"'* ]] || { echo "replacement panel lost clients" >&2; exit 1; }
 
 # The origin cannot release the response's second half before this point.
 # Confirm the probe is still attached, then let its already-established VLESS

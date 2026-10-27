@@ -258,11 +258,154 @@ func TestTransitionExternalRuntimePreflightFailureDoesNotRestartOrMutateFiles(t 
 	}
 }
 
+func TestTransitionExternalRuntimeSkipsDisabledEngineValidationAndConfigWrite(t *testing.T) {
+	withExternalRuntimeTestDir(t)
+	t.Setenv(externalRuntimeEnv, "external")
+	t.Setenv(runnerNameEnv, "runner")
+	xrayConfig, _ := writeExternalRuntimeFixture(t)
+	singboxConfig := filepath.Join("data", "singbox_config.json")
+	if err := os.WriteFile(singboxConfig, []byte(`{"old-singbox":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join("data", "runtime", "singbox.enabled"), []byte("enabled\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	restarts, singboxChecks := 0, 0
+	withRunnerDocker(t, func(_ context.Context, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "inspect":
+			if strings.Contains(args[2], ".State.Running") {
+				return []byte("true"), nil
+			}
+			if args[len(args)-1] == "runner" {
+				return []byte("runner-id|host|volume:zenith-data::true"), nil
+			}
+			return []byte("panel-id|host|volume:zenith-data::true"), nil
+		case "restart":
+			restarts++
+			return nil, nil
+		case "exec":
+			if args[2] == "sing-box" {
+				singboxChecks++
+				return []byte("old sing-box rejects new schema"), errors.New("unexpected sing-box check")
+			}
+			return []byte("true"), nil
+		default:
+			t.Fatalf("unexpected docker command: %#v", args)
+			return nil, nil
+		}
+	})
+
+	targets := []runtimeTarget{
+		externalRuntimeTestTarget(xrayConfig, `{"new-xray":true}`),
+		{
+			name:   "singbox",
+			wanted: false,
+			engine: engineAdapter{
+				core:     &BaseCore{ConfigPath: singboxConfig, externalEngine: "singbox"},
+				generate: func() (string, error) { return `{"new-singbox":true}`, nil },
+			},
+		},
+	}
+	if _, err := transitionExternalRuntime(context.Background(), targets, nil, "auto"); err != nil {
+		t.Fatal(err)
+	}
+	if singboxChecks != 0 {
+		t.Fatalf("disabled sing-box was validated %d time(s)", singboxChecks)
+	}
+	if restarts != 1 {
+		t.Fatalf("runner restart count = %d, want 1", restarts)
+	}
+	if got, err := os.ReadFile(singboxConfig); err != nil || string(got) != `{"old-singbox":true}` {
+		t.Fatalf("disabled sing-box config changed: %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join("data", "runtime", "singbox.enabled")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("disabled sing-box marker remains: %v", err)
+	}
+}
+
+func TestTransitionExternalRuntimeWantedSingboxValidationFailureLeavesOldRunnerUntouched(t *testing.T) {
+	withExternalRuntimeTestDir(t)
+	t.Setenv(externalRuntimeEnv, "external")
+	t.Setenv(runnerNameEnv, "runner")
+	xrayConfig, managed := writeExternalRuntimeFixture(t)
+	singboxConfig := filepath.Join("data", "singbox_config.json")
+	singboxMarker := filepath.Join("data", "runtime", "singbox.enabled")
+	if err := os.WriteFile(singboxConfig, []byte(`{"old-singbox":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(singboxMarker, []byte("enabled\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	restarts := 0
+	withRunnerDocker(t, func(_ context.Context, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "inspect":
+			if strings.Contains(args[2], ".State.Running") {
+				return []byte("true"), nil
+			}
+			if args[len(args)-1] == "runner" {
+				return []byte("runner-id|host|volume:zenith-data::true"), nil
+			}
+			return []byte("panel-id|host|volume:zenith-data::true"), nil
+		case "restart":
+			restarts++
+			return nil, nil
+		case "exec":
+			if args[2] == "sing-box" {
+				return []byte("unknown field default_domain_resolver"), errors.New("candidate rejected")
+			}
+			return []byte("true"), nil
+		default:
+			t.Fatalf("unexpected docker command: %#v", args)
+			return nil, nil
+		}
+	})
+
+	targets := []runtimeTarget{
+		externalRuntimeTestTarget(xrayConfig, `{"new-xray":true}`),
+		{
+			name:   "singbox",
+			wanted: true,
+			engine: engineAdapter{
+				core:     &BaseCore{ConfigPath: singboxConfig, externalEngine: "singbox"},
+				generate: func() (string, error) { return `{"new-singbox":true}`, nil },
+			},
+		},
+	}
+	if _, err := transitionExternalRuntime(context.Background(), targets, nil, "auto"); err == nil || !strings.Contains(err.Error(), "preflight external singbox") {
+		t.Fatalf("wanted sing-box preflight failure, got %v", err)
+	}
+	if restarts != 0 {
+		t.Fatalf("failed preflight restarted old runner %d time(s)", restarts)
+	}
+	for path, want := range map[string]string{
+		xrayConfig:    `{"old":true}`,
+		singboxConfig: `{"old-singbox":true}`,
+		managed:       "old-revision\n",
+		singboxMarker: "enabled\n",
+	} {
+		if got, err := os.ReadFile(path); err != nil || string(got) != want {
+			t.Fatalf("preflight changed %s: %q, %v", path, got, err)
+		}
+	}
+}
+
 func TestTransitionExternalRuntimeRestartFailureRestoresOldConfigAndMarker(t *testing.T) {
 	withExternalRuntimeTestDir(t)
 	t.Setenv(externalRuntimeEnv, "external")
 	t.Setenv(runnerNameEnv, "runner")
 	config, managed := writeExternalRuntimeFixture(t)
+	singboxConfig := filepath.Join("data", "singbox_config.json")
+	singboxMarker := filepath.Join("data", "runtime", "singbox.enabled")
+	if err := os.WriteFile(singboxConfig, []byte(`{"old-singbox":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(singboxMarker, []byte("enabled\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
 	restarts := mockExternalRuntimeDocker(t, func(n int) error {
 		if n == 1 {
 			return errors.New("runner stopped during candidate restart")
@@ -272,6 +415,14 @@ func TestTransitionExternalRuntimeRestartFailureRestoresOldConfigAndMarker(t *te
 
 	_, err := transitionExternalRuntime(context.Background(), []runtimeTarget{
 		externalRuntimeTestTarget(config, `{"new":true}`),
+		{
+			name:   "singbox",
+			wanted: false,
+			engine: engineAdapter{
+				core:     &BaseCore{ConfigPath: singboxConfig, externalEngine: "singbox"},
+				generate: func() (string, error) { return `{"new-singbox":true}`, nil },
+			},
+		},
 	}, nil, "auto")
 	if err == nil || !strings.Contains(err.Error(), "runner stopped during candidate restart") || !strings.Contains(err.Error(), "rollback_unverified") {
 		t.Fatalf("wanted candidate error plus explicit rollback qualification, got %v", err)
@@ -284,5 +435,11 @@ func TestTransitionExternalRuntimeRestartFailureRestoresOldConfigAndMarker(t *te
 	}
 	if got, readErr := os.ReadFile(managed); readErr != nil || string(got) != "old-revision\n" {
 		t.Fatalf("rollback did not restore managed marker: %q, %v", got, readErr)
+	}
+	if got, readErr := os.ReadFile(singboxConfig); readErr != nil || string(got) != `{"old-singbox":true}` {
+		t.Fatalf("rollback did not preserve disabled sing-box config: %q, %v", got, readErr)
+	}
+	if got, readErr := os.ReadFile(singboxMarker); readErr != nil || string(got) != "enabled\n" {
+		t.Fatalf("rollback did not restore disabled sing-box marker: %q, %v", got, readErr)
 	}
 }

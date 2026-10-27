@@ -403,12 +403,18 @@ func transitionExternalRuntime(ctx context.Context, targets []runtimeTarget, ena
 		if !ok {
 			return "", fmt.Errorf("external runtime does not support %s adapter", t.name)
 		}
-		candidate, err := prepareExternalCandidate(ctx, t.name, adapter, t.dual)
-		if err != nil {
-			return "", fmt.Errorf("preflight external %s: %w", t.name, err)
+		// A disabled engine is removed solely by its marker when the runner
+		// restarts. Do not generate or validate a configuration that the runner
+		// will never load: preserving an older runner is the point of external
+		// mode, and its unused core may not understand the new panel's schema.
+		if t.wanted {
+			candidate, err := prepareExternalCandidate(ctx, t.name, adapter, t.dual)
+			if err != nil {
+				return "", fmt.Errorf("preflight external %s: %w", t.name, err)
+			}
+			t.candidate = candidate
 		}
-		t.candidate = candidate
-		if _, err := fmt.Fprintf(hash, "%s:%t:%s\n", t.name, t.wanted, candidate); err != nil {
+		if _, err := fmt.Fprintf(hash, "%s:%t:%s\n", t.name, t.wanted, t.candidate); err != nil {
 			return "", err
 		}
 	}
@@ -421,8 +427,10 @@ func transitionExternalRuntime(ctx context.Context, targets []runtimeTarget, ena
 		if !ok {
 			return "", fmt.Errorf("external runtime does not support %s adapter", t.name)
 		}
-		if err := WriteConfigToFile(adapter.core.ConfigPath, t.candidate); err != nil {
-			return "", restore(fmt.Errorf("write external %s config: %w", t.name, err), false)
+		if t.wanted {
+			if err := WriteConfigToFile(adapter.core.ConfigPath, t.candidate); err != nil {
+				return "", restore(fmt.Errorf("write external %s config: %w", t.name, err), false)
+			}
 		}
 		if err := writeExternalEngineMarker(t.name, t.wanted); err != nil {
 			return "", restore(err, false)
