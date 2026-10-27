@@ -90,4 +90,3 @@ export function useInboundProbes(inbounds: Ref<Inbound[]>, activeTab: Ref<string
     clearProbeResults,
   }
 }
-

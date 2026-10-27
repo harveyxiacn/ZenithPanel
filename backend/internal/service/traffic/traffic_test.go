@@ -1,7 +1,6 @@
 package traffic
 
 import (
-	"context"
 	"testing"
 	"time"
 )
@@ -66,14 +65,13 @@ func TestPickTargetPrefersHostOverIP(t *testing.T) {
 
 func TestMonitorHistoryRingCapsAtHistoryCap(t *testing.T) {
 	m := NewMonitor(nil)
-	// Seed history past the cap by tick()-ing directly. tick() reads
-	// gopsutil + clash; with nil sm both produce errors but still record
-	// a (mostly empty) sample, which is fine for the ring-buffer test.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	_ = ctx
+	// This test exercises monitor history bookkeeping, not host process
+	// discovery. Keep the viewer active but suppress the expensive process scan
+	// so its duration does not depend on the number of local processes.
+	m.lastViewed.Store(time.Now().UnixNano())
 	for i := 0; i < historyCap+10; i++ {
-		m.tick(true) // force = someone is viewing
+		m.lastProcAt = time.Now()
+		m.tick(false)
 	}
 	hist := m.History(0)
 	if len(hist) != historyCap {

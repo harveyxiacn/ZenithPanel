@@ -288,10 +288,6 @@ func inferTransport(in model.Inbound) string {
 // default.
 var procRoot = "/proc/net"
 
-func portIsBound(port int, proto string) bool {
-	return portIsBoundForFamily(port, proto, "auto")
-}
-
 func portIsBoundForFamily(port int, proto, family string) bool {
 	if _, err := os.Stat(procRoot); err != nil {
 		// Non-Linux: trust the dial step to give us the real answer.

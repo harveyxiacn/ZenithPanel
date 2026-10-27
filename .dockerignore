@@ -24,10 +24,12 @@ frontend/node_modules/
 backend/tmp/
 backend/*.exe
 backend/*.test
+.tmp-gocache/
 
-# Scripts (exclude all except vps_check.sh which is packaged into the runtime image)
+# Scripts packaged into the runtime image
 scripts/
 !scripts/vps_check.sh
+!scripts/proxy-runner.sh
 
 # CI/CD
 .github/

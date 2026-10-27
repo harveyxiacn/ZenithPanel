@@ -34,4 +34,3 @@ defineEmits<{
     :title="$t('proxy.inbounds.probeTooltip')"
   >{{ $t('proxy.inbounds.probe') }}</button>
 </template>
-
