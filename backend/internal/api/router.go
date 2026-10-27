@@ -1,32 +1,22 @@
 package api
 
 import (
-	"bytes"
 	"context"
-	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/subtle"
-	"crypto/tls"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image/png"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"os"
-
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/api/middleware"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
@@ -35,21 +25,15 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/cpuinfo"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/adblock"
-	backupsvc "github.com/harveyxiacn/ZenithPanel/backend/internal/service/backup"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/cert"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/diagnostic"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/firewall"
-	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/fs"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/monitor"
-	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/notify"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/scheduler"
-	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/selftest"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/sub"
-	sysopt "github.com/harveyxiacn/ZenithPanel/backend/internal/service/system"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/terminal"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/traffic"
-	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/updater"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/webserver"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/version"
 	"github.com/pquerna/otp/totp"
@@ -184,8 +168,11 @@ func tryRecoveryCode(admin *model.AdminUser, code string) bool {
 			// Remove used code
 			codes = append(codes[:i], codes[i+1:]...)
 			updated, _ := json.Marshal(codes)
+			result := config.DB.Model(&model.AdminUser{}).Where("id = ? AND session_version = ? AND recovery_codes = ?", admin.ID, admin.SessionVersion, admin.RecoveryCodes).Update("recovery_codes", string(updated))
+			if result.Error != nil || result.RowsAffected != 1 {
+				return false
+			}
 			admin.RecoveryCodes = string(updated)
-			config.DB.Save(admin)
 			return true
 		}
 	}
@@ -345,29 +332,6 @@ func setSetting(key, value string) {
 	if err := config.SetSetting(key, value); err != nil {
 		log.Printf("config.SetSetting(%q): %v", key, err)
 	}
-}
-
-// partitionInboundEngines splits a list of enabled inbounds into the two
-// engines that will serve them in dual-engine mode. Used by the proxy/apply
-// endpoint and by startup auto-recovery to decide which engines to spin up.
-//
-// The rule is simple and stable: anything Xray can natively serve goes to
-// Xray; everything else (Hysteria2, TUIC, future QUIC-only protocols) goes
-// to Sing-box. We never split a single protocol across engines, so port
-// validation in validateInbound is sufficient — no two enabled inbounds can
-// land on the same port.
-func partitionInboundEngines(enabled []model.Inbound) (wantXray, wantSingbox bool) {
-	for _, in := range enabled {
-		if proxy.IsXraySupported(in.Protocol) {
-			wantXray = true
-		} else {
-			wantSingbox = true
-		}
-		if wantXray && wantSingbox {
-			break
-		}
-	}
-	return
 }
 
 func validateInbound(target model.Inbound) string {
@@ -586,14 +550,8 @@ func findDuplicateRoutingRule(target model.RoutingRule, excludeID uint) (*model.
 // SetupRoutes configures all the Gin routes.
 func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *proxy.SingboxManager, sched *scheduler.Scheduler, tm *traffic.Monitor, eg *traffic.EgressCollector) {
 
-	// Security Headers
-	r.Use(func(c *gin.Context) {
-		c.Header("X-Frame-Options", "DENY")
-		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("X-XSS-Protection", "1; mode=block")
-		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
-		c.Next()
-	})
+	// Browser hardening and strict same/loopback-origin CORS policy.
+	r.Use(securityHeaders())
 
 	// Limit request body size to 10 MB to prevent resource exhaustion
 	r.Use(func(c *gin.Context) {
@@ -607,22 +565,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 	// Apply Setup Guard Globally
 	r.Use(middleware.SetupGuardMiddleware())
 
-	// CORS Middleware — in production the frontend is embedded (same-origin),
-	// so cross-origin requests are only allowed for development (localhost).
-	r.Use(cors.New(cors.Config{
-		AllowOriginFunc: func(origin string) bool {
-			if gin.Mode() != gin.ReleaseMode {
-				return true // allow all in dev mode
-			}
-			// In production, only allow same-host origins (e.g. http://host:port)
-			return strings.HasPrefix(origin, "http://localhost") || strings.HasPrefix(origin, "http://127.0.0.1")
-		},
-		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
-		MaxAge:           12 * time.Hour,
-	}))
+	// The embedded UI is same-origin. Cross-origin access is limited to exact
+	// loopback hosts for local Vite development.
+	r.Use(panelCORS())
 
 	// Embedded Static Files
 	staticFS := GetStaticAssets()
@@ -678,14 +623,14 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 
-			// Issue real JWT for setup process
-			token, err := jwtutil.GenerateToken(middleware.SetupAdminUserID, "admin", time.Minute*30)
+			// Setup tokens are purpose-bound and cannot access /api/v1.
+			token, err := jwtutil.GenerateSetupToken(time.Minute * 30)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate token"})
 				return
 			}
-
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Setup login successful", "data": gin.H{"token": token}})
+			setSessionCookie(c, token, 30*time.Minute)
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Setup login successful"})
 		})
 
 		setupGroup.POST("/complete", middleware.JWTAuthMiddleware(), func(c *gin.Context) {
@@ -759,7 +704,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			if req.PanelPath != "" {
 				cfg.PanelPrefix = req.PanelPath
 			}
-
+			clearSessionCookie(c)
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Setup complete! You can now login with your credentials."})
 		})
 	}
@@ -781,7 +726,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			}
 
 			dbStatus := "ok"
-			if sqlDB, err := config.DB.DB(); err != nil || sqlDB.Ping() != nil {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+			defer cancel()
+			if sqlDB, err := config.ReadDB().DB(); err != nil || sqlDB.PingContext(ctx) != nil {
 				dbStatus = "error"
 			}
 
@@ -829,6 +776,9 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 			c.JSON(statusCode, health)
 		})
+		// WebSocket authentication is a one-time ticket consumed by the handler;
+		// browser session JWTs never appear in URLs or proxy logs.
+		apiGroup.GET("/terminal", terminal.HandleTerminalWebSocket)
 
 		apiGroup.POST("/login", func(c *gin.Context) {
 			// IP lockout check (5 consecutive failures = 15 min lockout)
@@ -891,16 +841,19 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 			clearLoginFailures(c.ClientIP())
 
-			token, err := jwtutil.GenerateToken(
+			token, err := jwtutil.GenerateSessionToken(
 				strconv.Itoa(int(admin.ID)),
 				admin.Username,
+				admin.SessionVersion,
+				time.Now(),
 				time.Hour*24,
 			)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate token"})
 				return
 			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Login success", "data": gin.H{"token": token}})
+			setSessionCookie(c, token, 24*time.Hour)
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Login success", "data": gin.H{"user": gin.H{"id": admin.ID, "username": admin.Username}}})
 		})
 
 		// Subscription endpoint (Unprotected, uses UUID parameter)
@@ -918,8 +871,19 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 	// Protected API (Post-Setup) - Needs JWT
 	// ======================================
 	authGroup := r.Group("/api/v1")
-	authGroup.Use(middleware.AuthMiddleware(), middleware.ScopeMiddleware())
+	authGroup.Use(middleware.AuthMiddleware())
+	authGroup.Use(middleware.ScopeAuthorizationMiddleware())
 	{
+		authGroup.GET("/auth/session", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": gin.H{
+				"principal": c.GetString("principal"),
+				"username":  c.GetString("username"),
+			}})
+		})
+		authGroup.POST("/auth/logout", func(c *gin.Context) {
+			clearSessionCookie(c)
+			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Logged out"})
+		})
 		authGroup.GET("/system/monitor", func(c *gin.Context) {
 			stats, err := monitor.GetSystemStats()
 			if err != nil {
@@ -987,332 +951,8 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		// traffic_egress.go to keep this file readable.
 		registerEgressRoutes(authGroup, eg)
 
-		// ======================================
-		// Docker Management
-		// ======================================
-		authGroup.GET("/docker/containers", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker engine not reachable"})
-				return
-			}
-			containers, err := dm.ListContainers(c.Request.Context(), true)
-			if err != nil {
-				log.Printf("Docker list error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to list containers"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": containers})
-		})
-
-		authGroup.POST("/docker/containers/:id/start", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			id := c.Param("id")
-			if !isValidContainerID(id) {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
-				return
-			}
-			if err := dm.StartContainer(c.Request.Context(), id); err != nil {
-				log.Printf("Docker start error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to start container"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container started"})
-		})
-
-		authGroup.POST("/docker/containers/:id/stop", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			id := c.Param("id")
-			if !isValidContainerID(id) {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
-				return
-			}
-			if err := dm.StopContainer(c.Request.Context(), id); err != nil {
-				log.Printf("Docker stop error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to stop container"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container stopped"})
-		})
-
-		authGroup.POST("/docker/containers/:id/restart", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			id := c.Param("id")
-			if !isValidContainerID(id) {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
-				return
-			}
-			if err := dm.RestartContainer(c.Request.Context(), id); err != nil {
-				log.Printf("Docker restart error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to restart container"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container restarted"})
-		})
-
-		authGroup.DELETE("/docker/containers/:id", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			id := c.Param("id")
-			if !isValidContainerID(id) {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
-				return
-			}
-			force := c.Query("force") == "true"
-			if err := dm.RemoveContainer(c.Request.Context(), id, force); err != nil {
-				log.Printf("Docker remove error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to remove container"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container removed"})
-		})
-
-		// Container logs
-		authGroup.GET("/docker/containers/:id/logs", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			id := c.Param("id")
-			if !isValidContainerID(id) {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
-				return
-			}
-			tail := c.DefaultQuery("tail", "100")
-			output, err := dm.GetContainerLogs(c.Request.Context(), id, tail)
-			if err != nil {
-				log.Printf("Docker logs error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to get logs"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": output})
-		})
-
-		// Container resource stats (one-shot)
-		authGroup.GET("/docker/containers/:id/stats", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			id := c.Param("id")
-			if !isValidContainerID(id) {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
-				return
-			}
-			stats, err := dm.GetContainerStats(c.Request.Context(), id)
-			if err != nil {
-				log.Printf("Docker stats error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to get stats"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": stats})
-		})
-
-		// Container inspect
-		authGroup.GET("/docker/containers/:id/inspect", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			id := c.Param("id")
-			if !isValidContainerID(id) {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid container ID"})
-				return
-			}
-			info, err := dm.InspectContainer(c.Request.Context(), id)
-			if err != nil {
-				log.Printf("Docker inspect error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to inspect container"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": info})
-		})
-
-		// Create and start a new container
-		authGroup.POST("/docker/containers/run", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			var req docker.RunContainerRequest
-			if err := c.ShouldBindJSON(&req); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid request"})
-				return
-			}
-			if req.Image == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "image is required"})
-				return
-			}
-			id, err := dm.RunContainer(c.Request.Context(), req)
-			if err != nil {
-				log.Printf("Docker run error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Container started", "data": gin.H{"id": id}})
-		})
-
-		// Image list
-		authGroup.GET("/docker/images", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			images, err := dm.ListImages(c.Request.Context())
-			if err != nil {
-				log.Printf("Docker image list error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to list images"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": images})
-		})
-
-		// Pull image (synchronous; returns after pull completes)
-		authGroup.POST("/docker/images/pull", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			var body struct {
-				Image string `json:"image"`
-			}
-			if err := c.ShouldBindJSON(&body); err != nil || body.Image == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "image field required"})
-				return
-			}
-			rc, err := dm.PullImage(c.Request.Context(), body.Image)
-			if err != nil {
-				log.Printf("Docker pull error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
-				return
-			}
-			io.Copy(io.Discard, rc)
-			rc.Close()
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Image pulled"})
-		})
-
-		// Remove image
-		authGroup.DELETE("/docker/images/:id", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			id := c.Param("id")
-			force := c.Query("force") == "true"
-			deleted, err := dm.RemoveImage(c.Request.Context(), id, force)
-			if err != nil {
-				log.Printf("Docker image remove error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Image removed", "data": deleted})
-		})
-
-		// Volume list
-		authGroup.GET("/docker/volumes", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			vols, err := dm.ListVolumes(c.Request.Context())
-			if err != nil {
-				log.Printf("Docker volume list error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to list volumes"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": vols})
-		})
-
-		// Network list
-		authGroup.GET("/docker/networks", func(c *gin.Context) {
-			if dm == nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Docker not available"})
-				return
-			}
-			nets, err := dm.ListNetworks(c.Request.Context())
-			if err != nil {
-				log.Printf("Docker network list error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to list networks"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": nets})
-		})
-
-		// Terminal WebSocket
-		authGroup.GET("/terminal", terminal.HandleTerminalWebSocket)
-
-		// ======================================
-		// File System Management
-		// ======================================
-		fsGroup := authGroup.Group("/fs")
-		{
-			fsGroup.GET("/list", func(c *gin.Context) {
-				path := c.Query("path")
-				if path == "" {
-					path = fsSandboxRoot
-				}
-				safePath, ok := isPathSafe(path)
-				if !ok {
-					c.JSON(http.StatusForbidden, gin.H{"code": 403, "msg": "Access denied: path outside sandbox"})
-					return
-				}
-				files, err := fs.ListDirectory(safePath)
-				if err != nil {
-					log.Printf("FS list error: %v", err)
-					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Failed to list directory"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": files})
-			})
-
-			fsGroup.GET("/read", func(c *gin.Context) {
-				path := c.Query("path")
-				safePath, ok := isPathSafe(path)
-				if !ok {
-					c.JSON(http.StatusForbidden, gin.H{"code": 403, "msg": "Access denied: path outside sandbox"})
-					return
-				}
-				content, err := fs.ReadFileContent(safePath)
-				if err != nil {
-					log.Printf("FS read error: %v", err)
-					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Failed to read file"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": content})
-			})
-
-			fsGroup.POST("/write", func(c *gin.Context) {
-				var req struct {
-					Path    string `json:"path"`
-					Content string `json:"content"`
-				}
-				if err := c.ShouldBindJSON(&req); err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid params"})
-					return
-				}
-				safePath, ok := isPathSafe(req.Path)
-				if !ok {
-					c.JSON(http.StatusForbidden, gin.H{"code": 403, "msg": "Access denied: path outside sandbox"})
-					return
-				}
-				if err := fs.WriteFileContent(safePath, req.Content); err != nil {
-					log.Printf("FS write error: %v", err)
-					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to write file"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "File saved"})
-			})
-		}
+		registerDockerRoutes(authGroup, dm)
+		registerTerminalFileRoutes(authGroup)
 
 		// Diagnostics
 		authGroup.GET("/diagnostics/network", func(c *gin.Context) {
@@ -1918,7 +1558,12 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		// Firewall Management
 		// ======================================
 		authGroup.GET("/firewall/rules", func(c *gin.Context) {
-			rules, err := firewall.ListRules()
+			family := c.DefaultQuery("family", "ipv4")
+			if family != "ipv4" && family != "ipv6" {
+				c.JSON(400, gin.H{"code": 400, "msg": "family must be ipv4 or ipv6"})
+				return
+			}
+			rules, err := firewall.ListRulesForFamily(family)
 			if err != nil {
 				log.Printf("Firewall list error: %v", err)
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to list firewall rules"})
@@ -1929,6 +1574,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 
 		authGroup.POST("/firewall/rules", func(c *gin.Context) {
 			var req struct {
+				Family   string `json:"family"`
 				Protocol string `json:"protocol"`
 				Port     string `json:"port"`
 				Action   string `json:"action"`
@@ -1939,7 +1585,11 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
 				return
 			}
-			if err := firewall.AddRule(req.Protocol, req.Port, req.Action, req.Source, req.Comment); err != nil {
+			if req.Family != "" && req.Family != "ipv4" && req.Family != "ipv6" {
+				c.JSON(400, gin.H{"code": 400, "msg": "family must be ipv4 or ipv6"})
+				return
+			}
+			if err := firewall.AddRuleForFamily(req.Family, req.Protocol, req.Port, req.Action, req.Source, req.Comment); err != nil {
 				log.Printf("Firewall add error: %v", err)
 				c.JSON(500, gin.H{"code": 500, "msg": "Failed to add firewall rule"})
 				return
@@ -2038,433 +1688,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 			c.JSON(200, gin.H{"code": 200, "msg": "Job deleted"})
 		})
 
-		// ======================================
-		// Proxy Core Management
-		// ======================================
-		proxyGroup := authGroup.Group("/proxy")
-		{
-			proxyGroup.GET("/status", func(c *gin.Context) {
-				var enabledInbounds int64
-				var enabledClients int64
-				var enabledRules int64
-
-				config.DB.Model(&model.Inbound{}).Where("enable = ?", true).Count(&enabledInbounds)
-				config.DB.Model(&model.Client{}).
-					Joins("JOIN inbounds ON inbounds.id = clients.inbound_id AND inbounds.deleted_at IS NULL").
-					Where("clients.enable = ? AND inbounds.enable = ?", true, true).
-					Count(&enabledClients)
-				config.DB.Model(&model.RoutingRule{}).Where("enable = ?", true).Count(&enabledRules)
-
-				dualMode := xm.IsDualMode() || sm.IsDualMode()
-				data := gin.H{
-					"xray_running":     xm.Status(),
-					"singbox_running":  sm.Status(),
-					"enabled_inbounds": enabledInbounds,
-					"enabled_clients":  enabledClients,
-					"enabled_rules":    enabledRules,
-					"dual_mode":        dualMode,
-				}
-				if !xm.Status() {
-					if e := xm.LastError(); e != "" {
-						data["xray_last_error"] = e
-					}
-				} else if skipped := xm.SkippedProtocols(); len(skipped) > 0 {
-					// In dual mode these aren't "skipped" — they're being served
-					// by Sing-box. Rename the field so the UI doesn't show a
-					// scary warning when both engines cooperate as designed.
-					if dualMode {
-						data["xray_handed_off_to_singbox"] = skipped
-					} else {
-						data["xray_skipped_protocols"] = skipped
-					}
-				}
-				if !sm.Status() {
-					if e := sm.LastError(); e != "" {
-						data["singbox_last_error"] = e
-					}
-				}
-				c.JSON(http.StatusOK, gin.H{
-					"code": 200,
-					"msg":  "Success",
-					"data": data,
-				})
-			})
-
-			proxyGroup.POST("/apply", func(c *gin.Context) {
-				// Default to "auto" (dual-engine partition). Explicit engine=xray
-				// or engine=singbox preserves the legacy single-engine override
-				// used by the Web UI's per-engine apply buttons.
-				engine := strings.ToLower(strings.TrimSpace(c.DefaultQuery("engine", "auto")))
-
-				switch engine {
-				case "auto", "":
-					// Partition enabled inbounds: Xray handles everything it can
-					// (VLESS / VMess / Trojan / SS); Sing-box handles the rest
-					// (Hysteria2 / TUIC / any future singbox-exclusive protocol).
-					// Both engines run concurrently so all protocols stay reachable
-					// at the same time.
-					var enabledInbounds []model.Inbound
-					config.DB.Where("enable = ?", true).Find(&enabledInbounds)
-					wantXray, wantSingbox := partitionInboundEngines(enabledInbounds)
-
-					xm.SetDualMode(true)
-					sm.SetDualMode(true)
-
-					// Leave an engine running when its generated config is
-					// identical to the one it is serving: a restart would cut
-					// every user's connections for nothing (e.g. editing a
-					// Hysteria2 node used to disconnect all VLESS users).
-					// ?force=1 restarts regardless.
-					force := c.Query("force") == "1"
-					xrayKeep := wantXray && !force && xm.ConfigUnchanged()
-					singboxKeep := wantSingbox && !force && sm.ConfigUnchanged()
-
-					if !xrayKeep {
-						if err := xm.Stop(); err != nil {
-							log.Printf("Xray pre-stop (auto): %v", err)
-						}
-					}
-					if !singboxKeep {
-						if err := sm.Stop(); err != nil {
-							log.Printf("Sing-box pre-stop (auto): %v", err)
-						}
-					}
-
-					var xrayErr, singboxErr error
-					if wantXray && !xrayKeep {
-						if err := xm.Start(); err != nil {
-							xrayErr = err
-							log.Printf("Xray start (auto): %v", err)
-						}
-					}
-					if wantSingbox && !singboxKeep {
-						if err := sm.Start(); err != nil {
-							singboxErr = err
-							log.Printf("Sing-box start (auto): %v", err)
-						}
-					}
-
-					data := gin.H{
-						"xray_running":    xm.Status(),
-						"singbox_running": sm.Status(),
-						"mode":            "auto",
-					}
-					var msgs []string
-					if wantXray {
-						switch {
-						case xrayErr != nil:
-							msgs = append(msgs, fmt.Sprintf("Xray failed: %v", xrayErr))
-						case xrayKeep:
-							msgs = append(msgs, "Xray unchanged (kept running)")
-						default:
-							msgs = append(msgs, "Xray applied")
-						}
-					}
-					if wantSingbox {
-						switch {
-						case singboxErr != nil:
-							msgs = append(msgs, fmt.Sprintf("Sing-box failed: %v", singboxErr))
-						case singboxKeep:
-							msgs = append(msgs, "Sing-box unchanged (kept running)")
-						default:
-							msgs = append(msgs, "Sing-box applied")
-						}
-					}
-					if !wantXray && !wantSingbox {
-						msgs = append(msgs, "No enabled inbounds; both engines stopped")
-					}
-					status := http.StatusOK
-					if xrayErr != nil || singboxErr != nil {
-						status = http.StatusInternalServerError
-					}
-					c.JSON(status, gin.H{
-						"code": status,
-						"msg":  strings.Join(msgs, "; "),
-						"data": data,
-					})
-					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
-					recordAudit(c, "proxy.apply", engine)
-					EnsurePanelPortsOpen()
-				case "xray":
-					// Stop Sing-box first to free any ports it holds before Xray binds them.
-					if sm.Status() {
-						if err := sm.Stop(); err != nil {
-							log.Printf("Sing-box stop (before Xray start): %v", err)
-						}
-					}
-					xm.SetDualMode(false)
-					if err := xm.Restart(); err != nil {
-						log.Printf("Xray apply error: %v", err)
-						c.JSON(http.StatusInternalServerError, gin.H{
-							"code": 500,
-							"msg":  fmt.Sprintf("Failed to apply Xray config: %v", err),
-						})
-						return
-					}
-					msg := "Xray configuration applied successfully"
-					if skipped := xm.SkippedProtocols(); len(skipped) > 0 {
-						msg += fmt.Sprintf(" (skipped %d inbounds not supported by Xray: %s — use Sing-box engine for these)",
-							len(skipped), strings.Join(skipped, ", "))
-					}
-					c.JSON(http.StatusOK, gin.H{
-						"code":              200,
-						"msg":               msg,
-						"skipped_protocols": xm.SkippedProtocols(),
-					})
-					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
-					recordAudit(c, "proxy.apply", engine)
-					EnsurePanelPortsOpen()
-				case "singbox", "sing-box":
-					// Stop Xray first to free any ports it holds before Sing-box binds them.
-					if xm.Status() {
-						if err := xm.Stop(); err != nil {
-							log.Printf("Xray stop (before Sing-box start): %v", err)
-						}
-					}
-					sm.SetDualMode(false)
-					if err := sm.Restart(); err != nil {
-						log.Printf("Sing-box apply error: %v", err)
-						c.JSON(http.StatusInternalServerError, gin.H{
-							"code": 500,
-							"msg":  fmt.Sprintf("Failed to apply Sing-box config: %v", err),
-						})
-						return
-					}
-					c.JSON(http.StatusOK, gin.H{
-						"code": 200,
-						"msg":  "Sing-box configuration applied successfully",
-					})
-					setSetting("last_apply_unix", strconv.FormatInt(time.Now().Unix(), 10))
-					recordAudit(c, "proxy.apply", engine)
-					EnsurePanelPortsOpen()
-				default:
-					c.JSON(http.StatusBadRequest, gin.H{
-						"code": 400,
-						"msg":  "Unsupported proxy engine",
-					})
-				}
-			})
-
-			proxyGroup.GET("/config/xray", func(c *gin.Context) {
-				cfg, err := xm.GenerateConfig()
-				if err != nil {
-					log.Printf("Xray config error: %v", err)
-					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate Xray config"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": cfg})
-			})
-
-			proxyGroup.GET("/config/singbox", func(c *gin.Context) {
-				cfg, err := sm.GenerateConfig()
-				if err != nil {
-					log.Printf("Singbox config error: %v", err)
-					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate Sing-box config"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": cfg})
-			})
-
-			// Clash API toggle + connections proxy (Sing-box experimental.clash_api)
-			proxyGroup.POST("/clash-api/enable", func(c *gin.Context) {
-				setSetting("singbox_clash_api_enabled", "true")
-				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Clash API enabled. Re-apply Sing-box config to take effect."})
-			})
-
-			proxyGroup.POST("/clash-api/disable", func(c *gin.Context) {
-				setSetting("singbox_clash_api_enabled", "false")
-				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Clash API disabled. Re-apply Sing-box config to take effect."})
-			})
-
-			proxyGroup.GET("/clash-api/status", func(c *gin.Context) {
-				enabled := proxy.ClashAPIEnabled()
-				c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"enabled": enabled}})
-			})
-
-			// Live connections — proxies Sing-box's Clash API /connections endpoint.
-			proxyGroup.GET("/connections", func(c *gin.Context) {
-				if !sm.Status() {
-					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Sing-box is not running"})
-					return
-				}
-				if !proxy.ClashAPIEnabled() {
-					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Clash API not enabled — enable it and re-apply Sing-box config"})
-					return
-				}
-				port := config.GetSetting("singbox_clash_api_port")
-				if port == "" {
-					port = "9090"
-				}
-				client := &http.Client{Timeout: 3 * time.Second}
-				resp, err := client.Get("http://127.0.0.1:" + port + "/connections")
-				if err != nil {
-					c.JSON(http.StatusServiceUnavailable, gin.H{"code": 503, "msg": "Failed to reach Clash API: " + err.Error()})
-					return
-				}
-				defer resp.Body.Close()
-				body, _ := io.ReadAll(io.LimitReader(resp.Body, 5<<20)) // 5 MiB cap
-				var data any
-				if err := json.Unmarshal(body, &data); err != nil {
-					c.JSON(http.StatusBadGateway, gin.H{"code": 502, "msg": "Invalid response from Clash API"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"code": 200, "data": data})
-			})
-
-			// TLS Certificates Management
-			proxyGroup.POST("/tls/issue", func(c *gin.Context) {
-				var req struct {
-					Domain string `json:"domain"`
-					Email  string `json:"email"`
-				}
-				if err := c.ShouldBindJSON(&req); err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid parameters"})
-					return
-				}
-
-				// Use ObtainCert (not IssueCertificate) so we can surface the
-				// on-disk paths back to the caller. Operators need them to
-				// wire the cert into an inbound's tlsSettings.
-				certPath, keyPath, err := cert.ObtainCert(req.Domain, req.Email)
-				if err != nil {
-					log.Printf("Cert issue error: %v", err)
-					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": fmt.Sprintf("Failed to issue certificate: %v", err)})
-					return
-				}
-
-				// Stamp the renewal bookkeeping so the auto-renewal ticker
-				// knows which (domain, email) pair to retry with.
-				setSetting("acme_email", req.Email)
-
-				notAfter, _ := cert.ValidatePair(certPath, keyPath)
-				recordAudit(c, "tls.issue", req.Domain)
-				c.JSON(http.StatusOK, gin.H{
-					"code": 200,
-					"msg":  "Certificate issued. Wire the paths into an inbound's tlsSettings or panel TLS upload to put it into use.",
-					"data": gin.H{
-						"domain":    req.Domain,
-						"cert_path": certPath,
-						"key_path":  keyPath,
-						"not_after": notAfter.Unix(),
-					},
-				})
-			})
-
-			// Generate X25519 keypair for VLESS Reality
-			proxyGroup.POST("/generate-reality-keys", func(c *gin.Context) {
-				curve := ecdh.X25519()
-				priv, err := curve.GenerateKey(rand.Reader)
-				if err != nil {
-					log.Printf("Reality key gen error: %v", err)
-					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate keys"})
-					return
-				}
-				shortIdBytes := make([]byte, 4)
-				rand.Read(shortIdBytes)
-				c.JSON(http.StatusOK, gin.H{
-					"code": 200,
-					"msg":  "Success",
-					"data": gin.H{
-						"private_key": base64.RawURLEncoding.EncodeToString(priv.Bytes()),
-						"public_key":  base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()),
-						"short_id":    fmt.Sprintf("%x", shortIdBytes),
-					},
-				})
-			})
-
-			// Check server public network — reports the VPS exit IP regardless of proxy state.
-			// Inbound connectivity probe — defensive, panel-local check that
-			// confirms the engine is actually serving the inbound's port. See
-			// docs/cli_api_spec.md §2.5 and service/diagnostic.ProbeInbound for
-			// the staged result (not_bound → tcp → tls → ok) the prober returns.
-			proxyGroup.GET("/test/:inbound_id", func(c *gin.Context) {
-				idStr := c.Param("inbound_id")
-				id, err := strconv.ParseUint(idStr, 10, 32)
-				if err != nil {
-					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid inbound id"})
-					return
-				}
-				var in model.Inbound
-				if err := config.DB.First(&in, id).Error; err != nil {
-					c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Inbound not found"})
-					return
-				}
-				result := diagnostic.ProbeInbound(in)
-				// A bound port proves little (a node with a wrong Reality
-				// target or key passes it). Unless ?quick=1, push real
-				// traffic through the node using the exact share link the
-				// first enabled client imports, dialled at 127.0.0.1.
-				if result.OK && c.Query("quick") != "1" {
-					var cl model.Client
-					if err := config.DB.Where("inbound_id = ? AND enable = ?", in.ID, true).Order("id").First(&cl).Error; err != nil {
-						result.E2E = "skipped"
-						result.Err = "no enabled client — add one to run the end-to-end test"
-					} else if link := sub.ShareLink(in, cl, sub.ResolveServerAddress(in, subFallbackHost(c))); link == "" {
-						result.E2E = "skipped"
-					} else {
-						// Same link clients get, dialled at loopback (the TLS
-						// name stays the public address, as for real clients).
-						e2e := selftest.Run(c.Request.Context(), link, selftest.Options{Server: "127.0.0.1"})
-						result.ElapsedMs += e2e.LatencyMs
-						result.E2ELatency = e2e.LatencyMs
-						if e2e.OK {
-							result.E2E = "passed"
-							result.ExitIP = e2e.ExitIP
-						} else {
-							result.E2E = "failed"
-							result.OK = false
-							result.Stage = "proxy"
-							result.Err = e2e.Err
-						}
-					}
-				}
-				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "ok", "data": result})
-			})
-
-			proxyGroup.POST("/test-connection", func(c *gin.Context) {
-				ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
-				defer cancel()
-
-				req, err := http.NewRequestWithContext(ctx, "GET", "https://ipinfo.io/json", nil)
-				if err != nil {
-					c.JSON(200, gin.H{"code": 200, "data": gin.H{
-						"success": false,
-						"scope":   "server_public_network",
-						"error":   "Request build failed",
-					}})
-					return
-				}
-				req.Header.Set("User-Agent", "ZenithPanel/1.0")
-				resp, err := networkCheckDo(req)
-				if err != nil {
-					c.JSON(200, gin.H{"code": 200, "data": gin.H{
-						"success": false,
-						"scope":   "server_public_network",
-						"error":   fmt.Sprintf("Connection failed: %v", err),
-					}})
-					return
-				}
-				defer resp.Body.Close()
-
-				var result map[string]any
-				if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-					c.JSON(200, gin.H{"code": 200, "data": gin.H{
-						"success": false,
-						"scope":   "server_public_network",
-						"error":   "Failed to parse response",
-					}})
-					return
-				}
-				c.JSON(200, gin.H{"code": 200, "data": gin.H{
-					"success": true,
-					"scope":   "server_public_network",
-					"ip":      result["ip"],
-					"country": result["country"],
-					"org":     result["org"],
-				}})
-			})
-		}
-
+		registerProxyRoutes(authGroup, xm, sm)
 		// ======================================
 		// Admin Password Change
 		// ======================================
@@ -2498,10 +1722,11 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				return
 			}
 			admin.PasswordHash = string(hash)
-			if err := config.DB.Save(&admin).Error; err != nil {
+			if err := updateAdminSecurity(c.Request.Context(), admin, map[string]any{"password_hash": string(hash)}); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to update password"})
 				return
 			}
+			clearSessionCookie(c)
 			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Password changed successfully"})
 			recordAudit(c, "admin.password_change", "")
 		})
@@ -2509,682 +1734,16 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		// ======================================
 		// OTA Update
 		// ======================================
-		authGroup.GET("/system/update/check", func(c *gin.Context) {
-			info, err := updater.CheckForUpdate(c.Request.Context())
-			if err != nil {
-				log.Printf("Update check error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Update check failed"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": info})
-		})
+		registerUpdateRoutes(authGroup)
 
-		authGroup.POST("/system/update/apply", func(c *gin.Context) {
-			if err := updater.PerformUpdate(c.Request.Context()); err != nil {
-				log.Printf("Update apply error: %v", err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": fmt.Sprintf("Update failed: %v", err)})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Update applied. Panel will restart in a few seconds."})
-		})
-
-		// ======================================
-		// System Optimization (BBR, Swap, Sysctl, Cleanup)
-		// ======================================
-		authGroup.GET("/system/bbr/status", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"code": 200, "data": sysopt.GetBBRStatus()})
-		})
-		authGroup.POST("/system/bbr/enable", func(c *gin.Context) {
-			if err := sysopt.EnableBBR(); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": fmt.Sprintf("Failed to enable BBR: %v", err)})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "BBR enabled successfully"})
-		})
-		authGroup.POST("/system/bbr/disable", func(c *gin.Context) {
-			if err := sysopt.DisableBBR(); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": fmt.Sprintf("Failed to disable BBR: %v", err)})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "BBR disabled successfully"})
-		})
-
-		authGroup.GET("/system/swap/status", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"code": 200, "data": sysopt.GetSwapStatus()})
-		})
-		authGroup.POST("/system/swap/create", func(c *gin.Context) {
-			var req struct {
-				SizeMB int `json:"size_mb"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil || req.SizeMB == 0 {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "size_mb is required (256-16384)"})
-				return
-			}
-			if err := sysopt.CreateSwap(req.SizeMB); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": fmt.Sprintf("Failed to create swap: %v", err)})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": fmt.Sprintf("Swap file created (%d MB)", req.SizeMB)})
-		})
-		authGroup.POST("/system/swap/remove", func(c *gin.Context) {
-			if err := sysopt.RemoveSwap(); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": fmt.Sprintf("Failed to remove swap: %v", err)})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Swap removed successfully"})
-		})
-
-		authGroup.GET("/system/sysctl/status", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"code": 200, "data": sysopt.GetSysctlTuningStatus()})
-		})
-		authGroup.POST("/system/sysctl/enable", func(c *gin.Context) {
-			if err := sysopt.EnableSysctlTuning(); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": fmt.Sprintf("Failed to apply tuning: %v", err)})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Network tuning applied successfully"})
-		})
-		authGroup.POST("/system/sysctl/disable", func(c *gin.Context) {
-			if err := sysopt.DisableSysctlTuning(); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": fmt.Sprintf("Failed to revert tuning: %v", err)})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Network tuning reverted to defaults"})
-		})
-
-		authGroup.GET("/system/cleanup/info", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"code": 200, "data": sysopt.GetCleanupInfo()})
-		})
-		authGroup.POST("/system/cleanup/run", func(c *gin.Context) {
-			result := sysopt.RunCleanup()
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Cleanup completed", "data": result})
-		})
-
-		// ======================================
-		// Two-Factor Authentication (TOTP)
-		// ======================================
-		authGroup.GET("/admin/2fa/status", func(c *gin.Context) {
-			username, _ := c.Get("username")
-			var admin model.AdminUser
-			if err := config.DB.Where("username = ?", username).First(&admin).Error; err != nil {
-				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Admin not found"})
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{"enabled": admin.TOTPEnabled}})
-		})
-
-		authGroup.POST("/admin/2fa/setup", func(c *gin.Context) {
-			username, _ := c.Get("username")
-			var admin model.AdminUser
-			if err := config.DB.Where("username = ?", username).First(&admin).Error; err != nil {
-				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Admin not found"})
-				return
-			}
-			if admin.TOTPEnabled {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "2FA is already enabled"})
-				return
-			}
-
-			key, err := totp.Generate(totp.GenerateOpts{
-				Issuer:      "ZenithPanel",
-				AccountName: admin.Username,
-			})
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate TOTP secret"})
-				return
-			}
-
-			// Generate QR code as base64 PNG
-			img, err := key.Image(200, 200)
-			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to generate QR code"})
-				return
-			}
-			var buf bytes.Buffer
-			if err := png.Encode(&buf, img); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to encode QR"})
-				return
-			}
-			qrBase64 := base64.StdEncoding.EncodeToString(buf.Bytes())
-
-			// Generate 8 recovery codes
-			recoveryCodes := make([]string, 8)
-			recoveryHashes := make([]string, 8)
-			for i := 0; i < 8; i++ {
-				b := make([]byte, 4)
-				rand.Read(b)
-				code := hex.EncodeToString(b)
-				recoveryCodes[i] = code
-				hash, _ := bcrypt.GenerateFromPassword([]byte(code), bcrypt.DefaultCost)
-				recoveryHashes[i] = string(hash)
-			}
-			hashesJSON, _ := json.Marshal(recoveryHashes)
-
-			// Save secret + recovery codes (not yet enabled)
-			admin.TOTPSecret = key.Secret()
-			admin.RecoveryCodes = string(hashesJSON)
-			if err := config.DB.Save(&admin).Error; err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to save"})
-				return
-			}
-
-			c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
-				"secret":         key.Secret(),
-				"qr_base64":      qrBase64,
-				"recovery_codes": recoveryCodes,
-			}})
-		})
-
-		authGroup.POST("/admin/2fa/verify", func(c *gin.Context) {
-			var req struct {
-				Code string `json:"code"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil || req.Code == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Code is required"})
-				return
-			}
-			username, _ := c.Get("username")
-			var admin model.AdminUser
-			if err := config.DB.Where("username = ?", username).First(&admin).Error; err != nil {
-				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Admin not found"})
-				return
-			}
-			if admin.TOTPSecret == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Run 2FA setup first"})
-				return
-			}
-			if !totp.Validate(req.Code, admin.TOTPSecret) {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid code"})
-				return
-			}
-			admin.TOTPEnabled = true
-			config.DB.Save(&admin)
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "2FA enabled successfully"})
-			recordAudit(c, "admin.2fa_enable", "")
-		})
-
-		authGroup.POST("/admin/2fa/disable", func(c *gin.Context) {
-			var req struct {
-				Password string `json:"password"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil || req.Password == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Password is required"})
-				return
-			}
-			username, _ := c.Get("username")
-			var admin model.AdminUser
-			if err := config.DB.Where("username = ?", username).First(&admin).Error; err != nil {
-				c.JSON(http.StatusNotFound, gin.H{"code": 404, "msg": "Admin not found"})
-				return
-			}
-			if err := bcrypt.CompareHashAndPassword([]byte(admin.PasswordHash), []byte(req.Password)); err != nil {
-				c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Password is incorrect"})
-				return
-			}
-			admin.TOTPEnabled = false
-			admin.TOTPSecret = ""
-			admin.RecoveryCodes = ""
-			config.DB.Save(&admin)
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "2FA disabled"})
-			recordAudit(c, "admin.2fa_disable", "")
-		})
-
-		// ======================================
-		// Access Configuration
-		// ======================================
-		authGroup.GET("/admin/access", func(c *gin.Context) {
-			panelPath := config.GetSetting("panel_path")
-			port := config.GetSetting("port")
-			usageProfile := normalizeUsageProfile(config.GetSetting("usage_profile"))
-			ipWhitelist := config.GetSetting("panel_ip_whitelist")
-			c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
-				"panel_path":    panelPath,
-				"port":          port,
-				"usage_profile": usageProfile,
-				"ip_whitelist":  ipWhitelist,
-				"your_ip":       c.ClientIP(),
-			}})
-		})
-
-		authGroup.PUT("/admin/access", func(c *gin.Context) {
-			var req struct {
-				PanelPath    *string `json:"panel_path"`
-				Port         *string `json:"port"`
-				UsageProfile *string `json:"usage_profile"`
-				IPWhitelist  *string `json:"ip_whitelist"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid request"})
-				return
-			}
-			changed := false
-			if req.PanelPath != nil {
-				setSetting("panel_path", *req.PanelPath)
-				changed = true
-			}
-			if req.Port != nil && *req.Port != "" {
-				// Validate port is a number in range
-				p, err := strconv.Atoi(*req.Port)
-				if err != nil || p < 1 || p > 65535 {
-					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Port must be 1-65535"})
-					return
-				}
-				setSetting("port", *req.Port)
-				changed = true
-			}
-			if req.UsageProfile != nil {
-				setSetting("usage_profile", normalizeUsageProfile(*req.UsageProfile))
-				changed = true
-			}
-			if req.IPWhitelist != nil {
-				setSetting("panel_ip_whitelist", strings.TrimSpace(*req.IPWhitelist))
-				changed = true
-			}
-			msg := "Settings saved."
-			if changed {
-				msg = "Settings saved. Restart panel to apply changes."
-			}
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": msg})
-		})
-
-		authGroup.POST("/admin/restart", func(c *gin.Context) {
-			port := config.GetSetting("port")
-			go func() {
-				if err := updater.RestartSelf(context.Background(), port); err != nil {
-					log.Printf("Restart failed: %v", err)
-				}
-			}()
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Panel restarting with new configuration..."})
-		})
-
-		// ======================================
-		// TLS/HTTPS Certificate Management
-		// ======================================
-		authGroup.GET("/admin/tls/status", func(c *gin.Context) {
-			certPath := config.GetSetting("tls_cert_path")
-			keyPath := config.GetSetting("tls_key_path")
-			enabled := certPath != "" && keyPath != ""
-			c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
-				"enabled":   enabled,
-				"cert_path": certPath,
-				"key_path":  keyPath,
-			}})
-		})
-
-		authGroup.POST("/admin/tls/upload", func(c *gin.Context) {
-			certFile, err := c.FormFile("cert")
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Certificate file is required"})
-				return
-			}
-			keyFile, err := c.FormFile("key")
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Key file is required"})
-				return
-			}
-
-			// Read file contents
-			cf, _ := certFile.Open()
-			defer cf.Close()
-			certData, _ := io.ReadAll(cf)
-			kf, _ := keyFile.Open()
-			defer kf.Close()
-			keyData, _ := io.ReadAll(kf)
-
-			// Validate TLS pair
-			if _, err := tls.X509KeyPair(certData, keyData); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": fmt.Sprintf("Invalid certificate/key pair: %v", err)})
-				return
-			}
-
-			// Save to data/tls/
-			tlsDir := "data/tls"
-			if err := os.MkdirAll(tlsDir, 0700); err != nil {
-				log.Printf("MkdirAll(%s): %v", tlsDir, err)
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to create TLS directory"})
-				return
-			}
-			certDst := filepath.Join(tlsDir, "cert.pem")
-			keyDst := filepath.Join(tlsDir, "key.pem")
-			if err := os.WriteFile(certDst, certData, 0600); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to save certificate"})
-				return
-			}
-			if err := os.WriteFile(keyDst, keyData, 0600); err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Failed to save key"})
-				return
-			}
-
-			setSetting("tls_cert_path", certDst)
-			setSetting("tls_key_path", keyDst)
-
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "TLS certificates uploaded. Restart panel to enable HTTPS."})
-		})
-
-		authGroup.DELETE("/admin/tls", func(c *gin.Context) {
-			os.Remove("data/tls/cert.pem")
-			os.Remove("data/tls/key.pem")
-			setSetting("tls_cert_path", "")
-			setSetting("tls_key_path", "")
-			c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "TLS disabled. Restart panel to apply."})
-		})
-
-		// ======================================
-		// Audit Log
-		// ======================================
-		authGroup.GET("/admin/audit-log", func(c *gin.Context) {
-			limit := 50
-			offset := 0
-			// Sscanf failure leaves the destination at its zero value, which
-			// would silently flip limit to 0 (i.e. "return nothing"). Capture
-			// the count return so a bad query string falls back to defaults
-			// instead of breaking the audit log view.
-			if v := c.Query("limit"); v != "" {
-				if n, _ := fmt.Sscanf(v, "%d", &limit); n != 1 {
-					limit = 50
-				}
-			}
-			if v := c.Query("offset"); v != "" {
-				if n, _ := fmt.Sscanf(v, "%d", &offset); n != 1 {
-					offset = 0
-				}
-			}
-			if limit > 200 {
-				limit = 200
-			}
-			var logs []model.AuditLog
-			var total int64
-			config.DB.Model(&model.AuditLog{}).Count(&total)
-			config.DB.Order("created_at desc").Limit(limit).Offset(offset).Find(&logs)
-			c.JSON(200, gin.H{"code": 200, "data": logs, "total": total})
-		})
-
-		// ======================================
-		// JWT Refresh
-		// ======================================
-		authGroup.POST("/auth/refresh", func(c *gin.Context) {
-			username, _ := c.Get("username")
-			userID, _ := c.Get("user_id")
-			usernameStr, _ := username.(string)
-			userIDStr, _ := userID.(string)
-
-			token, err := jwtutil.GenerateToken(userIDStr, usernameStr, 24*time.Hour)
-			if err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": "Token generation failed"})
-				return
-			}
-			c.JSON(200, gin.H{"code": 200, "token": token})
-		})
-
-		// ======================================
-		// Notification Settings
-		// ======================================
-		notifyKeys := []string{
-			"notify_telegram_token",
-			"notify_telegram_chat_id",
-			"notify_webhook_url",
-			"notify_enable_expiring_soon",
-			"notify_enable_expired",
-			"notify_enable_traffic_limit",
-			"notify_enable_proxy_crashed",
-			"notify_enable_cert_expiry",
-			"notify_telegram_bot_enabled",
-		}
-
-		authGroup.GET("/admin/notify", func(c *gin.Context) {
-			result := map[string]string{}
-			for _, k := range notifyKeys {
-				result[k] = config.GetSetting(k)
-			}
-			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": result})
-		})
-
-		// DNS Settings — controls how Sing-box/Xray resolve domains for outbound traffic.
-		authGroup.GET("/admin/dns", func(c *gin.Context) {
-			mode := config.GetSetting("dns_mode")
-			if mode == "" {
-				mode = "plain"
-			}
-			c.JSON(200, gin.H{"code": 200, "data": gin.H{
-				"dns_mode":      mode,
-				"dns_primary":   config.GetSetting("dns_primary"),
-				"dns_secondary": config.GetSetting("dns_secondary"),
-			}})
-		})
-
-		authGroup.PUT("/admin/dns", func(c *gin.Context) {
-			var req struct {
-				DNSMode      *string `json:"dns_mode"`
-				DNSPrimary   *string `json:"dns_primary"`
-				DNSSecondary *string `json:"dns_secondary"`
-			}
-			if err := c.ShouldBindJSON(&req); err != nil {
-				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
-				return
-			}
-			if req.DNSMode != nil {
-				mode := strings.ToLower(strings.TrimSpace(*req.DNSMode))
-				if mode != "" && mode != "plain" && mode != "doh" {
-					c.JSON(400, gin.H{"code": 400, "msg": "dns_mode must be 'plain' or 'doh'"})
-					return
-				}
-				setSetting("dns_mode", mode)
-			}
-			if req.DNSPrimary != nil {
-				setSetting("dns_primary", strings.TrimSpace(*req.DNSPrimary))
-			}
-			if req.DNSSecondary != nil {
-				setSetting("dns_secondary", strings.TrimSpace(*req.DNSSecondary))
-			}
-			c.JSON(200, gin.H{"code": 200, "msg": "Saved. Re-apply proxy config to take effect."})
-		})
-
-		authGroup.PUT("/admin/notify", func(c *gin.Context) {
-			var payload map[string]string
-			if err := c.ShouldBindJSON(&payload); err != nil {
-				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
-				return
-			}
-			allowed := map[string]bool{}
-			for _, k := range notifyKeys {
-				allowed[k] = true
-			}
-			for k, v := range payload {
-				if allowed[k] {
-					setSetting(k, v)
-				}
-			}
-			c.JSON(200, gin.H{"code": 200, "msg": "Saved"})
-		})
-
-		authGroup.POST("/admin/notify/test", func(c *gin.Context) {
-			var payload struct {
-				Channel string `json:"channel"` // "telegram" | "webhook"
-				Token   string `json:"token"`
-				ChatID  string `json:"chat_id"`
-				URL     string `json:"url"`
-			}
-			if err := c.ShouldBindJSON(&payload); err != nil {
-				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
-				return
-			}
-			cfg := notify.Config{
-				TelegramToken:      payload.Token,
-				TelegramChatID:     payload.ChatID,
-				WebhookURL:         payload.URL,
-				EnableExpiringSoon: true,
-				EnableExpired:      true,
-				EnableTrafficLimit: true,
-				EnableProxyCrashed: true,
-			}
-			if err := notify.SendTest(cfg); err != nil {
-				c.JSON(200, gin.H{"code": 500, "msg": fmt.Sprintf("Test failed: %v", err)})
-				return
-			}
-			c.JSON(200, gin.H{"code": 200, "msg": "Test notification sent"})
-		})
-
+		registerSystemOptimizationRoutes(authGroup)
+		registerSecurityRoutes(authGroup)
 		// ======================================
 		// Backup / Restore
 		// ======================================
-		authGroup.GET("/admin/backup/export", func(c *gin.Context) {
-			filename := fmt.Sprintf("zenithpanel-backup-%s.zip", time.Now().UTC().Format("20060102-150405"))
-			c.Header("Content-Type", "application/zip")
-			c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-			counts, err := backupsvc.Export(c.Writer)
-			if err != nil {
-				log.Printf("Backup export failed: %v", err)
-				// Response body is already being written; trailers are best-effort here.
-				c.Status(500)
-				return
-			}
-			recordAudit(c, "backup.export", fmt.Sprintf("items=%v", counts))
-		})
+		registerBackupRoutes(authGroup, sched, xm, sm)
 
-		authGroup.POST("/admin/backup/restore", func(c *gin.Context) {
-			// Cap body at 16 MB — backups are JSON-in-zip and should stay small.
-			const maxBackupBytes = 16 * 1024 * 1024
-			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBackupBytes)
-			body, err := io.ReadAll(c.Request.Body)
-			if err != nil {
-				c.JSON(400, gin.H{"code": 400, "msg": "Failed to read backup payload (max 16 MB)"})
-				return
-			}
-			if len(body) == 0 {
-				c.JSON(400, gin.H{"code": 400, "msg": "Empty backup payload"})
-				return
-			}
-			counts, err := backupsvc.Restore(body)
-			if err != nil {
-				c.JSON(400, gin.H{"code": 400, "msg": fmt.Sprintf("Restore failed: %v", err)})
-				return
-			}
-			sub.InvalidateSubCache()
-			recordAudit(c, "backup.restore", fmt.Sprintf("items=%v", counts))
-			c.JSON(200, gin.H{"code": 200, "msg": "Restored", "data": counts})
-		})
-
-		// ======================================
-		// Sites (built-in web server / reverse proxy)
-		// ======================================
-		authGroup.GET("/sites", func(c *gin.Context) {
-			var sites []model.Site
-			if err := config.DB.Find(&sites).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": "Failed to list sites"})
-				return
-			}
-			c.JSON(200, gin.H{"code": 200, "msg": "Success", "data": sites})
-		})
-
-		authGroup.POST("/sites", func(c *gin.Context) {
-			var s model.Site
-			if err := c.ShouldBindJSON(&s); err != nil {
-				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
-				return
-			}
-			if s.Name == "" || s.Domain == "" || s.Type == "" {
-				c.JSON(400, gin.H{"code": 400, "msg": "name, domain and type are required"})
-				return
-			}
-			if err := config.DB.Create(&s).Error; err != nil {
-				if strings.Contains(err.Error(), "UNIQUE") {
-					c.JSON(409, gin.H{"code": 409, "msg": "Site name already exists"})
-					return
-				}
-				c.JSON(500, gin.H{"code": 500, "msg": "Failed to create site"})
-				return
-			}
-			go webserverReload()
-			recordAudit(c, "site.create", s.Name)
-			c.JSON(200, gin.H{"code": 200, "msg": "Created", "data": s})
-		})
-
-		authGroup.PUT("/sites/:id", func(c *gin.Context) {
-			id, ok := parseUintID(c)
-			if !ok {
-				return
-			}
-			var s model.Site
-			if err := config.DB.First(&s, "id = ?", id).Error; err != nil {
-				c.JSON(404, gin.H{"code": 404, "msg": "Site not found"})
-				return
-			}
-			if err := c.ShouldBindJSON(&s); err != nil {
-				c.JSON(400, gin.H{"code": 400, "msg": "Invalid parameters"})
-				return
-			}
-			s.ID = id
-			if err := config.DB.Save(&s).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": "Failed to update site"})
-				return
-			}
-			go webserverReload()
-			recordAudit(c, "site.update", s.Name)
-			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": s})
-		})
-
-		authGroup.DELETE("/sites/:id", func(c *gin.Context) {
-			id, ok := parseUintID(c)
-			if !ok {
-				return
-			}
-			if err := config.DB.Delete(&model.Site{}, "id = ?", id).Error; err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": "Failed to delete site"})
-				return
-			}
-			go webserverReload()
-			recordAudit(c, "site.delete", fmt.Sprintf("id=%d", id))
-			c.JSON(200, gin.H{"code": 200, "msg": "Deleted"})
-		})
-
-		authGroup.POST("/sites/:id/enable", func(c *gin.Context) {
-			id, ok := parseUintID(c)
-			if !ok {
-				return
-			}
-			var s model.Site
-			if err := config.DB.First(&s, "id = ?", id).Error; err != nil {
-				c.JSON(404, gin.H{"code": 404, "msg": "Site not found"})
-				return
-			}
-			s.Enable = !s.Enable
-			config.DB.Save(&s)
-			go webserverReload()
-			c.JSON(200, gin.H{"code": 200, "msg": "Updated", "data": gin.H{"enable": s.Enable}})
-		})
-
-		authGroup.POST("/sites/:id/cert", func(c *gin.Context) {
-			id, ok := parseUintID(c)
-			if !ok {
-				return
-			}
-			var s model.Site
-			if err := config.DB.First(&s, "id = ?", id).Error; err != nil {
-				c.JSON(404, gin.H{"code": 404, "msg": "Site not found"})
-				return
-			}
-			if s.TLSEmail == "" {
-				c.JSON(400, gin.H{"code": 400, "msg": "tls_email is required for ACME certificate"})
-				return
-			}
-			certPath, keyPath, err := cert.ObtainCert(s.Domain, s.TLSEmail)
-			if err != nil {
-				c.JSON(500, gin.H{"code": 500, "msg": fmt.Sprintf("ACME failed: %v", err)})
-				return
-			}
-			s.CertPath = certPath
-			s.KeyPath = keyPath
-			s.TLSMode = "custom"
-			config.DB.Save(&s)
-			go webserverReload()
-			c.JSON(200, gin.H{"code": 200, "msg": "Certificate issued", "data": gin.H{
-				"cert_path": certPath, "key_path": keyPath,
-			}})
-		})
-
-		// Smart Deploy — preset-driven one-click egress with reversible
-		// tuning. See docs/superpowers/specs/2026-04-21-smart-deploy-design.md.
-		RegisterDeployRoutes(authGroup)
+		registerSiteRoutes(authGroup, func(ctx context.Context) error { return proxy.ApplyRuntime(ctx, xm, sm, "auto") })
 
 		// Public subscription listener (admin-scoped settings).
 		registerSubscriptionServerRoutes(authGroup, func() string { return config.GetSetting("port") })
@@ -3222,6 +1781,22 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 				c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": err.Error()})
 				return
 			}
+			// The external runner is restarted only through ApplyRuntime so the
+			// config write, per-engine markers, and post-restart probes remain a
+			// single verified transition. Direct manager Restart would only report
+			// an unsupported local operation.
+			if proxy.ExternalRuntimeEnabled() {
+				ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+				err := proxy.ApplyRuntime(ctx, xm, sm, "auto")
+				cancel()
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "msg": "Ad-block setting saved but external proxy update failed: " + err.Error()})
+					return
+				}
+				recordAudit(c, "adblock.toggle", val)
+				c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Ad-block " + val, "data": gin.H{"enabled": req.Enabled}})
+				return
+			}
 			// Restart whichever engine(s) are running so the new routing rule
 			// materializes. Dual mode runs both restarts concurrently — they
 			// touch different binaries and config files, and serially they'd
@@ -3253,7 +1828,7 @@ func SetupRoutes(r *gin.Engine, dm *docker.Manager, xm *proxy.XrayManager, sm *p
 		registerAPITokenRoutes(authGroup)
 
 		// Prometheus-compatible metrics endpoint (authenticated). See metrics.go.
-		registerMetricsRoute(authGroup, xm, sm)
+		registerMetricsRoute(authGroup, xm, sm, eg)
 	}
 
 	// Start background lockout cleanup and rate-limiter map GC

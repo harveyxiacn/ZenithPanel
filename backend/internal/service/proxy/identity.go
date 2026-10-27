@@ -7,16 +7,22 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 )
 
-// StatsIdentities maps every client ID to the user name emitted into the
-// engine configs (Xray `email`, sing-box user `name`). Engines report
-// traffic per name, so the name must identify exactly one Client row.
-//
-// Emails are only unique per inbound (the same person usually has one row
-// per protocol), so a bare email is used only when no other row shares it;
-// otherwise the row gets "email#<client id>". Computed over all clients
-// (enabled or not) so a client's identity doesn't change when another row
-// is toggled.
+// StatsIdentities maps every client ID to the canonical engine-visible name.
+// Client emails are mutable and only unique within an inbound, so all new
+// Xray and sing-box configurations use ClientIdentity instead.
 func StatsIdentities(clients []model.Client) map[uint]string {
+	out := make(map[uint]string, len(clients))
+	for _, c := range clients {
+		out[c.ID] = ClientIdentity(c.ID)
+	}
+	return out
+}
+
+// LegacyStatsIdentities returns the names emitted by panel versions before
+// canonical client IDs. Keep this separate from StatsIdentities so accounting
+// can recognize a still-running external proxy during a panel-only upgrade
+// without ever emitting the legacy names in a newly generated configuration.
+func LegacyStatsIdentities(clients []model.Client) map[uint]string {
 	count := make(map[string]int, len(clients))
 	for _, c := range clients {
 		count[c.Email]++
@@ -39,14 +45,6 @@ func LoadStatsIdentities() map[uint]string {
 		config.DB.Select("id", "email").Find(&clients)
 	}
 	return StatsIdentities(clients)
-}
-
-// identityOf returns the engine-facing user name for c.
-func identityOf(ids map[uint]string, c model.Client) string {
-	if id, ok := ids[c.ID]; ok {
-		return id
-	}
-	return c.Email
 }
 
 // ClashAPIEnabled reports whether sing-box exposes its Clash API (bound to

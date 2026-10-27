@@ -7,6 +7,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"gorm.io/gorm"
 )
 
@@ -98,6 +99,36 @@ func TestApplyDeltasIsNoOpWithNilDB(t *testing.T) {
 	a := &Accountant{db: nil}
 	// Must not panic.
 	a.applyDeltas(map[string]pendingDelta{"alice@x": {up: 1, down: 1}}, "test")
+}
+
+func TestApplyDeltasUsesStableClientIdentityAndSkipsAmbiguousLegacyEmail(t *testing.T) {
+	db := newTestDB(t)
+	first := model.Client{Email: "same@example", InboundID: 1, Enable: true}
+	second := model.Client{Email: "same@example", InboundID: 2, Enable: true}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	a := &Accountant{db: db}
+	if settled := a.applyDeltas(map[string]pendingDelta{proxy.ClientIdentity(first.ID): {up: 100, down: 200}}, "test"); !settled[proxy.ClientIdentity(first.ID)] {
+		t.Fatal("canonical identity was not settled")
+	}
+	// An old engine config can still emit an email. It must not double-charge
+	// both rows once that email is no longer globally unique.
+	if settled := a.applyDeltas(map[string]pendingDelta{"same@example": {up: 50}}, "test"); !settled["same@example"] {
+		t.Fatal("unmatched legacy identity was not settled")
+	}
+	var gotFirst, gotSecond model.Client
+	db.First(&gotFirst, first.ID)
+	db.First(&gotSecond, second.ID)
+	if gotFirst.UpLoad != 100 || gotFirst.DownLoad != 200 {
+		t.Fatalf("first=%+v", gotFirst)
+	}
+	if gotSecond.UpLoad != 0 || gotSecond.DownLoad != 0 {
+		t.Fatalf("second=%+v", gotSecond)
+	}
 }
 
 func TestEngineForProtocolXrayProtocols(t *testing.T) {

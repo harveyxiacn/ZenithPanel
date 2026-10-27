@@ -42,6 +42,9 @@ func setupDeployTestRouter(t *testing.T) (*gin.Engine, string, *gorm.DB) {
 	cfg.IsSetupComplete = true
 	cfg.PanelPrefix = "/"
 
+	if err := db.Create(&model.AdminUser{Username: "admin", PasswordHash: "test-hash"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	jwtutil.InitSecret([]byte("0123456789abcdef0123456789abcdef"))
 	token, err := jwtutil.GenerateToken("1", "admin", time.Hour)
 	if err != nil {

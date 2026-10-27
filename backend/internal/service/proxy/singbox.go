@@ -21,8 +21,9 @@ type SingboxManager struct {
 func NewSingboxManager() *SingboxManager {
 	return &SingboxManager{
 		BaseCore: BaseCore{
-			BinaryPath: "sing-box",
-			ConfigPath: "data/singbox_config.json",
+			BinaryPath:     "sing-box",
+			ConfigPath:     "data/singbox_config.json",
+			externalEngine: "singbox",
 		},
 	}
 }
@@ -126,14 +127,15 @@ func (s *SingboxManager) GenerateConfig() (string, error) {
 		seen := map[string]bool{}
 		for _, in := range inbounds {
 			for _, c := range clientsByInbound[in.ID] {
-				if seen[c.Email] {
+				identity := ClientIdentity(c.ID)
+				if seen[identity] {
 					continue
 				}
-				seen[c.Email] = true // Email already holds the stats identity
-				tag := UserOutboundPrefix + c.Email
+				seen[identity] = true
+				tag := UserOutboundPrefix + identity
 				outbounds = append(outbounds, map[string]any{"type": "direct", "tag": tag})
 				routeRules = append(routeRules, map[string]any{
-					"auth_user": []string{c.Email},
+					"auth_user": []string{identity},
 					"action":    "route",
 					"outbound":  tag,
 				})
@@ -232,7 +234,7 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]a
 		users := make([]map[string]any, 0, len(clients))
 		for _, c := range clients {
 			u := map[string]any{
-				"name": c.Email,
+				"name": ClientIdentity(c.ID),
 				"uuid": c.UUID,
 			}
 			// Add flow if configured (e.g., xtls-rprx-vision)
@@ -249,7 +251,7 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]a
 		users := make([]map[string]any, 0, len(clients))
 		for _, c := range clients {
 			users = append(users, map[string]any{
-				"name":    c.Email,
+				"name":    ClientIdentity(c.ID),
 				"uuid":    c.UUID,
 				"alterId": 0,
 			})
@@ -260,7 +262,7 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]a
 		users := make([]map[string]any, 0, len(clients))
 		for _, c := range clients {
 			users = append(users, map[string]any{
-				"name":     c.Email,
+				"name":     ClientIdentity(c.ID),
 				"password": c.UUID,
 			})
 		}
@@ -281,7 +283,7 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]a
 				users := make([]map[string]any, 0, len(clients))
 				for _, c := range clients {
 					users = append(users, map[string]any{
-						"name":     c.Email,
+						"name":     ClientIdentity(c.ID),
 						"password": c.UUID,
 					})
 				}
@@ -293,7 +295,7 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]a
 		users := make([]map[string]any, 0, len(clients))
 		for _, c := range clients {
 			users = append(users, map[string]any{
-				"name":     c.Email,
+				"name":     ClientIdentity(c.ID),
 				"password": c.UUID,
 			})
 		}
@@ -342,7 +344,7 @@ func buildSingboxInbound(in model.Inbound, clients []model.Client) (map[string]a
 		users := make([]map[string]any, 0, len(clients))
 		for _, c := range clients {
 			users = append(users, map[string]any{
-				"name":     c.Email,
+				"name":     ClientIdentity(c.ID),
 				"uuid":     c.UUID,
 				"password": c.UUID,
 			})
@@ -988,6 +990,9 @@ func buildSingboxOutbound(ob model.Outbound) map[string]any {
 }
 
 func (s *SingboxManager) Start() error {
+	if ExternalRuntimeEnabled() {
+		return fmt.Errorf("sing-box is managed by external proxy runner; use proxy apply to update its configuration")
+	}
 	if s.Status() {
 		return fmt.Errorf("sing-box is already running")
 	}

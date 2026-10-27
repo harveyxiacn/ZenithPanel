@@ -279,3 +279,60 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	os.Exit(code)
 }
+
+func TestApplyRuntimeFailureRevertsOperationsAndReappliesPreviousState(t *testing.T) {
+	o, _, _, inbounds, _ := setupTestOrchestrator(t)
+	calls := 0
+	o.SetRuntimeApply(func(context.Context) error {
+		calls++
+		if calls == 1 {
+			return errors.New("engine rejected candidate")
+		}
+		return nil
+	})
+	dep, err := o.Apply(context.Background(), model.PresetStableEgress, Input{})
+	if err == nil || dep.Status != model.DeployStatusFailed || calls != 2 || len(inbounds.deleted) != 1 {
+		t.Fatalf("dep=%+v err=%v calls=%d deleted=%v", dep, err, calls, inbounds.deleted)
+	}
+}
+
+func TestPersistedPresetClientsAndCollisionRollback(t *testing.T) {
+	_, db, _, _, _ := setupTestOrchestrator(t)
+	if err := db.AutoMigrate(&model.Client{}); err != nil {
+		t.Fatal(err)
+	}
+	d := dbInboundDeployer{db: db}
+	spec := InboundSpec{Tag: "preset", Protocol: "vless", Port: 1443, Settings: map[string]any{"clients": []map[string]any{{"id": "credential", "email": "user", "flow": "xtls-rprx-vision"}}}, ServerAddress: "203.0.113.1"}
+	id, err := d.Create(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clients []model.Client
+	if err := db.Where("inbound_id = ?", id).Find(&clients).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(clients) != 1 || clients[0].UUID != "credential" {
+		t.Fatalf("clients=%+v", clients)
+	}
+	spec.Tag = "collision"
+	if _, err := d.Create(spec); err == nil {
+		t.Fatal("port collision accepted")
+	}
+	if err := d.Delete(id); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	db.Model(&model.Client{}).Count(&count)
+	if count != 0 {
+		t.Fatal("orphaned clients")
+	}
+}
+
+func TestQUICPresetUsesSharedTransportSchema(t *testing.T) {
+	spec := InboundSpec{Stream: map[string]any{"tls": map[string]any{"server_name": "test.local", "certificate_path": "cert.pem", "key_path": "key.pem", "insecure": true}}}
+	stream := canonicalStream(spec)
+	tls, ok := stream["tlsSettings"].(map[string]any)
+	if !ok || stream["security"] != "tls" || tls["serverName"] != "test.local" || tls["allowInsecure"] != true {
+		t.Fatalf("stream=%+v", stream)
+	}
+}

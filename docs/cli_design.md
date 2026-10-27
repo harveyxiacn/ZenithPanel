@@ -178,22 +178,22 @@ Global flags: `--host`, `--socket`, `--token`, `--output (json|table|yaml)`,
 
 ## 6. Scopes
 
-Tokens carry a comma-separated scope list (`*` = full). Per-route scope checks
-live in a small helper used inside each handler:
+Tokens carry a comma-separated scope list. The accepted vocabulary is closed;
+unknown or misspelled scopes are rejected at creation time:
 
 | Scope         | Grants                                           |
 |---            |---                                               |
 | `read`        | All `GET` endpoints                              |
 | `write`       | Mutations on `/inbounds /clients /routing-rules` |
 | `proxy:apply` | `POST /proxy/apply`, reload                      |
-| `system`      | BBR/swap/sysctl, cleanup                         |
-| `firewall`    | iptables rules                                   |
-| `backup`      | Export and restore                               |
-| `admin`       | `admin/*` including 2FA, password change, TLS    |
-| `*`           | Everything                                       |
+| `infra:read`  | Read Docker, files, firewall, cron and diagnostics|
+| `infra:write` | Mutate Docker, files, firewall, cron and system tuning |
+| `terminal`    | Mint a single-use terminal WebSocket ticket      |
+| `admin`       | Admin, backup, update, Sites and TLS operations   |
 
-Default for `token bootstrap` and Web-UI-issued tokens is `*`. Operators are
-encouraged to scope tokens used by automation.
+Web-UI and `token create` tokens default to `read`. The root-only Unix-socket
+`token bootstrap` remains a full-scope compatibility credential; use it to mint
+narrower automation tokens and then keep it on the host.
 
 ## 7. Security Notes
 

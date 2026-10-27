@@ -373,6 +373,53 @@ func TestBuildHysteria2LinkRespectsObfsAndInsecureFlag(t *testing.T) {
 	}
 }
 
+func TestSubscriptionLinksBracketIPv6Authorities(t *testing.T) {
+	const server = "2001:db8:42::7"
+	const endpoint = "[2001:db8:42::7]:443"
+	client := model.Client{UUID: "client-uuid"}
+
+	vless := model.Inbound{Tag: "vless", Protocol: "vless", Port: 443, Stream: `{"network":"tcp","security":"reality"}`}
+	hy2 := model.Inbound{Tag: "hy2", Protocol: "hysteria2", Port: 443, Stream: `{"network":"udp","security":"tls"}`}
+	trojan := model.Inbound{Tag: "trojan", Protocol: "trojan", Port: 443, Stream: `{"network":"tcp","security":"tls"}`}
+	ss := model.Inbound{Tag: "ss", Protocol: "shadowsocks", Port: 443, Settings: `{"method":"aes-256-gcm","password":"secret"}`}
+	tuic := model.Inbound{Tag: "tuic", Protocol: "tuic", Port: 443, Stream: `{"network":"udp","security":"tls"}`}
+
+	links := []string{
+		buildVLESSLink(vless, client, server, parseStream(vless.Stream)),
+		buildHysteria2Link(hy2, client, server, parseStream(hy2.Stream), hy2.Tag),
+		buildTrojanLink(trojan, client, server, parseStream(trojan.Stream), trojan.Tag),
+		buildSSLink(ss, client, server, ss.Tag),
+		buildTUICLink(tuic, client, server, parseStream(tuic.Stream), tuic.Tag),
+	}
+	for _, link := range links {
+		if !strings.Contains(link, "@"+endpoint) {
+			t.Fatalf("expected bracketed IPv6 authority %q in %q", endpoint, link)
+		}
+		if strings.Contains(link, "@"+server+":443") {
+			t.Fatalf("found ambiguous unbracketed IPv6 authority in %q", link)
+		}
+	}
+
+	if got := subscriptionHostPort("["+server+"]", 443); got != endpoint {
+		t.Fatalf("already bracketed IPv6 endpoint = %q, want %q", got, endpoint)
+	}
+}
+
+func TestBuildClashConfigUsesIPv6CIDRRule(t *testing.T) {
+	inbounds := []model.Inbound{
+		{Tag: "vless-v6", Protocol: "vless", Port: 443, Stream: `{"network":"tcp","security":"reality"}`},
+		{Tag: "hy2-v6", Protocol: "hysteria2", Port: 8443, Stream: `{"network":"udp","security":"tls"}`},
+	}
+	yaml := buildClashConfig(inbounds, model.Client{UUID: "client-uuid"}, "2001:db8:42::7")
+
+	if !strings.Contains(yaml, "IP-CIDR6,2001:db8:42::7/128,DIRECT,no-resolve") {
+		t.Fatalf("expected IPv6 direct rule, got:\n%s", yaml)
+	}
+	if strings.Contains(yaml, "IP-CIDR,2001:db8:42::7/32") {
+		t.Fatalf("IPv6 address must not be emitted as an IPv4 CIDR, got:\n%s", yaml)
+	}
+}
+
 // TestBuildSSLinkSS2022CombinesServerAndUserPSK pins the multi-user-mode
 // password format: clients must authenticate with `serverPSK:userPSK`.
 // Pre-fix the share URL was emitting only the server PSK, so SS-2022

@@ -3,6 +3,8 @@ package diagnostic
 import (
 	"crypto/tls"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +53,24 @@ func TestProcContainsListenPort(t *testing.T) {
 	}
 }
 
+func TestPortIsBoundForFamilyRecognizesDualStackKernelEntry(t *testing.T) {
+	// Linux exposes a dual-stack wildcard socket in tcp6. An IPv4 health
+	// probe must not reject it before attempting its real IPv4 dial.
+	tcp6 := `  sl  local_address                         remote_address                        st
+   0: 00000000000000000000000000000000:01BB 00000000000000000000000000000000:0000 0A
+`
+	oldRoot := procRoot
+	tmp := t.TempDir()
+	procRoot = tmp
+	t.Cleanup(func() { procRoot = oldRoot })
+	if err := os.WriteFile(filepath.Join(tmp, "tcp6"), []byte(tcp6), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !portIsBoundForFamily(443, "tcp", "ipv4") {
+		t.Fatal("IPv4 probe did not recognize a tcp6 dual-stack candidate")
+	}
+}
+
 // TestProbeInboundTCP brings up a localhost TCP listener, runs the prober,
 // and verifies OK=true plus a short elapsed time. The probe never reaches
 // outside the process so this is a real end-to-end exercise of the bound +
@@ -91,8 +111,64 @@ func TestProbeInboundTCP(t *testing.T) {
 	if res.Stage != "" {
 		t.Errorf("expected no failure stage, got %q", res.Stage)
 	}
+	if res.Family != "ipv4" || res.Verification != "tcp_connect" {
+		t.Errorf("unexpected verification result: %#v", res)
+	}
 	if res.ElapsedMs < 0 || res.ElapsedMs > 4000 {
 		t.Errorf("elapsed_ms out of range: %d", res.ElapsedMs)
+	}
+}
+
+func TestProbeInboundIPv6TCP(t *testing.T) {
+	ln, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback is unavailable: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	in := model.Inbound{ID: 10, Tag: "test-ipv6", Protocol: "vless", Listen: "::", Port: ln.Addr().(*net.TCPAddr).Port}
+	res := ProbeInboundFamily(in, "ipv6")
+	// Some Windows CI sandboxes permit binding ::1 but deny a subsequent
+	// loopback IPv6 connect. That is an environment policy rather than a
+	// prober failure; Linux deployment hosts still exercise this path.
+	if !res.OK && strings.Contains(strings.ToLower(res.Err), "access") {
+		t.Skipf("IPv6 loopback dial is blocked by the test environment: %s", res.Err)
+	}
+	if !res.OK || res.Family != "ipv6" || res.Verification != "tcp_connect" {
+		t.Fatalf("expected IPv6 TCP probe to pass, got %#v", res)
+	}
+}
+
+func TestProbeDialHostFamilySelection(t *testing.T) {
+	cases := []struct {
+		name, listen, requested, wantHost, wantFamily string
+		wantErr                                       bool
+	}{
+		{"automatic wildcard keeps readiness IPv4", "", "auto", "127.0.0.1", "ipv4", false},
+		{"explicit IPv6 chooses bound address", "2001:db8::10", "auto", "2001:db8::10", "ipv6", false},
+		{"IPv6 wildcard uses loopback", "::", "ipv6", "::1", "ipv6", false},
+		{"IPv6 request rejects IPv4 bind", "192.0.2.10", "ipv6", "", "ipv6", true},
+		{"IPv4 request rejects IPv6 bind", "2001:db8::10", "ipv4", "", "ipv4", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			host, family, err := ProbeDialHost(model.Inbound{Listen: c.listen}, c.requested)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("ProbeDialHost error = %v, wantErr %v", err, c.wantErr)
+			}
+			if host != c.wantHost || family != c.wantFamily {
+				t.Fatalf("ProbeDialHost = (%q, %q), want (%q, %q)", host, family, c.wantHost, c.wantFamily)
+			}
+		})
 	}
 }
 
@@ -165,6 +241,9 @@ func TestProbeInboundTLSHandshake(t *testing.T) {
 	res := ProbeInbound(in)
 	if !res.OK {
 		t.Fatalf("expected OK=true after TLS handshake, got %#v", res)
+	}
+	if res.Verification != "tls_handshake" {
+		t.Errorf("expected TLS handshake verification, got %#v", res)
 	}
 	if !strings.Contains(res.Transport, "tls") {
 		t.Errorf("transport should contain 'tls', got %q", res.Transport)

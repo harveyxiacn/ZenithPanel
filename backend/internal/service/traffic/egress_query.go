@@ -1,6 +1,8 @@
 package traffic
 
 import (
+	"context"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"sort"
 	"time"
 
@@ -84,8 +86,12 @@ func (e *EgressCollector) tableFor(start int64) string {
 	return "traffic_egress"
 }
 
-func (e *EgressCollector) base(f EgressFilter) *gorm.DB {
-	q := e.db.Table(e.tableFor(f.Start)).Where("bucket >= ? AND bucket < ?", f.Start, f.End)
+func (e *EgressCollector) base(ctx context.Context, f EgressFilter) *gorm.DB {
+	db := e.db
+	if db == config.DB {
+		db = config.ReadDB()
+	}
+	q := db.WithContext(ctx).Table(e.tableFor(f.Start)).Where("bucket >= ? AND bucket < ?", f.Start, f.End)
 	if f.Instance != "" {
 		q = q.Where("instance = ?", f.Instance)
 	}
@@ -100,27 +106,41 @@ func (e *EgressCollector) base(f EgressFilter) *gorm.DB {
 
 // Query returns detail rows, newest bucket first, capped at Limit (default 1000).
 func (e *EgressCollector) Query(f EgressFilter) []EgressRow {
+	rows, _ := e.QueryContext(context.Background(), f)
+	return rows
+}
+
+func (e *EgressCollector) QueryContext(ctx context.Context, f EgressFilter) ([]EgressRow, error) {
 	if e == nil || e.db == nil {
-		return nil
+		return nil, nil
 	}
 	limit := f.Limit
 	if limit <= 0 || limit > 5000 {
 		limit = 1000
 	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	var rows []EgressRow
-	e.base(f).Order("bucket desc").Limit(limit).Scan(&rows)
-	return rows
+	err := e.base(ctx, f).Order("bucket desc").Limit(limit).Scan(&rows).Error
+	return rows, err
 }
 
 // Export returns all detail rows matching the filter (no UI row cap), oldest
 // bucket first, for CSV download. Hard-bounded to avoid unbounded memory.
 func (e *EgressCollector) Export(f EgressFilter) []EgressRow {
-	if e == nil || e.db == nil {
-		return nil
-	}
-	var rows []EgressRow
-	e.base(f).Order("bucket asc").Limit(200000).Scan(&rows)
+	rows, _ := e.ExportContext(context.Background(), f)
 	return rows
+}
+
+func (e *EgressCollector) ExportContext(ctx context.Context, f EgressFilter) ([]EgressRow, error) {
+	if e == nil || e.db == nil {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var rows []EgressRow
+	err := e.base(ctx, f).Order("bucket asc").Limit(20000).Scan(&rows).Error
+	return rows, err
 }
 
 var summaryCols = map[string]string{
@@ -139,9 +159,16 @@ var summaryCols = map[string]string{
 // rollup drops the IP column and pre-folds rDNS into dest_host, so there it
 // falls back to dest_host only).
 func (e *EgressCollector) Summary(f EgressFilter, groupBy string) []EgressSummaryRow {
+	rows, _ := e.SummaryContext(context.Background(), f, groupBy)
+	return rows
+}
+
+func (e *EgressCollector) SummaryContext(ctx context.Context, f EgressFilter, groupBy string) ([]EgressSummaryRow, error) {
 	if e == nil || e.db == nil {
-		return nil
+		return nil, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	var groupExpr string
 	destKind := false
 	switch {
@@ -170,7 +197,7 @@ func (e *EgressCollector) Summary(f EgressFilter, groupBy string) []EgressSummar
 		sel += ", MAX(CASE WHEN dest_host <> '' THEN 2 WHEN dest_rdns <> '' THEN 1 ELSE 0 END) as kind_rank"
 	}
 	var rows []EgressSummaryRow
-	e.base(f).Select(sel).Group(groupExpr).Order("bytes_total desc").Limit(500).Scan(&rows)
+	err := e.base(ctx, f).Select(sel).Group(groupExpr).Order("bytes_total desc").Limit(500).Scan(&rows).Error
 	if destKind {
 		for i := range rows {
 			switch rows[i].KindRank {
@@ -183,15 +210,22 @@ func (e *EgressCollector) Summary(f EgressFilter, groupBy string) []EgressSummar
 			}
 		}
 	}
-	return rows
+	return rows, err
 }
 
 // Series returns per-bucket byte totals for the time chart, optionally split by
 // instance so the UI can render a stacked area per proxy.
 func (e *EgressCollector) Series(f EgressFilter, splitInstance bool) []SeriesPoint {
+	rows, _ := e.SeriesContext(context.Background(), f, splitInstance)
+	return rows
+}
+
+func (e *EgressCollector) SeriesContext(ctx context.Context, f EgressFilter, splitInstance bool) ([]SeriesPoint, error) {
 	if e == nil || e.db == nil {
-		return nil
+		return nil, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	sel := "bucket, SUM(bytes_up) as bytes_up, SUM(bytes_down) as bytes_down"
 	grp := "bucket"
 	if splitInstance {
@@ -199,8 +233,8 @@ func (e *EgressCollector) Series(f EgressFilter, splitInstance bool) []SeriesPoi
 		grp = "bucket, instance"
 	}
 	var pts []SeriesPoint
-	e.base(f).Select(sel).Group(grp).Order("bucket asc").Scan(&pts)
-	return pts
+	err := e.base(ctx, f).Select(sel).Group(grp).Order("bucket asc").Limit(20000).Scan(&pts).Error
+	return pts, err
 }
 
 // Coverage reports, per instance, what fidelity is actually present — computed
@@ -208,9 +242,16 @@ func (e *EgressCollector) Series(f EgressFilter, splitInstance bool) []SeriesPoi
 // unioned with live-discovered egress programs that haven't moved traffic yet.
 // Nothing about the instance set or its capabilities is hard-coded.
 func (e *EgressCollector) Coverage() []InstanceCoverage {
+	rows, _ := e.CoverageContext(context.Background())
+	return rows
+}
+
+func (e *EgressCollector) CoverageContext(ctx context.Context) ([]InstanceCoverage, error) {
 	if e == nil || e.db == nil {
-		return nil
+		return nil, nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	type aggRow struct {
 		Instance  string
 		HasDomain int
@@ -219,14 +260,21 @@ func (e *EgressCollector) Coverage() []InstanceCoverage {
 	}
 	var rows []aggRow
 	since := time.Now().AddDate(0, 0, -getIntSetting(SettingEgressRetentionDays, defaultHotDays, 1, 365)).Unix()
-	e.db.Model(&model.TrafficEgress{}).
-		Select("instance, " +
-			"MAX(CASE WHEN dest_host <> '' THEN 1 ELSE 0 END) as has_domain, " +
-			"MAX(CASE WHEN user_email <> '' THEN 1 ELSE 0 END) as has_user, " +
+	db := e.db
+	if db == config.DB {
+		db = config.ReadDB()
+	}
+	err := db.WithContext(ctx).Model(&model.TrafficEgress{}).
+		Select("instance, "+
+			"MAX(CASE WHEN dest_host <> '' THEN 1 ELSE 0 END) as has_domain, "+
+			"MAX(CASE WHEN user_email <> '' THEN 1 ELSE 0 END) as has_user, "+
 			"MAX(CASE WHEN bytes_up + bytes_down > 0 THEN 1 ELSE 0 END) as has_bytes").
 		Where("bucket >= ?", since).
-		Group("instance").Scan(&rows)
+		Group("instance").Scan(&rows).Error
 
+	if err != nil {
+		return nil, err
+	}
 	byInst := map[string]InstanceCoverage{}
 	for _, r := range rows {
 		if r.Instance == "" {
@@ -259,7 +307,7 @@ func (e *EgressCollector) Coverage() []InstanceCoverage {
 		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Instance < out[j].Instance })
-	return out
+	return out, err
 }
 
 // coverageNote describes an instance's fidelity from the dimensions actually

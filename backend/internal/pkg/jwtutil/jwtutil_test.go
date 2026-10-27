@@ -64,3 +64,40 @@ func TestUninitializedSecret(t *testing.T) {
 		t.Fatalf("Expected error 'JWT secret not initialized', got %v", err)
 	}
 }
+
+func TestSetupTokenPurpose(t *testing.T) {
+	InitSecret([]byte("test-secret-that-is-at-least-32-bytes"))
+	token, err := GenerateSetupToken(time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := ValidateToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.Purpose != PurposeSetup || claims.UserID != "setup-admin" {
+		t.Fatalf("unexpected setup claims: %#v", claims)
+	}
+}
+
+func TestSessionRefreshCannotExtendAbsoluteLifetime(t *testing.T) {
+	InitSecret([]byte("test-secret-that-is-at-least-32-bytes"))
+	login := time.Now().Add(-MaxSessionAge + time.Minute)
+	token, err := GenerateSessionToken("1", "admin", 2, login, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := ValidateToken(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.ExpiresAt.After(login.Add(MaxSessionAge)) || claims.SessionVersion != 2 || claims.LoggedInAt != login.Unix() {
+		t.Fatalf("claims=%+v", claims)
+	}
+	expired, err := GenerateSessionToken("1", "admin", 2, time.Now().Add(-MaxSessionAge-time.Hour), time.Hour)
+	if err == nil {
+		if _, err := ValidateToken(expired); err == nil {
+			t.Fatal("absolute-expired session validated")
+		}
+	}
+}

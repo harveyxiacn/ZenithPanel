@@ -167,20 +167,21 @@ zenithctl raw <METHOD> <PATH> [--data @file|-]  — 调用任意 API 的逃生�
 
 ## 6. 作用域
 
-Token 携带逗号分隔的作用域（`*` = 全权）。处理器内调用一个小助手做校验：
+Token 携带逗号分隔的作用域。作用域词表是封闭的，创建时会拒绝未知或拼错的值：
 
 | 作用域        | 授予                                          |
 |---            |---                                            |
 | `read`        | 所有 `GET`                                    |
 | `write`       | `/inbounds /clients /routing-rules` 变更       |
 | `proxy:apply` | `POST /proxy/apply`、reload                   |
-| `system`      | BBR/swap/sysctl、清理                          |
-| `firewall`    | iptables 规则                                  |
-| `backup`      | 导出与恢复                                     |
-| `admin`       | `admin/*`，含 2FA、改密、TLS                    |
-| `*`           | 全部                                           |
+| `infra:read`  | 读取 Docker、文件、防火墙、定时任务和诊断       |
+| `infra:write` | 变更 Docker、文件、防火墙、定时任务和系统调优   |
+| `terminal`    | 签发一次性终端 WebSocket 票据                   |
+| `admin`       | 管理、备份、更新、Sites 与 TLS 操作              |
 
-`token bootstrap` 与 Web UI 默认签 `*`。自动化场景建议显式收窄。
+Web UI 与 `token create` 默认签发 `read`。仅限 root Unix socket 的
+`token bootstrap` 保留全权兼容凭据；应使用它签发更窄的自动化 token，并把
+bootstrap 凭据留在宿主机上。
 
 ## 7. 安全注记
 

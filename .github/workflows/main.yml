@@ -1,6 +1,7 @@
 name: CI and Docker Publish
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main" ]
     tags: [ 'v*.*.*' ]
@@ -19,7 +20,7 @@ jobs:
         uses: actions/checkout@v6.0.2
 
       - name: Set up Go
-        uses: actions/setup-go@v6.3.0
+        uses: actions/setup-go@v6.4.0
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
@@ -37,7 +38,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9.0.0
         with:
-          version: v2.6.2
+          version: v2.11
           working-directory: backend
 
   backend-verify:
@@ -47,13 +48,13 @@ jobs:
         uses: actions/checkout@v6.0.2
 
       - name: Set up Go
-        uses: actions/setup-go@v6.3.0
+        uses: actions/setup-go@v6.4.0
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6.3.0
+        uses: actions/setup-node@v6.4.0
         with:
           node-version: 24
           cache: npm
@@ -75,7 +76,20 @@ jobs:
 
       - name: Run backend tests
         working-directory: backend
-        run: go test ./...
+        run: go test -coverprofile=coverage.out ./...
+
+      - name: Report backend coverage
+        working-directory: backend
+        run: |
+          go tool cover -func=coverage.out
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {gsub(/%/, "", $3); print $3}')
+          awk -v total="$total" 'BEGIN { if (total < 30) { printf "coverage %.1f%% is below 30%% baseline\n", total; exit 1 } }'
+
+      - name: Upload backend coverage
+        uses: actions/upload-artifact@v6.0.0
+        with:
+          name: backend-coverage
+          path: backend/coverage.out
 
   frontend-verify:
     runs-on: ubuntu-latest
@@ -87,7 +101,7 @@ jobs:
         uses: actions/checkout@v6.0.2
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6.3.0
+        uses: actions/setup-node@v6.4.0
         with:
           node-version: 24
           cache: npm
@@ -96,8 +110,64 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Run frontend tests
+        run: npm test
+
+      - name: Audit frontend dependency tree
+        run: npm audit --audit-level=moderate
+
       - name: Run frontend production build
         run: npm run build
+
+  security-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@v6.4.0
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Prepare embedded assets for package loading
+        run: |
+          mkdir -p backend/internal/api/dist/assets
+          touch backend/internal/api/dist/index.html
+          touch backend/internal/api/dist/assets/.gitkeep
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.2.0
+
+      - name: Scan reachable Go vulnerabilities
+        working-directory: backend
+        run: govulncheck ./...
+
+  ipv6-protocol-e2e:
+    # A real local data path: sing-box client -> IPv6 loopback -> Xray VLESS
+    # or sing-box Hysteria2 -> IPv6 loopback HTTP origin. It needs no VPS or
+    # Internet egress after these pinned binaries are downloaded.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Download pinned protocol engines
+        run: |
+          mkdir -p /tmp/zenith-ipv6-e2e
+          curl -fsSL -o /tmp/zenith-ipv6-e2e/xray.zip https://github.com/XTLS/Xray-core/releases/download/v26.10.21/Xray-linux-64.zip
+          echo '0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978  /tmp/zenith-ipv6-e2e/xray.zip' | sha256sum -c -
+          unzip -q /tmp/zenith-ipv6-e2e/xray.zip xray -d /tmp/zenith-ipv6-e2e
+          chmod 755 /tmp/zenith-ipv6-e2e/xray
+          curl -fsSL -o /tmp/zenith-ipv6-e2e/sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.14.2/sing-box-1.14.2-linux-amd64.tar.gz
+          echo 'a684484d7477d1437282ee411f4d131d0340aaad60a7868841ebd5d87dd8a0c6  /tmp/zenith-ipv6-e2e/sing-box.tar.gz' | sha256sum -c -
+          tar -xzf /tmp/zenith-ipv6-e2e/sing-box.tar.gz -C /tmp/zenith-ipv6-e2e
+          cp /tmp/zenith-ipv6-e2e/sing-box-1.14.2-linux-amd64/sing-box /tmp/zenith-ipv6-e2e/sing-box
+          chmod 755 /tmp/zenith-ipv6-e2e/sing-box
+
+      - name: Exercise IPv6 VLESS and Hysteria2 data paths
+        run: XRAY_BIN=/tmp/zenith-ipv6-e2e/xray SINGBOX_BIN=/tmp/zenith-ipv6-e2e/sing-box bash scripts/test_ipv6_protocol_e2e.sh
 
   docker-smoke:
     # End-to-end smoke of the published Docker image: build locally with the
@@ -118,7 +188,7 @@ jobs:
         uses: docker/setup-buildx-action@v4.0.0
 
       - name: Build image locally (no push)
-        uses: docker/build-push-action@v7.0.0
+        uses: docker/build-push-action@v7.2.0
         with:
           context: .
           load: true
@@ -135,6 +205,12 @@ jobs:
             zenithpanel:smoke
           # Tiny startup grace; the polling loop covers slow boots.
           sleep 2
+
+      - name: Verify persistent external runner preserves a VLESS stream
+        # This creates uniquely named, host-networked test containers and a
+        # temporary volume, then cleans them with a trap. It replaces only a
+        # panel test container; it never pulls or updates a published image.
+        run: bash scripts/test_external_proxy_runner.sh zenithpanel:smoke
 
       - name: Wait for /api/v1/health → 200
         run: |
@@ -155,6 +231,24 @@ jobs:
           docker exec zsmoke /opt/zenithpanel/zenithpanel ctl version
           docker exec zsmoke /opt/zenithpanel/zenithpanel ctl status
 
+      - name: Generate final-image SBOM
+        uses: anchore/sbom-action@v0.22.2
+        with:
+          image: zenithpanel:smoke
+          format: spdx-json
+          output-file: zenithpanel-sbom.spdx.json
+
+      - name: Scan final image for fixable high/critical vulnerabilities
+        # Full immutable SHA for the safe v0.35.0 release. Most older mutable
+        # Trivy action tags were compromised in March 2026 (GHSA-69fq-xp46-6x23).
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1
+        with:
+          image-ref: zenithpanel:smoke
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
       - name: Dump tail of panel logs (for the record)
         if: always()
         run: docker logs zsmoke 2>&1 | tail -40
@@ -169,6 +263,8 @@ jobs:
       - backend-lint
       - backend-verify
       - frontend-verify
+      - security-verify
+      - ipv6-protocol-e2e
       - docker-smoke
     permissions:
       contents: read
@@ -186,9 +282,9 @@ jobs:
       # Install the cosign tool except on PR
       - name: Install cosign
         if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@v4.1.1
+        uses: sigstore/cosign-installer@v4.1.2
         with:
-          cosign-release: 'v3.0.5'
+          cosign-release: 'v3.0.6'
 
       # QEMU is only needed for the arm64 runtime stage (apk/unzip); the
       # frontend and Go stages cross-compile natively on the amd64 runner.
@@ -231,7 +327,7 @@ jobs:
 
       - name: Build and push Docker image
         id: build-and-push
-        uses: docker/build-push-action@v7.0.0
+        uses: docker/build-push-action@v7.2.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -240,6 +336,8 @@ jobs:
             VERSION=${{ steps.ver.outputs.value }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          sbom: ${{ github.event_name != 'pull_request' }}
+          provenance: mode=max
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

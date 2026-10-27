@@ -85,8 +85,8 @@ Current server panels (like 1Panel, BT) focus on website hosting and general mai
 | ACME / Let's Encrypt (auto TLS + renewal) | ✅ Done |
 | Ad-block toggle (panel-managed routing rule) | ✅ Done |
 | Prometheus `/metrics` endpoint | ✅ Done |
-| WARP WireGuard one-click outbound | 🔜 Planned |
-| 2FA / IP Whitelist | 🔜 Planned |
+| WARP WireGuard outbound | ✅ Done |
+| 2FA / IP Whitelist | ✅ Done |
 
 ---
 
@@ -110,6 +110,7 @@ docker run -d \
   --name zenithpanel \
   --restart always \
   -p 8080:8080 \
+  -e ZENITH_PORT=8080 \
   -v /opt/zenithpanel/data:/opt/zenithpanel/data \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/harveyxiacn/zenithpanel:main

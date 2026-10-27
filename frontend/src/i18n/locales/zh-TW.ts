@@ -195,6 +195,7 @@ export default {
       addRule: '新增規則',
       port: '連接埠',
       sourceIp: '來源 IP（選填）',
+      addressFamily: 'IP 版本',
       target: '目標',
       protocol: '協定',
       source: '來源',

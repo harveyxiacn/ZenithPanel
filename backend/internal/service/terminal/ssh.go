@@ -84,6 +84,12 @@ func buildShellCmd() *exec.Cmd {
 // HandleTerminalWebSocket upgrades the HTTP request to a WebSocket and spawns
 // a host shell via nsenter+PTY — no SSH credentials required.
 func HandleTerminalWebSocket(c *gin.Context) {
+	principal, ok := ConsumeTicket(c.Query("ticket"), c.ClientIP())
+	if !ok {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid or expired terminal ticket"})
+		return
+	}
+	c.Set("principal", principal)
 	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		log.Printf("Failed to upgrade websocket: %v", err)

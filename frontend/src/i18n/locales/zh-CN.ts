@@ -195,6 +195,7 @@ export default {
       addRule: '添加规则',
       port: '端口',
       sourceIp: '来源 IP（可选）',
+      addressFamily: 'IP 版本',
       target: '目标',
       protocol: '协议',
       source: '来源',

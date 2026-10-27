@@ -2,7 +2,9 @@ package api
 
 import (
 	"fmt"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/traffic"
 	"net/http"
+	"runtime"
 	"strings"
 	"time"
 
@@ -34,19 +36,19 @@ var metricsBootTime = time.Now()
 // The endpoint requires authentication (token or local-root), matching every
 // other /api/v1/* route. Operators wiring Prometheus should mint a read-only
 // API token in the panel and configure scrape with `bearer_token`.
-func registerMetricsRoute(g *gin.RouterGroup, xm *proxy.XrayManager, sm *proxy.SingboxManager) {
+func registerMetricsRoute(g *gin.RouterGroup, xm *proxy.XrayManager, sm *proxy.SingboxManager, collectors ...*traffic.EgressCollector) {
 	g.GET("/metrics", func(c *gin.Context) {
 		var enabledInbounds, enabledClients, enabledRules int64
-		config.DB.Model(&model.Inbound{}).Where("enable = ?", true).Count(&enabledInbounds)
-		config.DB.Model(&model.Client{}).
+		config.ReadDB().WithContext(c.Request.Context()).Model(&model.Inbound{}).Where("enable = ?", true).Count(&enabledInbounds)
+		config.ReadDB().WithContext(c.Request.Context()).Model(&model.Client{}).
 			Joins("JOIN inbounds ON inbounds.id = clients.inbound_id AND inbounds.deleted_at IS NULL").
 			Where("clients.enable = ? AND inbounds.enable = ?", true, true).
 			Count(&enabledClients)
-		config.DB.Model(&model.RoutingRule{}).Where("enable = ?", true).Count(&enabledRules)
+		config.ReadDB().WithContext(c.Request.Context()).Model(&model.RoutingRule{}).Where("enable = ?", true).Count(&enabledRules)
 
 		var activeTokens, revokedTokens int64
-		config.DB.Model(&model.ApiToken{}).Where("revoked = ?", false).Count(&activeTokens)
-		config.DB.Model(&model.ApiToken{}).Where("revoked = ?", true).Count(&revokedTokens)
+		config.ReadDB().WithContext(c.Request.Context()).Model(&model.ApiToken{}).Where("revoked = ?", false).Count(&activeTokens)
+		config.ReadDB().WithContext(c.Request.Context()).Model(&model.ApiToken{}).Where("revoked = ?", true).Count(&revokedTokens)
 
 		xrayRunning := xm.Status()
 		singboxRunning := sm.Status()
@@ -66,6 +68,17 @@ func registerMetricsRoute(g *gin.RouterGroup, xm *proxy.XrayManager, sm *proxy.S
 			fmt.Fprintf(&b, "%s{%s} %g\n", name, label, value)
 		}
 
+		var memory runtime.MemStats
+		runtime.ReadMemStats(&memory)
+		write("zenithpanel_heap_alloc_bytes", "Allocated Go heap bytes.", "gauge", float64(memory.HeapAlloc))
+		write("zenithpanel_goroutines", "Live Go goroutines.", "gauge", float64(runtime.NumGoroutine()))
+		if len(collectors) > 0 && collectors[0] != nil {
+			status := collectors[0].Status()
+			write("zenithpanel_egress_pending_keys", "Pending destination keys.", "gauge", float64(status.Pending))
+			write("zenithpanel_egress_retry_keys", "Destination keys awaiting retry.", "gauge", float64(status.Retry))
+			write("zenithpanel_egress_dropped_keys_total", "Destination updates dropped at capacity.", "counter", float64(status.Dropped))
+			write("zenithpanel_egress_retries_total", "Failed destination write batches.", "counter", float64(status.Retries))
+		}
 		write("zenithpanel_uptime_seconds",
 			"Seconds since the panel process started.",
 			"gauge", time.Since(metricsBootTime).Seconds())
@@ -97,6 +110,22 @@ func registerMetricsRoute(g *gin.RouterGroup, xm *proxy.XrayManager, sm *proxy.S
 			"Number of inbounds handed off from Xray to Sing-box in dual mode.",
 			"gauge", float64(handedOff))
 
+		// database/sql exposes how often callers had to wait for the single
+		// SQLite writer connection. These monotonic values make DB contention
+		// visible without parsing SQLITE_BUSY log messages.
+		if sqlDB, err := config.DB.DB(); err == nil {
+			stats := sqlDB.Stats()
+			write("zenithpanel_db_connection_wait_total",
+				"Number of waits for the serialized SQLite connection.",
+				"counter", float64(stats.WaitCount))
+			write("zenithpanel_db_connection_wait_seconds_total",
+				"Cumulative seconds spent waiting for the SQLite connection.",
+				"counter", stats.WaitDuration.Seconds())
+			write("zenithpanel_db_connections_in_use",
+				"Current SQLite connections executing or held by callers.",
+				"gauge", float64(stats.InUse))
+		}
+
 		// Labeled tokens series. Emit HELP/TYPE once, then both label values.
 		fmt.Fprintf(&b, "# HELP zenithpanel_api_tokens Number of API tokens, broken down by state.\n")
 		fmt.Fprintf(&b, "# TYPE zenithpanel_api_tokens gauge\n")
@@ -108,10 +137,10 @@ func registerMetricsRoute(g *gin.RouterGroup, xm *proxy.XrayManager, sm *proxy.S
 		// dashboards by inbound, not by email alone. `direction` separates
 		// upload and download as is standard for Prometheus byte counters.
 		type clientTrafficRow struct {
-			Email     string
-			Tag       string
-			UpLoad    int64
-			DownLoad  int64
+			Email    string
+			Tag      string
+			UpLoad   int64
+			DownLoad int64
 		}
 		var clientRows []clientTrafficRow
 		config.DB.

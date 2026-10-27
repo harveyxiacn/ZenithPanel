@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
@@ -17,11 +18,13 @@ import (
 // It keeps a DeploymentOp row per side-effect so rollback and idempotent
 // re-apply both operate on the same durable log.
 type Orchestrator struct {
-	db       *gorm.DB
-	probe    *Probe
-	certs    CertProvisioner
-	tuner    Tuner
-	inbounds InboundDeployer
+	opMu         sync.Mutex
+	db           *gorm.DB
+	probe        *Probe
+	certs        CertProvisioner
+	tuner        Tuner
+	inbounds     InboundDeployer
+	applyRuntime func(context.Context) error
 
 	// clock is injectable so tests can freeze time. Nil falls back to
 	// time.Now.
@@ -67,8 +70,11 @@ func NewOrchestrator(db *gorm.DB, certs CertProvisioner) *Orchestrator {
 
 // NewTestOrchestrator lets tests inject every dependency.
 func NewTestOrchestrator(db *gorm.DB, p *Probe, certs CertProvisioner, t Tuner, i InboundDeployer) *Orchestrator {
-	return &Orchestrator{db: db, probe: p, certs: certs, tuner: t, inbounds: i, clock: time.Now}
+	return &Orchestrator{db: db, probe: p, certs: certs, tuner: t, inbounds: i, clock: time.Now, applyRuntime: func(context.Context) error { return nil }}
 }
+
+// SetRuntimeApply wires the shared proxy coordinator before serving requests.
+func (o *Orchestrator) SetRuntimeApply(apply func(context.Context) error) { o.applyRuntime = apply }
 
 // Probe runs the environment probe and returns the result without writing
 // to the DB.
@@ -89,6 +95,11 @@ func (o *Orchestrator) Preview(ctx context.Context, presetID string, in Input) (
 // row before each side-effect. A mid-pipeline failure triggers automatic
 // rollback of already-applied ops.
 func (o *Orchestrator) Apply(ctx context.Context, presetID string, in Input) (*model.Deployment, error) {
+	o.opMu.Lock()
+	defer o.opMu.Unlock()
+	if o.applyRuntime == nil {
+		return nil, errors.New("proxy runtime coordinator is unavailable")
+	}
 	pr := o.probe.Run(ctx)
 	plan, err := Expand(presetID, pr, in)
 	if err != nil {
@@ -97,6 +108,15 @@ func (o *Orchestrator) Apply(ctx context.Context, presetID string, in Input) (*m
 	if !pr.RootCheck.OK {
 		return nil, errors.New("deploy refused: panel is not running as root")
 	}
+	for i := range plan.Inbounds {
+		plan.Inbounds[i].ServerAddress = pr.PublicIP.V4
+		if plan.Inbounds[i].ServerAddress == "" {
+			plan.Inbounds[i].ServerAddress = pr.PublicIP.V6
+		}
+		if plan.Inbounds[i].ServerAddress == "" {
+			plan.Inbounds[i].ServerAddress = in.Domain
+		}
+	}
 
 	dep, err := o.createDeploymentRecord(presetID, pr, plan, in)
 	if err != nil {
@@ -104,19 +124,33 @@ func (o *Orchestrator) Apply(ctx context.Context, presetID string, in Input) (*m
 	}
 
 	if err := o.execute(ctx, dep, plan); err != nil {
-		o.rollbackOps(ctx, dep.ID)
-		o.markDeployment(dep, model.DeployStatusFailed, err)
+		err = errors.Join(err, o.rollbackOps(context.WithoutCancel(ctx), dep.ID))
+		err = errors.Join(err, o.markDeployment(dep, model.DeployStatusFailed, err))
+		return dep, err
+	}
+	if err := o.applyRuntime(ctx); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancel()
+		err = errors.Join(fmt.Errorf("proxy activation: %w", err), o.rollbackOps(cleanupCtx, dep.ID))
+		if restoreErr := o.applyRuntime(cleanupCtx); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("runtime after rollback: %w", restoreErr))
+		}
+		err = errors.Join(err, o.markDeployment(dep, model.DeployStatusFailed, err))
 		return dep, err
 	}
 
-	o.markDeployment(dep, model.DeployStatusSucceeded, nil)
-	return dep, nil
+	return dep, o.markDeployment(dep, model.DeployStatusSucceeded, nil)
 }
 
 // Rollback reverts every applied op of an existing deployment in reverse
 // order and marks the deployment as rolled_back. Idempotent: calling it
 // twice on the same deployment is a no-op after the first run.
 func (o *Orchestrator) Rollback(ctx context.Context, id uint) (*model.Deployment, error) {
+	o.opMu.Lock()
+	defer o.opMu.Unlock()
+	if o.applyRuntime == nil {
+		return nil, errors.New("proxy runtime coordinator is unavailable")
+	}
 	var dep model.Deployment
 	if err := o.db.First(&dep, id).Error; err != nil {
 		return nil, err
@@ -125,9 +159,11 @@ func (o *Orchestrator) Rollback(ctx context.Context, id uint) (*model.Deployment
 		return &dep, nil
 	}
 
-	o.rollbackOps(ctx, id)
-	o.markDeployment(&dep, model.DeployStatusRolledBack, nil)
-	return &dep, nil
+	if err := errors.Join(o.rollbackOps(ctx, id), o.applyRuntime(ctx)); err != nil {
+		err = errors.Join(err, o.markDeployment(&dep, model.DeployStatusFailed, err))
+		return &dep, err
+	}
+	return &dep, o.markDeployment(&dep, model.DeployStatusRolledBack, nil)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -162,10 +198,11 @@ func (o *Orchestrator) execute(ctx context.Context, dep *model.Deployment, plan 
 	}
 
 	// Persist the inbound IDs on the deployment for quick lookup.
-	if b, err := json.Marshal(inboundIDs); err == nil {
-		o.db.Model(dep).Update("inbound_ids", string(b))
+	b, err := json.Marshal(inboundIDs)
+	if err != nil {
+		return err
 	}
-	return nil
+	return o.db.Model(dep).Update("inbound_ids", string(b)).Error
 }
 
 func (o *Orchestrator) runCert(ctx context.Context, dep *model.Deployment, plan DeployPlan, seq *int) (*cert.ProvisionResult, error) {
@@ -199,7 +236,9 @@ func (o *Orchestrator) runCert(ctx context.Context, dep *model.Deployment, plan 
 	op.PostValue = string(postJSON)
 	op.Status = model.OpStatusApplied
 	op.AppliedAt = o.clock()
-	o.db.Save(op)
+	if err := o.db.Save(op).Error; err != nil {
+		return nil, err
+	}
 	return res, nil
 }
 
@@ -226,7 +265,9 @@ func (o *Orchestrator) runTune(ctx context.Context, dep *model.Deployment, ts Tu
 	op.PostValue = string(postJSON)
 	op.Status = model.OpStatusApplied
 	op.AppliedAt = o.clock()
-	o.db.Save(op)
+	if err := o.db.Save(op).Error; err != nil {
+		return errors.Join(err, o.tuner.Revert(context.WithoutCancel(ctx), snap))
+	}
 	return nil
 }
 
@@ -252,29 +293,38 @@ func (o *Orchestrator) runInbound(_ context.Context, dep *model.Deployment, spec
 	op.PostValue = fmt.Sprintf(`{"inbound_id":%d}`, id)
 	op.Status = model.OpStatusApplied
 	op.AppliedAt = o.clock()
-	o.db.Save(op)
+	if err := o.db.Save(op).Error; err != nil {
+		return 0, errors.Join(err, o.inbounds.Delete(id))
+	}
 	return id, nil
 }
 
 // rollbackOps reverts every applied op for a deployment in reverse order.
 // Errors on individual ops are logged into that op's Error field but do not
 // abort the rollback — we always try to revert as much as possible.
-func (o *Orchestrator) rollbackOps(ctx context.Context, depID uint) {
+func (o *Orchestrator) rollbackOps(ctx context.Context, depID uint) error {
 	var ops []model.DeploymentOp
-	o.db.Where("deployment_id = ? AND status = ?", depID, model.OpStatusApplied).
+	if err := o.db.WithContext(ctx).Where("deployment_id = ? AND status IN ?", depID, []string{model.OpStatusApplied, "revert_failed"}).
 		Order("sequence DESC").
-		Find(&ops)
+		Find(&ops).Error; err != nil {
+		return err
+	}
+	var errs []error
 
 	for i := range ops {
 		op := &ops[i]
 		if err := o.revertOne(ctx, op); err != nil {
 			op.Error = err.Error()
-			op.Status = model.OpStatusFailed
+			op.Status = "revert_failed"
+			errs = append(errs, fmt.Errorf("revert %s: %w", op.OpName, err))
 		} else {
 			op.Status = model.OpStatusReverted
 		}
-		o.db.Save(op)
+		if err := o.db.WithContext(ctx).Save(op).Error; err != nil {
+			errs = append(errs, err)
+		}
 	}
+	return errors.Join(errs...)
 }
 
 func (o *Orchestrator) revertOne(ctx context.Context, op *model.DeploymentOp) error {
@@ -324,12 +374,14 @@ func (o *Orchestrator) createDeploymentRecord(presetID string, pr ProbeResult, p
 	return dep, o.db.Create(dep).Error
 }
 
-func (o *Orchestrator) markDeployment(dep *model.Deployment, status string, err error) {
+func (o *Orchestrator) markDeployment(dep *model.Deployment, status string, err error) error {
 	dep.Status = status
 	if err != nil {
 		dep.Error = err.Error()
+	} else {
+		dep.Error = ""
 	}
-	o.db.Save(dep)
+	return o.db.Save(dep).Error
 }
 
 func (o *Orchestrator) failOp(op *model.DeploymentOp, err error) {
@@ -353,19 +405,22 @@ func (tuneAdapter) Revert(ctx context.Context, snap system.Snapshot) error {
 	return system.RevertTuneOp(ctx, snap)
 }
 
-// dbInboundDeployer creates/deletes rows in the existing inbounds table.
-// The running proxy core is expected to pick up the new rows via its usual
-// watch/reload path; orchestrator does not poke the core directly.
+// dbInboundDeployer persists both inbound and preset credentials atomically.
+// Orchestrator activates them through the shared runtime callback afterwards.
 type dbInboundDeployer struct {
 	db *gorm.DB
 }
 
 func (d dbInboundDeployer) Create(spec InboundSpec) (uint, error) {
-	settingsJSON, err := json.Marshal(spec.Settings)
+	clients, cleanSettings, err := presetClients(spec.Settings)
 	if err != nil {
 		return 0, err
 	}
-	streamJSON, err := json.Marshal(spec.Stream)
+	settingsJSON, err := json.Marshal(cleanSettings)
+	if err != nil {
+		return 0, err
+	}
+	streamJSON, err := json.Marshal(canonicalStream(spec))
 	if err != nil {
 		return 0, err
 	}
@@ -386,7 +441,25 @@ func (d dbInboundDeployer) Create(spec InboundSpec) (uint, error) {
 
 		ServerAddress: spec.ServerAddress,
 	}
-	if err := d.db.Create(&ib).Error; err != nil {
+	if err := d.db.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&model.Inbound{}).Where("enable = ? AND port = ?", true, ib.Port).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return fmt.Errorf("port %d is already used by an enabled inbound", ib.Port)
+		}
+		if err := tx.Create(&ib).Error; err != nil {
+			return err
+		}
+		for i := range clients {
+			clients[i].InboundID = ib.ID
+		}
+		if len(clients) > 0 {
+			return tx.Create(&clients).Error
+		}
+		return nil
+	}); err != nil {
 		return 0, err
 	}
 	return ib.ID, nil

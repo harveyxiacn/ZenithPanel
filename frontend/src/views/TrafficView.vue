@@ -295,7 +295,7 @@ function exportCsv() {
                 <template v-else>{{ t('traffic.noActiveUsers') }}</template>
               </td>
             </tr>
-            <tr v-for="u in proxyUsers" :key="u.email" class="border-t border-slate-100 dark:border-slate-700/50">
+            <tr v-for="u in proxyUsers" :key="u.client_id ?? u.email" class="border-t border-slate-100 dark:border-slate-700/50">
               <td class="px-4 py-3 font-medium text-slate-800 dark:text-slate-100 break-all max-w-[16rem]" :title="u.email">{{ u.email }}</td>
               <td class="px-4 py-3 text-xs">
                 <div class="flex items-center gap-1.5 flex-wrap">

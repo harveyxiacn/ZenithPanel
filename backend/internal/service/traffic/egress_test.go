@@ -1,6 +1,9 @@
 package traffic
 
 import (
+	"context"
+	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
@@ -122,6 +125,27 @@ func TestUpsertBackfillsRDNSOnLaterFlush(t *testing.T) {
 	}
 }
 
+func TestEgressPendingKeysAreBoundedAndFailedFlushIsRetained(t *testing.T) {
+	e := newTestCollector(t)
+	for i := 0; i < maxEgressPendingKeys+10; i++ {
+		e.Add("instance", "", "", fmt.Sprintf("203.0.113.%d", i), "egress", 1, 0, 1)
+	}
+	if status := e.Status(); status.Pending != maxEgressPendingKeys || status.Dropped != 10 {
+		t.Fatalf("status=%+v", status)
+	}
+	sqlDB, err := e.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	e.Flush()
+	if status := e.Status(); status.Pending+status.Retry != maxEgressPendingKeys || status.Retries != 1 || status.LastErr == "" {
+		t.Fatalf("failed batch was not retained: %+v", status)
+	}
+}
+
 func TestRollupFoldsRDNSIntoDestHost(t *testing.T) {
 	e := newTestCollector(t)
 	now := time.Now()
@@ -147,5 +171,79 @@ func TestRollupFoldsRDNSIntoDestHost(t *testing.T) {
 	}
 	if rows[0].BytesUp != 10 || rows[0].BytesDown != 10 {
 		t.Errorf("hourly bytes = %+v, want 10/10", rows[0])
+	}
+}
+
+func TestRollupDoesNotAdvanceWatermarkWhenReadingBucketFails(t *testing.T) {
+	e := newTestCollector(t)
+	now := time.Now()
+	target := (now.Unix()/hourSecs)*hourSecs - hourSecs
+	previous := target - hourSecs
+	if err := config.SetSetting(SettingEgressRollupWatermark, strconv.FormatInt(previous, 10)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.Migrator().DropTable(&model.TrafficEgress{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := e.RollupOnce(now); err == nil {
+		t.Fatal("rollup succeeded after the source table disappeared")
+	}
+	if got := config.GetSetting(SettingEgressRollupWatermark); got != strconv.FormatInt(previous, 10) {
+		t.Fatalf("watermark advanced after a failed read: got %q, want %d", got, previous)
+	}
+}
+
+func TestFailedEgressFlushRetriesOriginalBucketExactlyOnce(t *testing.T) {
+	e := newTestCollector(t)
+	bucket := time.Now().Unix()/bucketSecs*bucketSecs - bucketSecs
+	e.pending[destKey{instance: "test", ip: "1.1.1.1", direction: "egress", bucket: bucket}] = destStat{up: 7, hits: 1}
+	if err := e.db.Exec("CREATE TRIGGER fail_egress BEFORE INSERT ON traffic_egress BEGIN SELECT RAISE(ABORT, 'injected'); END").Error; err != nil {
+		t.Fatal(err)
+	}
+	e.Flush()
+	if e.Status().Retry != 1 {
+		t.Fatal(e.Status())
+	}
+	if err := e.db.Exec("DROP TRIGGER fail_egress").Error; err != nil {
+		t.Fatal(err)
+	}
+	e.Flush()
+	e.Flush()
+	var rows []model.TrafficEgress
+	if err := e.db.Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Bucket != bucket || rows[0].BytesUp != 7 {
+		t.Fatalf("rows: %+v", rows)
+	}
+}
+
+func TestEgressQueryHonorsCancellation(t *testing.T) {
+	e := newTestCollector(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := e.QueryContext(ctx, EgressFilter{Start: time.Now().Unix() - 3600, End: time.Now().Unix()})
+	if err == nil {
+		t.Fatal("cancelled query reported success")
+	}
+}
+
+func TestLiveTotalsKeepSameEmailClientsSeparate(t *testing.T) {
+	db := newEgressTestDB(t)
+	if err := db.AutoMigrate(&model.Inbound{}, &model.Client{}); err != nil {
+		t.Fatal(err)
+	}
+	for i := uint(1); i <= 2; i++ {
+		if err := db.Create(&model.Inbound{Tag: fmt.Sprintf("in-%d", i), Protocol: "vless", Port: 1000 + int(i), Enable: true}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&model.Client{InboundID: i, Email: "same", UUID: fmt.Sprintf("uuid-%d", i), Enable: true, UpLoad: int64(i)}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, _ := newProxyAggregator().sample(nil, true)
+	if len(rows) != 2 || rows[0].ClientID == rows[1].ClientID || rows[0].Email != "same" || rows[1].Email != "same" {
+		t.Fatalf("rows=%+v", rows)
 	}
 }

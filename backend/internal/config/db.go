@@ -2,8 +2,10 @@ package config
 
 // Expose models globally so we can AutoMigrate them in the main runner
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -14,10 +16,31 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
 var DB *gorm.DB
+
+// CloseDB waits for in-flight database/sql operations and closes the shared
+// SQLite pool. It is safe to call during graceful shutdown after background
+// producers have been cancelled.
+func CloseDB() error {
+	if err := closeReadPool(); err != nil {
+		return err
+	}
+	if DB == nil {
+		return nil
+	}
+	sqlDB, err := DB.DB()
+	if err != nil {
+		return fmt.Errorf("get sql connection: %w", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		return fmt.Errorf("close sqlite: %w", err)
+	}
+	return nil
+}
 
 // gormLogger builds the GORM logger used by the panel's DB connection.
 //
@@ -61,6 +84,9 @@ func InitDB(dbPath string) {
 	})
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	if err := configureSQLite(database); err != nil {
+		log.Fatalf("Failed to configure SQLite: %v", err)
 	}
 
 	// Pre-migration: add missing columns to existing tables BEFORE AutoMigrate.
@@ -126,7 +152,46 @@ func InitDB(dbPath string) {
 	purgeSoftDeletedProxyRows(database)
 
 	DB = database
+	if err := configureReadPool(database, dbPath); err != nil {
+		log.Fatalf("Failed to configure SQLite read pool: %v", err)
+	}
 	log.Println("Database initialized and migrated successfully")
+}
+
+// configureSQLite applies the durability and contention policy used by every
+// production connection. SQLite only permits one writer; limiting the pool to
+// one connection makes database/sql the process-wide write coordinator instead
+// of letting unrelated background goroutines race until SQLITE_BUSY. WAL still
+// provides crash recovery and lets external read-only tooling inspect the DB.
+func configureSQLite(database *gorm.DB) error {
+	sqlDB, err := database.DB()
+	if err != nil {
+		return fmt.Errorf("get sql connection: %w", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	sqlDB.SetConnMaxLifetime(0)
+
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA foreign_keys=ON",
+		"PRAGMA busy_timeout=5000",
+	}
+	for _, statement := range pragmas {
+		if err := database.Exec(statement).Error; err != nil {
+			return fmt.Errorf("%s: %w", statement, err)
+		}
+	}
+	var mode string
+	if err := database.Raw("PRAGMA journal_mode").Scan(&mode).Error; err != nil {
+		return err
+	}
+	if mode != "wal" && mode != "memory" {
+		return fmt.Errorf("SQLite journal mode is %q, expected wal", mode)
+	}
+	log.Printf("SQLite effective journal mode: %s", mode)
+	return nil
 }
 
 // purgeSoftDeletedProxyRows hard-deletes inbound/client/outbound rows that
@@ -169,6 +234,9 @@ var settingCache = struct {
 
 // GetSetting retrieves a setting value by key, returns empty string if not found
 func GetSetting(key string) string {
+	if DB == nil {
+		return ""
+	}
 	settingCache.Lock()
 	if settingCache.db != DB {
 		settingCache.db, settingCache.m = DB, map[string]settingEntry{}
@@ -181,7 +249,9 @@ func GetSetting(key string) string {
 
 	var s model.Setting
 	value := ""
-	if err := DB.Where("`key` = ?", key).First(&s).Error; err == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := ReadDB().WithContext(ctx).Where("`key` = ?", key).First(&s).Error; err == nil {
 		value = s.Value
 	}
 	settingCache.Lock()
@@ -202,15 +272,9 @@ func invalidateSetting(key string) {
 // SetSetting upserts a setting key-value pair
 func SetSetting(key, value string) error {
 	defer invalidateSetting(key)
-	var s model.Setting
-	result := DB.Where("`key` = ?", key).First(&s)
-	if result.Error != nil {
-		// Create new
-		return DB.Create(&model.Setting{Key: key, Value: value}).Error
-	}
-	// Update
-	s.Value = value
-	return DB.Save(&s).Error
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return DB.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value"})}).Create(&model.Setting{Key: key, Value: value}).Error
 }
 
 // EnsureJWTSecret generates and persists a random JWT secret if one doesn't exist

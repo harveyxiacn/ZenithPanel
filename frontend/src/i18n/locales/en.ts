@@ -201,6 +201,7 @@ export default {
       addRule: 'Add Rule',
       port: 'Port',
       sourceIp: 'Source IP (opt)',
+      addressFamily: 'IP version',
       target: 'Target',
       protocol: 'Protocol',
       source: 'Source',

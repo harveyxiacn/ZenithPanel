@@ -12,21 +12,38 @@ import (
 
 // Rule represents a single iptables rule
 type Rule struct {
-	Chain       string `json:"chain"`
-	Num         string `json:"num"`
-	Target      string `json:"target"`
-	Protocol    string `json:"protocol"`
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	Port        string `json:"port"`
-	Extra       string `json:"extra"`
+	Family       string `json:"family,omitempty"`
+	Chain        string `json:"chain"`
+	Num          string `json:"num"`
+	Target       string `json:"target"`
+	Protocol     string `json:"protocol"`
+	Options      string `json:"options"`
+	InInterface  string `json:"in_interface"`
+	OutInterface string `json:"out_interface"`
+	Source       string `json:"source"`
+	Destination  string `json:"destination"`
+	Port         string `json:"port"`
+	Extra        string `json:"extra"`
 }
 
 var (
-	validProtocols = map[string]bool{"tcp": true, "udp": true, "icmp": true, "all": true}
+	validProtocols = map[string]bool{"tcp": true, "udp": true, "icmp": true, "ipv6-icmp": true, "all": true}
 	validActions   = map[string]bool{"ACCEPT": true, "DROP": true, "REJECT": true}
 	portRangeRe    = regexp.MustCompile(`^\d+(?::\d+)?$`)
 )
+
+// firewallBinary keeps IPv4 as the default for existing API clients. IPv6
+// must be explicitly selected: firewall policies are independent per family.
+func firewallBinary(family string) (string, error) {
+	switch family {
+	case "", "ipv4":
+		return "iptables", nil
+	case "ipv6":
+		return "ip6tables", nil
+	default:
+		return "", fmt.Errorf("invalid address family: must be ipv4 or ipv6")
+	}
+}
 
 // validateRule checks all user-supplied parameters before passing them to iptables.
 func validateRule(protocol, port, action, source string) error {
@@ -59,9 +76,20 @@ func validateRule(protocol, port, action, source string) error {
 
 // ListRules returns the current INPUT chain rules from iptables
 func ListRules() ([]Rule, error) {
-	out, err := exec.Command("iptables", "-L", "INPUT", "-n", "--line-numbers", "-v").CombinedOutput()
+	return ListRulesForFamily("ipv4")
+}
+
+func ListRulesForFamily(family string) ([]Rule, error) {
+	binary, err := firewallBinary(family)
 	if err != nil {
-		return nil, fmt.Errorf("iptables: %s (%w)", strings.TrimSpace(string(out)), err)
+		return nil, err
+	}
+	if family == "" {
+		family = "ipv4"
+	}
+	out, err := exec.Command(binary, "-L", "INPUT", "-n", "--line-numbers", "-v").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("%s: %s (%w)", binary, strings.TrimSpace(string(out)), err)
 	}
 
 	var rules []Rule
@@ -76,12 +104,16 @@ func ListRules() ([]Rule, error) {
 			continue
 		}
 		r := Rule{
-			Chain:       "INPUT",
-			Num:         fields[0],
-			Target:      fields[3],
-			Protocol:    fields[4],
-			Source:      fields[8],
-			Destination: fields[9],
+			Family:       family,
+			Chain:        "INPUT",
+			Num:          fields[0],
+			Target:       fields[3],
+			Protocol:     fields[4],
+			Options:      fields[5],
+			InInterface:  fields[6],
+			OutInterface: fields[7],
+			Source:       fields[8],
+			Destination:  fields[9],
 		}
 		rest := strings.Join(fields[10:], " ")
 		if idx := strings.Index(rest, "dpt:"); idx != -1 {
@@ -126,6 +158,14 @@ func catchAllPosition(spec string) int {
 // before any catch-all DROP/REJECT rule so it actually takes effect;
 // otherwise it is appended.
 func AddRule(protocol, port, action, source, comment string) error {
+	return AddRuleForFamily("ipv4", protocol, port, action, source, comment)
+}
+
+func AddRuleForFamily(family, protocol, port, action, source, comment string) error {
+	binary, err := firewallBinary(family)
+	if err != nil {
+		return err
+	}
 	if err := validateRule(protocol, port, action, source); err != nil {
 		return err
 	}
@@ -133,9 +173,21 @@ func AddRule(protocol, port, action, source, comment string) error {
 	if port != "" && proto != "tcp" && proto != "udp" {
 		return fmt.Errorf("invalid rule: a port requires protocol tcp or udp")
 	}
+	if source != "" {
+		ip := net.ParseIP(source)
+		if ip == nil {
+			ip, _, _ = net.ParseCIDR(source)
+		}
+		if ip != nil && ((binary == "iptables") != (ip.To4() != nil)) {
+			return fmt.Errorf("source address does not match firewall family")
+		}
+	}
+	if (strings.EqualFold(protocol, "icmp") && binary == "ip6tables") || (strings.EqualFold(protocol, "ipv6-icmp") && binary == "iptables") {
+		return fmt.Errorf("protocol does not match firewall family")
+	}
 
 	args := []string{"-A", "INPUT"}
-	if out, err := exec.Command("iptables", "-S", "INPUT").Output(); err == nil {
+	if out, err := exec.Command(binary, "-S", "INPUT").Output(); err == nil {
 		if pos := catchAllPosition(string(out)); pos > 0 {
 			args = []string{"-I", "INPUT", strconv.Itoa(pos)}
 		}
@@ -167,9 +219,9 @@ func AddRule(protocol, port, action, source, comment string) error {
 	}
 	args = append(args, "-j", strings.ToUpper(action))
 
-	out, err := exec.Command("iptables", args...).CombinedOutput()
+	out, err := exec.Command(binary, args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("iptables: %s (%w)", strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("%s: %s (%w)", binary, strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
@@ -370,13 +422,36 @@ func IsCloudflareProtected(port string) bool {
 // This avoids the line-number shift bug where inserting rules changes line numbers
 // and causes subsequent deletions to target the wrong rule.
 func DeleteRule(r Rule) error {
+	binary, err := firewallBinary(r.Family)
+	if err != nil {
+		return err
+	}
+	// The list output may include destination, interface, state, comment or
+	// other matches. Never discard unknown matches: reconstructing a broader
+	// rule could delete a different rule from the one the user selected.
+	if r.Chain != "INPUT" || r.Options != "--" || r.InInterface != "*" || r.OutInterface != "*" || !validProtocols[strings.ToLower(r.Protocol)] || !validActions[strings.ToUpper(r.Target)] {
+		return fmt.Errorf("cannot safely reconstruct firewall rule")
+	}
+	expectedExtra := ""
+	if r.Port != "" {
+		if !portRangeRe.MatchString(r.Port) || (r.Protocol != "tcp" && r.Protocol != "udp") {
+			return fmt.Errorf("cannot safely reconstruct firewall port rule")
+		}
+		expectedExtra = strings.ToLower(r.Protocol) + " dpt:" + r.Port
+	}
+	if strings.TrimSpace(r.Extra) != expectedExtra {
+		return fmt.Errorf("rule has additional matches and cannot be safely deleted here")
+	}
 	args := []string{"-D", "INPUT"}
 	proto := strings.ToLower(r.Protocol)
 	if proto != "" && proto != "all" {
 		args = append(args, "-p", proto)
 	}
-	if r.Source != "" && r.Source != "0.0.0.0/0" {
+	if r.Source != "" && r.Source != "0.0.0.0/0" && r.Source != "::/0" {
 		args = append(args, "-s", r.Source)
+	}
+	if r.Destination != "" && r.Destination != "0.0.0.0/0" && r.Destination != "::/0" {
+		args = append(args, "-d", r.Destination)
 	}
 	if r.Port != "" {
 		args = append(args, "--dport", r.Port)
@@ -390,9 +465,9 @@ func DeleteRule(r Rule) error {
 		return fmt.Errorf("rule target is required")
 	}
 	args = append(args, "-j", strings.ToUpper(r.Target))
-	out, err := exec.Command("iptables", args...).CombinedOutput()
+	out, err := exec.Command(binary, args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("iptables: %s (%w)", strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("%s: %s (%w)", binary, strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }

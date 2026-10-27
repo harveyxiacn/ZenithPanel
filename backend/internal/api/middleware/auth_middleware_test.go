@@ -36,7 +36,7 @@ func newAuthTestEngine(t *testing.T) (*gin.Engine, *gorm.DB) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := db.AutoMigrate(&model.ApiToken{}); err != nil {
+	if err := db.AutoMigrate(&model.ApiToken{}, &model.AdminUser{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	prevDB := config.DB
@@ -52,6 +52,9 @@ func newAuthTestEngine(t *testing.T) (*gin.Engine, *gorm.DB) {
 			"scopes":    c.GetString("scopes"),
 		})
 	})
+	r.POST("/probe", AuthMiddleware(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"principal": c.GetString("principal")})
+	})
 	r.GET("/probe-as-local-root", func(c *gin.Context) {
 		c.Set("trusted_local", true)
 		c.Next()
@@ -62,6 +65,13 @@ func newAuthTestEngine(t *testing.T) (*gin.Engine, *gorm.DB) {
 		})
 	})
 	return r, db
+}
+
+func seedAdminSession(t *testing.T, db *gorm.DB, id uint, username string, version uint64) {
+	t.Helper()
+	if err := db.Create(&model.AdminUser{ID: id, Username: username, PasswordHash: "test", SessionVersion: version}).Error; err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestAuthMissingHeader401 is the negative baseline: a request with no
@@ -78,7 +88,8 @@ func TestAuthMissingHeader401(t *testing.T) {
 // TestAuthJWTValid pins the legacy JWT path stays functional after the
 // middleware swap.
 func TestAuthJWTValid(t *testing.T) {
-	r, _ := newAuthTestEngine(t)
+	r, db := newAuthTestEngine(t)
+	seedAdminSession(t, db, 42, "harvey", 0)
 	token, err := jwtutil.GenerateToken("42", "harvey", time.Hour)
 	if err != nil {
 		t.Fatalf("jwt: %v", err)
@@ -92,6 +103,74 @@ func TestAuthJWTValid(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"admin:harvey"`) {
 		t.Errorf("expected principal admin:harvey, body=%s", rec.Body.String())
+	}
+}
+
+func TestAuthRejectsJWTAfterSessionVersionChanges(t *testing.T) {
+	r, db := newAuthTestEngine(t)
+	seedAdminSession(t, db, 42, "harvey", 3)
+	token, err := jwtutil.GenerateSessionToken("42", "harvey", 3, time.Now(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func() int {
+		req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if got := request(); got != http.StatusOK {
+		t.Fatalf("current session=%d", got)
+	}
+	if err := db.Model(&model.AdminUser{}).Where("id = ?", 42).Update("session_version", 4).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := request(); got != http.StatusUnauthorized {
+		t.Fatalf("revoked session=%d, want 401", got)
+	}
+}
+
+func TestAuthCookieAcceptsSameOriginAndRejectsMissingOriginMutation(t *testing.T) {
+	r, db := newAuthTestEngine(t)
+	seedAdminSession(t, db, 42, "harvey", 0)
+	token, err := jwtutil.GenerateToken("42", "harvey", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(origin string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "https://panel.example/probe", nil)
+		req.AddCookie(&http.Cookie{Name: SessionCookieName, Value: token})
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := request(""); rec.Code != http.StatusForbidden {
+		t.Fatalf("cookie mutation without Origin=%d, want 403", rec.Code)
+	}
+	if rec := request("https://evil.example"); rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin cookie mutation=%d, want 403", rec.Code)
+	}
+	if rec := request("https://panel.example"); rec.Code != http.StatusOK {
+		t.Fatalf("same-origin cookie mutation=%d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAuthRejectsSetupJWTOnPanelAPI(t *testing.T) {
+	r, _ := newAuthTestEngine(t)
+	token, err := jwtutil.GenerateSetupToken(time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("setup token reached panel API: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -117,6 +196,31 @@ func TestAuthAPITokenValid(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"token:ci"`) {
 		t.Errorf("expected principal token:ci, body=%s", rec.Body.String())
+	}
+}
+
+func TestAuthAPITokenLastUsedWriteIsThrottled(t *testing.T) {
+	r, db := newAuthTestEngine(t)
+	plain, _, _ := apitoken.Generate()
+	sum := sha256.Sum256([]byte(plain))
+	lastUsed := time.Now().Add(-30 * time.Second).Unix()
+	row := &model.ApiToken{Name: "recent", TokenHash: hex.EncodeToString(sum[:]), Scopes: "read", LastUsedAt: lastUsed}
+	if err := db.Create(row).Error; err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	req.Header.Set("Authorization", "Bearer "+plain)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auth status=%d: %s", rec.Code, rec.Body.String())
+	}
+	var reloaded model.ApiToken
+	if err := db.First(&reloaded, row.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.LastUsedAt != lastUsed {
+		t.Fatalf("last_used_at=%d, want throttled value %d", reloaded.LastUsedAt, lastUsed)
 	}
 }
 
@@ -193,6 +297,7 @@ func TestHasScopeMatrix(t *testing.T) {
 		{"", "read", false},
 		{"read,write", "read", true},
 		{"read,write", "admin", false},
+		{"admin", "terminal", true},
 		{" read , write ", "write", true}, // tolerates whitespace
 		{"read,*", "admin", true},         // wildcard mid-list still wins
 	}

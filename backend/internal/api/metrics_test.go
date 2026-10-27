@@ -42,6 +42,8 @@ func TestMetricsEndpointShape(t *testing.T) {
 		"zenithpanel_xray_running",
 		"zenithpanel_singbox_running",
 		"zenithpanel_enabled_inbounds",
+		"zenithpanel_db_connection_wait_total",
+		"zenithpanel_db_connection_wait_seconds_total",
 		`zenithpanel_api_tokens{state="active"}`,
 		`zenithpanel_api_tokens{state="revoked"}`,
 	}

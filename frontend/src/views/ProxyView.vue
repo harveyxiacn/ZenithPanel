@@ -3,12 +3,16 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { PlusIcon, TrashIcon, ArrowPathIcon, XMarkIcon, ClipboardDocumentIcon, SparklesIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, QrCodeIcon, KeyIcon, CodeBracketIcon, AdjustmentsHorizontalIcon, UserPlusIcon, SignalIcon, ArrowDownTrayIcon, BoltIcon } from '@heroicons/vue/24/outline'
-import { listInbounds, createInbound, updateInbound, deleteInbound, importThreeXUIInbounds, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig, bulkClientAction, getActiveConnections, getClashApiStatus, enableClashApi, disableClashApi, probeInbound, type InboundProbeResult, getSubscriptionServer, updateSubscriptionServer, type SubscriptionServerStatus } from '@/api/proxy'
+import { listInbounds, createInbound, updateInbound, deleteInbound, importThreeXUIInbounds, listClients, createClient, deleteClient, listRoutingRules, createRoutingRule, deleteRoutingRule, generateRealityKeys, applyProxyConfig, getProxyStatus, checkServerPublicNetwork, listOutbounds, createOutbound, deleteOutbound, fetchWARPConfig, bulkClientAction, getActiveConnections, getClashApiStatus, enableClashApi, disableClashApi, getSubscriptionServer, updateSubscriptionServer, type SubscriptionServerStatus } from '@/api/proxy'
+import { getNetworkDiagnostics } from '@/api/system'
 import apiClient from '@/api/client'
+import type { Inbound } from '@/types/proxy'
 import QRCode from 'qrcode'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '../composables/useToast'
+import { useInboundProbes } from '@/composables/useInboundProbes'
 import SkeletonTable from '@/components/SkeletonTable.vue'
+import InboundProbeControl from '@/components/proxy/InboundProbeControl.vue'
 import { buildSubscriptionLink } from '@/utils/subscription-links.mjs'
 
 const { t } = useI18n()
@@ -39,7 +43,12 @@ const proxyStatus = ref({
 // Track which engine the user wants to apply. Defaults to singbox when the
 // inbound list contains Hysteria2/TUIC (Xray-only engines skip those).
 const singboxOnlyProtocols = new Set(['hysteria2', 'tuic'])
-const selectedEngine = ref<'xray' | 'singbox'>('xray')
+const selectedEngine = ref<'auto' | 'xray' | 'singbox'>('auto')
+const showEngineDiagnostics = ref(false)
+const configPending = ref(false)
+const networkDiagnostics = ref<unknown>(null)
+const diagnosticsLoading = ref(false)
+const diagnosticsError = ref('')
 
 // Sync sidebar highlight: switching tabs updates the route so the
 // left nav correctly highlights "Proxy Nodes" vs "Users & Subs".
@@ -64,100 +73,14 @@ const tabs = computed(() => [
 ])
 
 // ---- Inbounds ----
-const inbounds = ref<any[]>([])
+const runtimeState = ref<{state?: string; error?: string; revision?: string}>({})
+const inbounds = ref<Inbound[]>([])
 const inboundsLoading = ref(false)
 
-// Per-row probe state. Keyed by inbound id; cleared once the user navigates
-// away or applies new config. Each value is either a result object (ok/stage
-// pulled from the server) or the string 'pending' while the probe runs.
-const probeResults = ref<Record<number, InboundProbeResult | 'pending'>>({})
-// Tooltip for a passing probe: port check + end-to-end result (exit IP).
-function probeOkTitle(r: InboundProbeResult) {
-  const parts = [`OK · ${r.elapsed_ms}ms`]
-  if (r.e2e === 'passed') parts.push(t('proxy.inbounds.probeE2EPassed', { ip: r.exit_ip || '?' }))
-  else if (r.e2e === 'skipped') parts.push(t('proxy.inbounds.probeE2ESkipped'))
-  parts.push(t('proxy.inbounds.probeRecheck'))
-  return parts.join(' · ')
-}
-
-async function onProbeInbound(id: number) {
-  probeResults.value = { ...probeResults.value, [id]: 'pending' }
-  try {
-    const res = await probeInbound(id)
-    if (res.data?.code === 200 && res.data?.data) {
-      probeResults.value = { ...probeResults.value, [id]: res.data.data }
-    } else {
-      // Server replied but not with the expected shape — treat as a request-
-      // level failure so the chip turns red and the user can retry.
-      probeResults.value = { ...probeResults.value, [id]: { inbound_id: id, tag: '', protocol: '', transport: '', port: 0, ok: false, stage: 'request', elapsed_ms: 0, err: res.data?.msg || '' } }
-    }
-  } catch (e: any) {
-    probeResults.value = { ...probeResults.value, [id]: { inbound_id: id, tag: '', protocol: '', transport: '', port: 0, ok: false, stage: 'request', elapsed_ms: 0, err: e?.message || 'network' } }
-  }
-}
-
-// Probe-all driver. Mark every row pending up front so the UI shows
-// progress, then fire probes with a small concurrency cap. We use Promise
-// chains keyed by id so a slow probe doesn't block faster ones. probeAllBusy
-// gates re-entry — a second click is a no-op until the wave finishes.
-const probeAllBusy = ref(false)
-
-// Auto-probe: when toggled on, runs Probe All every probeAutoIntervalMs.
-// The interval handle lives in a ref so tab switches and onUnmounted can
-// clean it up without leaking timers.
-const probeAutoEnabled = ref(false)
-const probeAutoIntervalMs = 30_000
-let probeAutoTimer: ReturnType<typeof setInterval> | null = null
-
-async function onProbeAllInbounds() {
-  if (probeAllBusy.value || inbounds.value.length === 0) return
-  probeAllBusy.value = true
-  // Reset all probe states to 'pending'. We rebuild the object so Vue picks
-  // up the change in one tick.
-  const pending: Record<number, 'pending'> = {}
-  for (const ib of inbounds.value) pending[ib.id] = 'pending'
-  probeResults.value = { ...probeResults.value, ...pending }
-
-  // Run probes with a concurrency cap of 4 so a row of dead inbounds doesn't
-  // flood the panel with simultaneous timeouts.
-  const queue = [...inbounds.value]
-  const inFlight: Promise<void>[] = []
-  const startNext = (): Promise<void> | null => {
-    const ib = queue.shift()
-    if (!ib) return null
-    return onProbeInbound(ib.id).then(() => {
-      const next = startNext()
-      if (next) return next
-    })
-  }
-  for (let i = 0; i < Math.min(4, queue.length + inFlight.length); i++) {
-    const p = startNext()
-    if (p) inFlight.push(p)
-  }
-  await Promise.all(inFlight)
-  probeAllBusy.value = false
-}
-
-// Start/stop the auto-probe timer. Centralized so the toggle button + tab
-// changes + unmount cleanup all go through the same path.
-function setAutoProbe(enabled: boolean) {
-  probeAutoEnabled.value = enabled
-  if (probeAutoTimer) {
-    clearInterval(probeAutoTimer)
-    probeAutoTimer = null
-  }
-  if (enabled) {
-    // Fire one immediately so the user sees progress without waiting 30s.
-    onProbeAllInbounds()
-    probeAutoTimer = setInterval(() => {
-      // Only auto-probe while the inbound tab is active; switching away
-      // shouldn't keep hitting the API.
-      if (activeTab.value === 'inbounds') onProbeAllInbounds()
-    }, probeAutoIntervalMs)
-  }
-}
+const { probeResults, probeAllBusy, probeAutoEnabled, onProbeInbound, onProbeAllInbounds, setAutoProbe } =
+  useInboundProbes(inbounds, activeTab)
 const showInboundForm = ref(false)
-const editingInbound = ref<any>(null)
+const editingInbound = ref<Inbound | null>(null)
 const inboundForm = ref({ tag: '', protocol: 'vless', listen: '', server_address: '', port: 443, settings: '{}', stream: '{}' })
 const editMode = ref<'visual' | 'json'>('visual')
 
@@ -241,13 +164,28 @@ async function runConnectionTest() {
   }
 }
 
+async function runNetworkDiagnostics() {
+  diagnosticsLoading.value = true
+  diagnosticsError.value = ''
+  try {
+    const res: any = await getNetworkDiagnostics()
+    networkDiagnostics.value = res.data
+  } catch (error: any) {
+    diagnosticsError.value = error?.response?.data?.msg || error?.message || 'Network diagnostics failed'
+  } finally {
+    diagnosticsLoading.value = false
+  }
+}
+
 async function applyConfig() {
   applyLoading.value = true
   applyMessage.value = ''
   applyMessageTone.value = ''
   try {
-    const res = await applyProxyConfig(selectedEngine.value) as any
-    setApplyFeedback(res?.msg || `${selectedEngine.value === 'singbox' ? 'Sing-box' : 'Xray'} configuration applied successfully`, 'success')
+    const engine = selectedEngine.value === 'auto' ? undefined : selectedEngine.value
+    const res = await applyProxyConfig(engine) as any
+    configPending.value = false
+    setApplyFeedback(res?.msg || 'Proxy configuration applied successfully', 'success')
   } catch (e: any) {
     const message = e?.response?.data?.msg || e?.message || 'Failed to apply configuration'
     setApplyFeedback(message, 'error')
@@ -261,6 +199,7 @@ async function loadProxyStatus() {
   try {
     const res = await getProxyStatus() as any
     if (res.code === 200 && res.data) {
+      runtimeState.value = res.data.runtime || {}
       proxyStatus.value = {
         xray_running: !!res.data.xray_running,
         singbox_running: !!res.data.singbox_running,
@@ -271,23 +210,11 @@ async function loadProxyStatus() {
         xray_handed_off_to_singbox: Array.isArray(res.data.xray_handed_off_to_singbox) ? res.data.xray_handed_off_to_singbox : [],
         dual_mode: !!res.data.dual_mode,
       }
-      // Sync the radio selector to whichever engine is actually running.
-      // This ensures the selector reflects reality after a page refresh.
-      if (res.data.singbox_running) selectedEngine.value = 'singbox'
-      else if (res.data.xray_running) selectedEngine.value = 'xray'
     }
   } catch { toast.error(t('common.errorOccurred')) }
 }
 
-// Auto-recommend Sing-box when inbounds contain Hysteria2/TUIC and neither engine
-// is currently running (so we don't override an already-running engine choice).
-function autoSelectEngine() {
-  const neitherRunning = !proxyStatus.value.xray_running && !proxyStatus.value.singbox_running
-  if (neitherRunning) {
-    const hasSingboxOnly = inbounds.value.some((ib: any) => singboxOnlyProtocols.has(ib.protocol))
-    if (hasSingboxOnly) selectedEngine.value = 'singbox'
-  }
-}
+
 
 function parseJsonToVisual(settingsStr: string, streamStr: string) {
   resetVisualForm()
@@ -414,7 +341,7 @@ async function fetchInbounds() {
     const res = await listInbounds() as any
     if (res.code === 200) {
       inbounds.value = res.data || []
-      autoSelectEngine()
+
     }
   } catch { toast.error(t('common.errorOccurred')) }
   inboundsLoading.value = false
@@ -526,6 +453,7 @@ async function saveClient() {
     clientForm.value = { email: '', inbound_id: 0, total: 0, enable: true, reset_day: 0 }
     await fetchClients()
     await loadProxyStatus()
+    configPending.value = true
     toast.success(t('common.created'))
   } catch (e: any) {
     toast.error(e?.response?.data?.msg || e?.message || t('common.errorOccurred'))
@@ -544,6 +472,7 @@ async function removeClient(id: number) {
     await deleteClient(id)
     await fetchClients()
     await loadProxyStatus()
+    configPending.value = true
     toast.success(t('common.deleted'))
   } catch { toast.error(t('common.errorOccurred')) }
 }
@@ -567,6 +496,7 @@ async function runBulkAction(action: string) {
     selectedClientIds.value = []
     await fetchClients()
     await loadProxyStatus()
+    configPending.value = true
   } catch (e: any) {
     toast.error(e?.response?.data?.msg || e?.message || t('common.errorOccurred'))
   } finally {
@@ -773,6 +703,16 @@ function downloadQr() {
   a.href = qrDataUrl.value
   a.download = `${qrEmail.value || 'sub'}-${qrFormat.value}.png`
   a.click()
+}
+
+function closeOpenDialogOnEscape(event: KeyboardEvent) {
+  if (event.key !== 'Escape') return
+  if (showQuickSetup.value || showSubLinkModal.value || showQrModal.value) {
+    event.preventDefault()
+    showQuickSetup.value = false
+    showSubLinkModal.value = false
+    showQrModal.value = false
+  }
 }
 
 // ---- Routing Rules ----
@@ -1366,7 +1306,7 @@ async function executeQuickSetup() {
   if (addDefaultClient.value && createdInboundIds.length > 0) {
     try {
       const email = normalizeDefaultClientEmail(defaultClientEmail.value)
-      await createClient({ email, inbound_id: createdInboundIds[0], enable: true })
+      await createClient({ email, inbound_id: createdInboundIds[0]!, enable: true })
     } catch (e: any) {
       toast.error(e?.response?.data?.msg || e?.message || t('common.errorOccurred'))
     }
@@ -1374,6 +1314,7 @@ async function executeQuickSetup() {
 
   quickSetupCreating.value = false
   quickSetupStep.value = 3
+  configPending.value = true
   fetchInbounds()
   fetchClients()
   fetchRoutingRules()
@@ -1382,6 +1323,7 @@ async function executeQuickSetup() {
 
 // ---- Lifecycle ----
 onMounted(() => {
+  document.addEventListener('keydown', closeOpenDialogOnEscape)
   fetchInbounds()
   fetchClients()
   fetchRoutingRules()
@@ -1411,17 +1353,15 @@ watch(activeTab, (newTab) => {
 // this it would keep firing after the user navigated away (during their
 // session), pulling unnecessary load and confusing the next page's state.
 onBeforeUnmount(() => {
-  if (probeAutoTimer) {
-    clearInterval(probeAutoTimer)
-    probeAutoTimer = null
-  }
+  document.removeEventListener('keydown', closeOpenDialogOnEscape)
+  if (connectionsPoll) clearInterval(connectionsPoll)
 })
 </script>
 
 <template>
   <div class="py-2">
     <!-- Header -->
-    <div class="mb-8 flex items-center justify-between">
+    <div class="mb-8 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
       <div>
         <h1 class="text-3xl font-bold text-slate-800 tracking-tight">{{ $t('proxy.title') }}</h1>
         <p class="text-slate-500 mt-1">{{ $t('proxy.subtitle') }}</p>
@@ -1477,28 +1417,34 @@ onBeforeUnmount(() => {
           </span>
         </div>
       </div>
-      <div class="flex items-start gap-3">
-        <div class="flex flex-col items-end gap-2">
+      <div class="flex flex-wrap items-start gap-3">
+        <div class="flex flex-col gap-2">
           <!-- Engine selector -->
           <div class="flex rounded-xl overflow-hidden border border-slate-200 dark:border-slate-600 text-xs font-medium">
             <button
-              @click="selectedEngine = 'xray'"
+              @click="selectedEngine = 'auto'"
               :class="[
                 'px-3 py-2 transition-colors',
-                selectedEngine === 'xray'
-                  ? 'bg-emerald-500 text-white'
+                selectedEngine === 'auto'
+                  ? 'bg-primary-600 text-white'
                   : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
               ]"
-            >Xray</button>
+            >Auto</button>
             <button
-              @click="selectedEngine = 'singbox'"
+              @click="showEngineDiagnostics = !showEngineDiagnostics"
               :class="[
                 'px-3 py-2 border-l border-slate-200 dark:border-slate-600 transition-colors',
-                selectedEngine === 'singbox'
-                  ? 'bg-sky-500 text-white'
-                  : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
+                'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
               ]"
-            >Sing-box</button>
+            >Engine diagnostics</button>
+          </div>
+          <div v-if="showEngineDiagnostics" class="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 max-w-sm">
+            <p>Single-engine apply stops the other runtime. Use it only to isolate an engine issue.</p>
+            <div class="mt-2 flex gap-2">
+              <button @click="selectedEngine = 'xray'" :class="selectedEngine === 'xray' ? 'font-semibold underline' : 'underline'">Xray only</button>
+              <button @click="selectedEngine = 'singbox'" :class="selectedEngine === 'singbox' ? 'font-semibold underline' : 'underline'">Sing-box only</button>
+              <button @click="selectedEngine = 'auto'" class="underline">Return to auto</button>
+            </div>
           </div>
           <!-- Sing-box-only hint when Xray is selected but config has Hy2/TUIC -->
           <p
@@ -1511,7 +1457,7 @@ onBeforeUnmount(() => {
             class="bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors flex items-center disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <SignalIcon class="w-4 h-4 mr-2" :class="testLoading ? 'animate-pulse' : ''" />
-            {{ $t('proxy.testConnection') || 'Test Connection' }}
+            Server egress check
           </button>
           <span v-if="testResult" :class="['text-xs px-3 py-1.5 rounded-lg inline-flex items-center gap-1',
             testResult.success ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-rose-50 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400']">
@@ -1541,9 +1487,15 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <div v-if="runtimeState.error" role="alert" class="mb-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{{ runtimeState.state }}: {{ runtimeState.error }}</div>
+    <div v-if="configPending" class="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+      <span>Configuration changes are saved but not active yet.</span>
+      <button @click="selectedEngine = 'auto'; applyConfig()" :disabled="applyLoading" class="rounded-lg bg-amber-600 px-3 py-2 font-medium text-white disabled:opacity-60">Activate configuration</button>
+    </div>
+
     <!-- Tab Navigation -->
-    <div class="border-b border-slate-200 mb-6">
-      <nav class="-mb-px flex space-x-8">
+    <div class="border-b border-slate-200 mb-6 overflow-x-auto">
+      <nav class="-mb-px flex min-w-max space-x-8">
         <button
           v-for="tab in tabs"
           :key="tab.id"
@@ -1565,9 +1517,12 @@ onBeforeUnmount(() => {
 
       <!-- Inbounds -->
       <div v-if="activeTab === 'inbounds'" class="flex flex-col h-full">
-        <div class="p-6 border-b border-slate-100 flex justify-between items-center">
+        <div class="p-6 border-b border-slate-100 flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
           <h3 class="text-lg font-medium text-slate-800">{{ $t('proxy.inbounds.title') }}</h3>
-          <div class="flex gap-2">
+          <div class="flex flex-wrap gap-2">
+            <button @click="runNetworkDiagnostics" :disabled="diagnosticsLoading" class="text-sm bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 px-3 py-2 rounded-lg font-medium transition">
+              {{ diagnosticsLoading ? 'Running diagnostics…' : 'Network diagnostics' }}
+            </button>
             <button @click="show3xuiImport = !show3xuiImport" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-2 rounded-lg font-medium transition flex items-center">
               <ArrowDownTrayIcon class="h-4 w-4 mr-1" /> Import 3x-ui
             </button>
@@ -1603,6 +1558,14 @@ onBeforeUnmount(() => {
             <button @click="openInboundForm()" class="text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-lg font-medium transition flex items-center">
               <PlusIcon class="h-4 w-4 mr-1" /> {{ $t('proxy.inbounds.addNode') }}
             </button>
+          </div>
+        </div>
+
+        <div v-if="networkDiagnostics || diagnosticsError" class="border-b border-slate-100 bg-slate-50 p-4">
+          <p v-if="diagnosticsError" class="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{{ diagnosticsError }}</p>
+          <div v-else>
+            <p class="mb-2 text-xs font-medium text-slate-600">Full host network diagnostics. Inbound status is shown per listener below.</p>
+            <pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-900 p-3 text-xs text-slate-100">{{ typeof networkDiagnostics === 'string' ? networkDiagnostics : JSON.stringify(networkDiagnostics, null, 2) }}</pre>
           </div>
         </div>
 
@@ -1839,7 +1802,7 @@ onBeforeUnmount(() => {
 
         <div v-if="inboundsLoading" class="px-6 py-12"><SkeletonTable :rows="3" :cols="5" /></div>
 
-        <table v-else class="min-w-full divide-y divide-slate-200">
+        <div v-else class="overflow-x-auto"><table class="min-w-full divide-y divide-slate-200">
           <thead class="bg-slate-50">
             <tr>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.inbounds.tag') }}</th>
@@ -1871,31 +1834,7 @@ onBeforeUnmount(() => {
                 </div>
               </td>
               <td class="px-6 py-4 text-right text-sm font-medium space-x-2 whitespace-nowrap">
-                <!-- Probe result chip: replaces the Probe button while a
-                     check is in flight, then shows a green/red badge. The
-                     user can click the chip to re-probe. -->
-                <span
-                  v-if="probeResults[node.id] === 'pending'"
-                  class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600"
-                >…</span>
-                <button
-                  v-else-if="probeResults[node.id] && (probeResults[node.id] as InboundProbeResult).ok"
-                  @click="onProbeInbound(node.id)"
-                  :class="['inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium transition', 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200']"
-                  :title="probeOkTitle(probeResults[node.id] as InboundProbeResult)"
-                >✓ {{ (probeResults[node.id] as InboundProbeResult).elapsed_ms }}ms<span v-if="(probeResults[node.id] as InboundProbeResult).e2e === 'passed'" class="ml-1 opacity-70">E2E</span></button>
-                <button
-                  v-else-if="probeResults[node.id]"
-                  @click="onProbeInbound(node.id)"
-                  :class="['inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium transition', 'bg-rose-100 text-rose-700 hover:bg-rose-200']"
-                  :title="`${(probeResults[node.id] as InboundProbeResult).stage}: ${(probeResults[node.id] as InboundProbeResult).err || ''}`"
-                >✗ {{ (probeResults[node.id] as InboundProbeResult).stage }}</button>
-                <button
-                  v-else
-                  @click="onProbeInbound(node.id)"
-                  class="text-slate-500 hover:text-slate-700 inline-flex items-center"
-                  :title="$t('proxy.inbounds.probeTooltip')"
-                >{{ $t('proxy.inbounds.probe') }}</button>
+                <InboundProbeControl :result="probeResults[node.id]" @probe="onProbeInbound(node.id)" />
                 <button @click="addClientForInbound(node.id)" class="text-emerald-600 hover:text-emerald-900 inline-flex items-center" :title="$t('proxy.clients.addClient')">
                   <UserPlusIcon class="h-4 w-4 mr-1" />
                   {{ $t('proxy.inbounds.addUser') }}
@@ -1917,7 +1856,7 @@ onBeforeUnmount(() => {
               </td>
             </tr>
           </tbody>
-        </table>
+        </table></div>
       </div>
 
       <!-- Routing Rules -->
@@ -1972,7 +1911,7 @@ onBeforeUnmount(() => {
 
         <div v-if="routingLoading" class="px-6 py-12"><SkeletonTable :rows="3" :cols="5" /></div>
 
-        <table v-else class="min-w-full divide-y divide-slate-200">
+        <div v-else class="overflow-x-auto"><table class="min-w-full divide-y divide-slate-200">
           <thead class="bg-slate-50">
             <tr>
               <th class="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">{{ $t('proxy.routing.name') }}</th>
@@ -1998,7 +1937,7 @@ onBeforeUnmount(() => {
               <td colspan="5" class="py-8 text-center text-sm text-slate-400">{{ $t('proxy.routing.noRules') }}</td>
             </tr>
           </tbody>
-        </table>
+        </table></div>
       </div>
 
       <!-- Users & Subs -->
@@ -2083,7 +2022,7 @@ onBeforeUnmount(() => {
 
         <div v-if="clientsLoading" class="px-6 py-12"><SkeletonTable :rows="3" :cols="5" /></div>
 
-        <table v-else class="min-w-full divide-y divide-slate-200">
+        <div v-else class="overflow-x-auto"><table class="min-w-full divide-y divide-slate-200">
           <thead class="bg-slate-50">
             <tr>
               <th class="px-3 py-3 w-10">
@@ -2166,7 +2105,7 @@ onBeforeUnmount(() => {
               <td colspan="5" class="py-8 text-center text-sm text-slate-400">{{ $t('proxy.clients.noClients') }}</td>
             </tr>
           </tbody>
-        </table>
+        </table></div>
       </div>
 
       <!-- Outbounds -->
@@ -2316,12 +2255,12 @@ onBeforeUnmount(() => {
 
     <!-- Quick Setup Wizard Modal -->
     <div v-if="showQuickSetup" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+      <div role="dialog" aria-modal="true" aria-labelledby="quick-setup-title" class="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
 
         <!-- Modal Header -->
         <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-shrink-0">
           <div>
-            <h2 class="text-lg font-bold text-slate-800">{{ $t('proxy.quickSetup.title') }}</h2>
+            <h2 id="quick-setup-title" class="text-lg font-bold text-slate-800">{{ $t('proxy.quickSetup.title') }}</h2>
             <div class="flex items-center gap-3 mt-1">
               <div v-for="s in 3" :key="s" class="flex items-center gap-1.5">
                 <div :class="[
@@ -2596,13 +2535,13 @@ onBeforeUnmount(() => {
 
     <!-- QR Code Modal -->
     <div v-if="showSubLinkModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+      <div role="dialog" aria-modal="true" aria-labelledby="subscription-dialog-title" class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
         <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
           <div>
-            <h2 class="text-lg font-bold text-slate-800">{{ $t('proxy.subscription.title') }}</h2>
+            <h2 id="subscription-dialog-title" class="text-lg font-bold text-slate-800">{{ $t('proxy.subscription.title') }}</h2>
             <p class="text-xs text-slate-500 mt-0.5">{{ subLinkEmail }}</p>
           </div>
-          <button @click="showSubLinkModal = false" class="text-slate-400 hover:text-slate-600 transition">
+          <button @click="showSubLinkModal = false" aria-label="Close subscription dialog" class="text-slate-400 hover:text-slate-600 transition">
             <XMarkIcon class="h-5 w-5" />
           </button>
         </div>

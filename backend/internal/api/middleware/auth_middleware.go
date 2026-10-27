@@ -3,6 +3,8 @@ package middleware
 import (
 	"crypto/subtle"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +18,9 @@ import (
 // SetupAdminUserID is the JWT subject issued by the one-time setup login.
 // Such tokens may only complete the setup wizard, never call /api/v1.
 const SetupAdminUserID = "setup-admin"
+
+// SessionCookieName is the HttpOnly browser-session cookie set after login.
+const SessionCookieName = "zenith_session"
 
 // AuthMiddleware accepts three principal types:
 //
@@ -38,6 +43,7 @@ func AuthMiddleware() gin.HandlerFunc {
 		}
 
 		var token string
+		authSource := "header"
 		if h := c.GetHeader("Authorization"); h != "" {
 			parts := strings.SplitN(h, " ", 2)
 			if len(parts) == 2 && parts[0] == "Bearer" {
@@ -45,7 +51,10 @@ func AuthMiddleware() gin.HandlerFunc {
 			}
 		}
 		if token == "" {
-			token = c.Query("token")
+			if cookieToken, err := c.Cookie(SessionCookieName); err == nil {
+				token = cookieToken
+				authSource = "cookie"
+			}
 		}
 		if token == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Authorization required"})
@@ -77,9 +86,15 @@ func AuthMiddleware() gin.HandlerFunc {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Token has expired"})
 				return
 			}
-			// Best-effort last_used update; ignore errors so a failed UPDATE
-			// never fails an otherwise-good auth.
-			config.DB.Model(&model.ApiToken{}).Where("id = ?", row.ID).Update("last_used_at", time.Now().Unix())
+			// Best-effort and throttled: writing last_used_at on every dashboard
+			// poll would turn read-only API traffic into constant SQLite writer
+			// contention. One update per token per minute is sufficient for audit.
+			now := time.Now().Unix()
+			if row.LastUsedAt == 0 || now-row.LastUsedAt >= 60 {
+				config.DB.Model(&model.ApiToken{}).
+					Where("id = ? AND (last_used_at = 0 OR last_used_at <= ?)", row.ID, now-60).
+					Update("last_used_at", now)
+			}
 
 			c.Set("principal", "token:"+row.Name)
 			c.Set("scopes", row.Scopes)
@@ -94,17 +109,50 @@ func AuthMiddleware() gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid or expired token"})
 			return
 		}
-		// Setup-wizard tokens are only valid for /api/setup/complete.
-		if claims.UserID == SetupAdminUserID {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid or expired token"})
+		// Only explicitly admin-purpose JWTs may become full panel sessions.
+		// Rejecting empty/unknown purposes deliberately expires pre-hardening
+		// browser sessions once during upgrade instead of weakening separation.
+		if claims.Purpose != jwtutil.PurposeAdmin || claims.UserID == "setup-admin" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Setup token is not valid for the panel API"})
+			return
+		}
+		adminID, parseErr := strconv.ParseUint(claims.UserID, 10, 64)
+		if parseErr != nil || claims.LoggedInAt <= 0 {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid session"})
+			return
+		}
+		var admin model.AdminUser
+		if err := config.ReadDB().WithContext(c.Request.Context()).Select("id", "username", "session_version").
+			Where("id = ? AND username = ?", uint(adminID), claims.Username).First(&admin).Error; err != nil || admin.SessionVersion != claims.SessionVersion {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Session has been revoked"})
 			return
 		}
 		c.Set("user_id", claims.UserID)
 		c.Set("username", claims.Username)
+		c.Set("session_version", claims.SessionVersion)
+		c.Set("logged_in_at", claims.LoggedInAt)
 		c.Set("principal", "admin:"+claims.Username)
 		c.Set("scopes", "*")
+		c.Set("auth_source", authSource)
+		if authSource == "cookie" && !sameOriginCookieRequest(c) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": "Cross-origin session request rejected"})
+			return
+		}
 		c.Next()
 	}
+}
+
+func sameOriginCookieRequest(c *gin.Context) bool {
+	switch c.Request.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	}
+	origin := strings.TrimSpace(c.GetHeader("Origin"))
+	if origin == "" {
+		return false
+	}
+	parsed, err := url.Parse(origin)
+	return err == nil && parsed.Scheme != "" && strings.EqualFold(parsed.Host, c.Request.Host)
 }
 
 // HasScope returns true when the principal in `c` is allowed to perform an
@@ -116,7 +164,8 @@ func HasScope(c *gin.Context, required string) bool {
 		return scopes == "*"
 	}
 	for s := range strings.SplitSeq(scopes, ",") {
-		if strings.TrimSpace(s) == required || strings.TrimSpace(s) == "*" {
+		scope := strings.TrimSpace(s)
+		if scope == required || scope == "*" || scope == ScopeAdmin {
 			return true
 		}
 	}

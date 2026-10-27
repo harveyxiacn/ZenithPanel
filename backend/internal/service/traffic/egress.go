@@ -2,6 +2,7 @@ package traffic
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strconv"
 	"sync"
@@ -16,24 +17,26 @@ import (
 // Setting keys for the egress logger. All are stored in the existing Setting
 // key-value table and editable from the panel UI / API.
 const (
-	SettingEgressEnabled             = "traffic_egress_enabled"              // master on/off (default true)
-	SettingEgressRetentionDays       = "traffic_egress_retention_days"       // hot 5-min table TTL (default 7)
+	SettingEgressEnabled             = "traffic_egress_enabled"               // master on/off (default true)
+	SettingEgressRetentionDays       = "traffic_egress_retention_days"        // hot 5-min table TTL (default 7)
 	SettingEgressHourlyRetentionDays = "traffic_egress_hourly_retention_days" // hourly rollup TTL (default 90)
-	SettingEgressASNEnabled          = "traffic_egress_asn_enabled"          // Team Cymru DNS ASN lookups (default true)
-	SettingEgressRDNSEnabled         = "traffic_egress_rdns_enabled"         // PTR reverse-DNS names for IP-only rows (default true)
-	SettingEgressSocketSampler       = "traffic_egress_socket_sampler"       // ss-based universal sampler (default true)
-	SettingEgressXrayAccessPath      = "traffic_egress_xray_access_path"     // path to a zenith-xray access.log to tail ("" = off)
-	SettingEgressInstanceMap         = "traffic_egress_instance_map"         // JSON {procComm: instanceLabel} overrides for the sampler
-	SettingEgressPruneHour           = "traffic_egress_prune_hour"           // local hour to run prune/rollup (default 5)
-	SettingEgressRollupWatermark     = "traffic_egress_rollup_watermark"     // internal: last hour-bucket rolled up
+	SettingEgressASNEnabled          = "traffic_egress_asn_enabled"           // Team Cymru DNS ASN lookups (default true)
+	SettingEgressRDNSEnabled         = "traffic_egress_rdns_enabled"          // PTR reverse-DNS names for IP-only rows (default true)
+	SettingEgressSocketSampler       = "traffic_egress_socket_sampler"        // ss-based universal sampler (default true)
+	SettingEgressXrayAccessPath      = "traffic_egress_xray_access_path"      // path to a zenith-xray access.log to tail ("" = off)
+	SettingEgressInstanceMap         = "traffic_egress_instance_map"          // JSON {procComm: instanceLabel} overrides for the sampler
+	SettingEgressPruneHour           = "traffic_egress_prune_hour"            // local hour to run prune/rollup (default 5)
+	SettingEgressRollupWatermark     = "traffic_egress_rollup_watermark"      // internal: last hour-bucket rolled up
 )
 
 const (
-	bucketSecs        int64 = 300  // hot table bucket width
-	hourSecs          int64 = 3600 // rollup bucket width
-	defaultHotDays          = 7
-	defaultHourlyDays       = 90
-	defaultPruneHour        = 5
+	bucketSecs           int64 = 300  // hot table bucket width
+	hourSecs             int64 = 3600 // rollup bucket width
+	defaultHotDays             = 7
+	defaultHourlyDays          = 90
+	defaultPruneHour           = 5
+	maxEgressPendingKeys       = 20000
+	egressWriteTimeout         = 5 * time.Second
 )
 
 func getBoolSetting(key string, def bool) bool {
@@ -59,6 +62,7 @@ func getIntSetting(key string, def, min, max int) int {
 // destKey is the in-memory aggregation key, matching the hot table's unique index.
 type destKey struct {
 	instance, user, host, ip, direction string
+	bucket                              int64
 }
 
 type destStat struct{ up, down, hits int64 }
@@ -79,8 +83,14 @@ type EgressCollector struct {
 	asn  *asnResolver
 	rdns *rdnsResolver
 
-	mu      sync.Mutex
-	pending map[destKey]destStat
+	flushMu  sync.Mutex
+	inFlight int
+	mu       sync.Mutex
+	pending  map[destKey]destStat
+	retry    map[destKey]destStat
+	dropped  uint64
+	retries  uint64
+	lastErr  string
 }
 
 // NewEgressCollector constructs the collector. agg may be nil under unit tests.
@@ -91,6 +101,7 @@ func NewEgressCollector(db *gorm.DB, agg *proxyAggregator) *EgressCollector {
 		asn:     newASNResolver(getBoolSetting(SettingEgressASNEnabled, true)),
 		rdns:    newRDNSResolver(getBoolSetting(SettingEgressRDNSEnabled, true)),
 		pending: make(map[destKey]destStat),
+		retry:   make(map[destKey]destStat),
 	}
 	egressActive.Store(getBoolSetting(SettingEgressEnabled, true))
 	return e
@@ -111,9 +122,20 @@ func (e *EgressCollector) Add(instance, user, host, ip, direction string, up, do
 	if len(ip) > 45 {
 		ip = ip[:45]
 	}
-	k := destKey{instance: instance, user: user, host: host, ip: ip, direction: direction}
+	if len(instance) > 128 {
+		instance = instance[:128]
+	}
+	if len(direction) > 32 {
+		direction = direction[:32]
+	}
+	k := destKey{bucket: time.Now().Unix() / bucketSecs * bucketSecs, instance: instance, user: user, host: host, ip: ip, direction: direction}
 	e.mu.Lock()
-	s := e.pending[k]
+	s, exists := e.pending[k]
+	if !exists && len(e.pending)+len(e.retry)+e.inFlight >= maxEgressPendingKeys {
+		e.dropped++
+		e.mu.Unlock()
+		return
+	}
 	s.up += up
 	s.down += down
 	s.hits += hits
@@ -129,6 +151,8 @@ func (e *EgressCollector) Flush() {
 	if e == nil || e.db == nil {
 		return
 	}
+	e.flushMu.Lock()
+	defer e.flushMu.Unlock()
 	enabled := getBoolSetting(SettingEgressEnabled, true)
 	egressActive.Store(enabled)
 
@@ -141,6 +165,7 @@ func (e *EgressCollector) Flush() {
 	if !enabled {
 		e.mu.Lock()
 		e.pending = make(map[destKey]destStat)
+		e.retry = make(map[destKey]destStat)
 		e.mu.Unlock()
 		return
 	}
@@ -158,22 +183,52 @@ func (e *EgressCollector) Flush() {
 		e.Add("sing-box", k.user, k.host, k.ip, "egress", int64(d.up), int64(d.down), 1)
 	}
 
-	e.mu.Lock()
-	pend := e.pending
-	e.pending = make(map[destKey]destStat, len(pend))
-	e.mu.Unlock()
-	if len(pend) == 0 {
-		return
-	}
-
-	bucket := (time.Now().Unix() / bucketSecs) * bucketSecs
-	if err := e.db.Transaction(func(tx *gorm.DB) error {
-		for k, s := range pend {
-			e.upsert(tx, bucket, k, s)
+	ctx, cancel := context.WithTimeout(context.Background(), egressWriteTimeout)
+	defer cancel()
+	for ctx.Err() == nil {
+		// Limit each transaction so interactive writes can acquire the writer pool.
+		batch := make(map[destKey]destStat)
+		e.mu.Lock()
+		for _, source := range []map[destKey]destStat{e.retry, e.pending} {
+			for k, v := range source {
+				if len(batch) >= 32 {
+					break
+				}
+				old := batch[k]
+				old.up += v.up
+				old.down += v.down
+				old.hits += v.hits
+				batch[k] = old
+				delete(source, k)
+			}
 		}
-		return nil
-	}); err != nil {
-		log.Printf("traffic egress flush: %v", err)
+		e.inFlight = len(batch)
+		e.mu.Unlock()
+		if len(batch) == 0 {
+			return
+		}
+		err := e.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			for k, v := range batch {
+				if err := e.upsert(tx, k.bucket, k, v); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		e.mu.Lock()
+		e.inFlight = 0
+		if err != nil {
+			mergeDestStats(e.retry, batch)
+			e.retries++
+			e.lastErr = err.Error()
+		} else {
+			e.lastErr = ""
+		}
+		e.mu.Unlock()
+		if err != nil {
+			log.Printf("traffic egress flush: %v", err)
+			return
+		}
 	}
 }
 
@@ -182,7 +237,7 @@ var teUniqueCols = []clause.Column{
 	{Name: "dest_host"}, {Name: "dest_ip"}, {Name: "direction"},
 }
 
-func (e *EgressCollector) upsert(tx *gorm.DB, bucket int64, k destKey, s destStat) {
+func (e *EgressCollector) upsert(tx *gorm.DB, bucket int64, k destKey, s destStat) error {
 	info := e.asn.lookup(k.ip)
 	rdnsName := ""
 	if k.host == "" {
@@ -213,8 +268,38 @@ func (e *EgressCollector) upsert(tx *gorm.DB, bucket int64, k destKey, s destSta
 		Columns:   teUniqueCols,
 		DoUpdates: clause.Assignments(assigns),
 	}).Create(&row).Error; err != nil {
-		log.Printf("traffic egress upsert: %v", err)
+		return fmt.Errorf("upsert %s/%s: %w", k.instance, k.ip, err)
 	}
+	return nil
+}
+
+func mergeDestStats(dst, src map[destKey]destStat) {
+	for key, stat := range src {
+		cur := dst[key]
+		cur.up += stat.up
+		cur.down += stat.down
+		cur.hits += stat.hits
+		dst[key] = cur
+	}
+}
+
+// EgressStatus is intentionally small so callers can surface collector health
+// without exposing destination data.
+type EgressStatus struct {
+	Pending int    `json:"pending"`
+	Retry   int    `json:"retry"`
+	Dropped uint64 `json:"dropped_destination_keys"`
+	Retries uint64 `json:"retries"`
+	LastErr string `json:"last_error,omitempty"`
+}
+
+func (e *EgressCollector) Status() EgressStatus {
+	if e == nil {
+		return EgressStatus{}
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return EgressStatus{Pending: len(e.pending), Retry: len(e.retry), Dropped: e.dropped, Retries: e.retries, LastErr: e.lastErr}
 }
 
 // Start launches the background source goroutines. Each checks its own enable
@@ -274,9 +359,13 @@ func (e *EgressCollector) RollupOnce(now time.Time) error {
 	}
 	if wm == 0 {
 		var minB int64
-		e.db.Model(&model.TrafficEgress{}).Select("COALESCE(MIN(bucket),0)").Scan(&minB)
+		if err := e.db.Model(&model.TrafficEgress{}).Select("COALESCE(MIN(bucket),0)").Scan(&minB).Error; err != nil {
+			return fmt.Errorf("read egress rollup watermark: %w", err)
+		}
 		if minB == 0 {
-			_ = config.SetSetting(SettingEgressRollupWatermark, strconv.FormatInt(target, 10))
+			if err := config.SetSetting(SettingEgressRollupWatermark, strconv.FormatInt(target, 10)); err != nil {
+				return fmt.Errorf("persist egress rollup watermark: %w", err)
+			}
 			return nil
 		}
 		wm = (minB/hourSecs)*hourSecs - hourSecs
@@ -287,20 +376,24 @@ func (e *EgressCollector) RollupOnce(now time.Time) error {
 		// The hourly table drops dest_ip, so fold the best-effort rDNS name into
 		// dest_host — otherwise every IP-only row would collapse to one blank
 		// per-ASN row and the long-range view would lose all destination detail.
-		e.db.Model(&model.TrafficEgress{}).
+		if err := e.db.Model(&model.TrafficEgress{}).
 			Select("? as bucket, instance, user_email, COALESCE(NULLIF(dest_host,''), dest_rdns) as dest_host, asn, direction, "+
 				"SUM(bytes_up) as bytes_up, SUM(bytes_down) as bytes_down, SUM(hits) as hits, "+
 				"MAX(as_org) as as_org, MAX(country) as country", h).
 			Where("bucket >= ? AND bucket < ?", h, h+hourSecs).
 			Group("instance, user_email, COALESCE(NULLIF(dest_host,''), dest_rdns), asn, direction").
-			Scan(&rows)
+			Scan(&rows).Error; err != nil {
+			return fmt.Errorf("read egress rollup bucket %d: %w", h, err)
+		}
 		if len(rows) > 0 {
 			if err := e.db.Clauses(clause.OnConflict{Columns: tehUniqueCols, DoNothing: true}).
 				CreateInBatches(&rows, 200).Error; err != nil {
 				return err
 			}
 		}
-		_ = config.SetSetting(SettingEgressRollupWatermark, strconv.FormatInt(h, 10))
+		if err := config.SetSetting(SettingEgressRollupWatermark, strconv.FormatInt(h, 10)); err != nil {
+			return fmt.Errorf("persist egress rollup watermark for bucket %d: %w", h, err)
+		}
 	}
 	return nil
 }

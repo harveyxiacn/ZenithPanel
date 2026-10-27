@@ -16,6 +16,8 @@ export function useConfirm() {
     cancelText?: string
     variant?: 'danger' | 'warning' | 'default'
   }): Promise<boolean> {
+    resolvePromise?.(false)
+    resolvePromise = null
     title.value = opts.title
     message.value = opts.message
     confirmText.value = opts.confirmText || 'Confirm'
@@ -28,10 +30,12 @@ export function useConfirm() {
   function onConfirm() {
     visible.value = false
     resolvePromise?.(true)
+    resolvePromise = null
   }
   function onCancel() {
     visible.value = false
     resolvePromise?.(false)
+    resolvePromise = null
   }
 
   return { visible, title, message, confirmText, cancelText, variant, confirm, onConfirm, onCancel }

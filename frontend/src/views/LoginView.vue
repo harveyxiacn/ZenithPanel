@@ -38,9 +38,9 @@ const handleLogin = async () => {
       loading.value = false
       return
     }
-    if (res.code === 200 && res.data?.token) {
-      authStore.setToken(res.data.token)
-      router.push('/')
+		if (res.code === 200) {
+			authStore.markAuthenticated(res.data?.user)
+			router.push('/')
     } else {
       errorMsg.value = res.msg || 'Login failed'
     }

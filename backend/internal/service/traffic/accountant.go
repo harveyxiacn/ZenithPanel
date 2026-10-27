@@ -40,7 +40,6 @@ type Accountant struct {
 	lastFlush  time.Time
 	lastXrayOK time.Time
 	lastErr    string
-
 	// Xray counters are read cumulatively (no -reset) and diffed against
 	// the last values we successfully persisted, so a failed DB write is
 	// retried on the next flush instead of being lost. xrayStart identifies
@@ -50,6 +49,8 @@ type Accountant struct {
 	xrayLast  map[string]pendingDelta
 	xrayStart time.Time
 }
+
+const accountantWriteTimeout = 5 * time.Second
 
 // NewAccountant wires the accountant to the running managers and the proxy
 // aggregator that already polls Clash API. db may be nil under unit tests;
@@ -149,7 +150,6 @@ func (a *Accountant) flushXray() {
 	a.lastXrayOK = time.Now()
 	a.lastErr = ""
 	a.mu.Unlock()
-
 	deltas := xrayDeltas(totals, a.xrayLast)
 	for ident := range a.applyDeltas(deltas, "xray") {
 		a.xrayLast[ident] = totals[ident]
@@ -199,44 +199,59 @@ func (a *Accountant) applyDeltas(deltas map[string]pendingDelta, source string) 
 	if a.db == nil {
 		return settled
 	}
-	var clients []model.Client
-	a.db.Select("id", "email").Find(&clients)
-	byIdent := map[string]uint{}
-	for id, ident := range proxy.StatsIdentities(clients) {
-		byIdent[ident] = id
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), accountantWriteTimeout)
+	defer cancel()
+	var committed map[string]bool
 	matched, unmatched := 0, 0
-	for ident, d := range deltas {
-		id, ok := byIdent[ident]
-		if !ok {
-			// "(anonymous)" connections, deleted clients, or stale names.
-			settled[ident] = true
-			if ident != "" && ident != "(anonymous)" {
-				unmatched++
+	err := a.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var clients []model.Client
+		if err := tx.Select("id", "email").Find(&clients).Error; err != nil {
+			return err
+		}
+		byIdent := map[string]uint{}
+		for id, ident := range proxy.StatsIdentities(clients) {
+			byIdent[ident] = id
+		}
+		// A panel-only upgrade leaves an external runner's prior configuration
+		// and its counters alive. Accept its former, globally unique name until
+		// the next explicit proxy apply writes canonical client identities.
+		for id, ident := range proxy.LegacyStatsIdentities(clients) {
+			if _, canonical := byIdent[ident]; !canonical {
+				byIdent[ident] = id
 			}
-			continue
 		}
-		if d.up == 0 && d.down == 0 {
-			settled[ident] = true
-			continue
+		committed = make(map[string]bool, len(deltas))
+		for ident, d := range deltas {
+			id, ok := byIdent[ident]
+			if !ok {
+				committed[ident] = true
+				if ident != "" && ident != "(anonymous)" {
+					unmatched++
+				}
+				continue
+			}
+			if d.up == 0 && d.down == 0 {
+				committed[ident] = true
+				continue
+			}
+			if err := tx.Model(&model.Client{}).Where("id = ?", id).Updates(map[string]any{
+				"up_load": gorm.Expr("up_load + ?", d.up), "down_load": gorm.Expr("down_load + ?", d.down),
+			}).Error; err != nil {
+				return err
+			}
+			committed[ident] = true
+			matched++
 		}
-		res := a.db.Model(&model.Client{}).
-			Where("id = ?", id).
-			Updates(map[string]any{
-				"up_load":   gorm.Expr("up_load + ?", d.up),
-				"down_load": gorm.Expr("down_load + ?", d.down),
-			})
-		if res.Error != nil {
-			log.Printf("traffic accountant (%s): update %s: %v", source, ident, res.Error)
-			continue
-		}
-		settled[ident] = true
-		matched += int(res.RowsAffected)
+		return nil
+	})
+	if err != nil {
+		log.Printf("traffic accountant (%s): transactional update: %v", source, err)
+		return settled
 	}
 	if matched == 0 && unmatched > 0 {
 		log.Printf("traffic accountant (%s): %d deltas had no matching Client rows", source, unmatched)
 	}
-	return settled
+	return committed
 }
 
 // Status returns last-flush metadata for the diagnostic endpoint. Used by the

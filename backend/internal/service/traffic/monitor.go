@@ -21,6 +21,8 @@ import (
 // accountant for both Xray and Sing-box. Engine/Protocol/InboundTag are
 // joined from the owning Inbound so the UI can filter by engine or protocol.
 type ProxyUserSample struct {
+	ClientID        uint     `json:"client_id,omitempty"`
+	InboundID       uint     `json:"inbound_id,omitempty"`
 	Email           string   `json:"email"`
 	UploadRateBps   uint64   `json:"upload_rate_bps"`
 	DownloadRateBps uint64   `json:"download_rate_bps"`

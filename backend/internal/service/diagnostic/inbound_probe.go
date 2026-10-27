@@ -26,16 +26,20 @@ type InboundProbeResult struct {
 	Protocol  string `json:"protocol"`
 	Transport string `json:"transport"`
 	Port      int    `json:"port"`
-	OK        bool   `json:"ok"`
-	Stage     string `json:"stage,omitempty"`
-	ElapsedMs int64  `json:"elapsed_ms"`
-	Err       string `json:"err,omitempty"`
 	// End-to-end result (see service/selftest): "passed", "failed" or
 	// "skipped" (no enabled client, or quick mode). Empty when the port
 	// probe already failed. On "failed", OK is false and Stage is "proxy".
-	E2E        string `json:"e2e,omitempty"`
-	ExitIP     string `json:"exit_ip,omitempty"`
-	E2ELatency int64  `json:"e2e_latency_ms,omitempty"`
+	Family string `json:"family"`
+	// Verification is the strongest check completed by this local probe. A
+	// UDP listener check is deliberately not a QUIC/Hysteria2 handshake.
+	Verification string `json:"verification"`
+	OK           bool   `json:"ok"`
+	Stage        string `json:"stage,omitempty"`
+	ElapsedMs    int64  `json:"elapsed_ms"`
+	Err          string `json:"err,omitempty"`
+	E2E          string `json:"e2e,omitempty"`
+	ExitIP       string `json:"exit_ip,omitempty"`
+	E2ELatency   int64  `json:"e2e_latency_ms,omitempty"`
 }
 
 // quicProtocols are served over UDP/QUIC; they cannot be TCP-dialed and the
@@ -68,18 +72,26 @@ func requiresTLSDial(in model.Inbound) bool {
 //
 //   - Step 1 ("bound"): the kernel must report the port as listening in
 //     /proc/net/{tcp,udp}{,6}. If not, no further work is useful.
-//   - Step 2 ("tcp"): for TCP-style inbounds we dial 127.0.0.1:port with a
-//     short timeout; success means the engine accepted the connection.
+//   - Step 2 ("tcp"): for TCP-style inbounds we dial the selected local
+//     address family with a short timeout; success means the engine accepted
+//     a TCP connection.
 //   - Step 3 ("tls"): if the inbound's stream config asks for TLS, we drive
 //     a TLS handshake with InsecureSkipVerify so a self-signed cert (test
 //     setup) doesn't poison the result.
-//   - Step 3 ("udp"): for QUIC-style inbounds we send a 16-byte sentinel
-//     and call it good as soon as the OS doesn't refuse it. Sing-box's
-//     QUIC servers will silently drop an unrecognised packet but at least
-//     the port is alive.
+//   - Step 3 ("udp"): for QUIC-style inbounds we send a 16-byte sentinel.
+//     Sing-box's QUIC servers silently drop malformed packets, so this only
+//     proves a local UDP listener is reachable, not that a client can
+//     authenticate.
 //
 // The probe never reaches outside the box and never modifies state.
 func ProbeInbound(in model.Inbound) InboundProbeResult {
+	return ProbeInboundFamily(in, "auto")
+}
+
+// ProbeInboundFamily performs a panel-local probe using "auto", "ipv4", or
+// "ipv6". Requesting IPv6 verifies that listener specifically instead of
+// allowing a successful IPv4 probe to mask a missing IPv6 bind.
+func ProbeInboundFamily(in model.Inbound, family string) InboundProbeResult {
 	start := time.Now()
 	res := InboundProbeResult{
 		InboundID: in.ID,
@@ -88,6 +100,15 @@ func ProbeInbound(in model.Inbound) InboundProbeResult {
 		Port:      in.Port,
 	}
 	res.Transport = inferTransport(in)
+	dialHost, selectedFamily, err := ProbeDialHost(in, family)
+	if err != nil {
+		res.Family = normalizeProbeFamily(family)
+		res.Stage = "address_family"
+		res.Err = err.Error()
+		res.ElapsedMs = time.Since(start).Milliseconds()
+		return res
+	}
+	res.Family = selectedFamily
 
 	isQUIC := quicProtocols[in.Protocol]
 	netProto := "tcp"
@@ -95,14 +116,14 @@ func ProbeInbound(in model.Inbound) InboundProbeResult {
 		netProto = "udp"
 	}
 
-	if !portIsBound(in.Port, netProto) {
+	if !portIsBoundForFamily(in.Port, netProto, selectedFamily) {
 		res.Stage = "not_bound"
 		res.Err = fmt.Sprintf("nothing is listening on %s port %d", netProto, in.Port)
 		res.ElapsedMs = time.Since(start).Milliseconds()
 		return res
 	}
 
-	dialAddr := fmt.Sprintf("127.0.0.1:%d", in.Port)
+	dialAddr := net.JoinHostPort(dialHost, strconv.Itoa(in.Port))
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
@@ -128,6 +149,10 @@ func ProbeInbound(in model.Inbound) InboundProbeResult {
 			return res
 		}
 		res.OK = true
+		// A successful UDP write is only local bind evidence. QUIC servers
+		// commonly drop this malformed packet without replying, so callers
+		// must use a real protocol client to prove authentication/egress.
+		res.Verification = "udp_local_bind"
 		res.ElapsedMs = time.Since(start).Milliseconds()
 		return res
 	}
@@ -156,11 +181,66 @@ func ProbeInbound(in model.Inbound) InboundProbeResult {
 			res.ElapsedMs = time.Since(start).Milliseconds()
 			return res
 		}
+		res.Verification = "tls_handshake"
+	} else {
+		res.Verification = "tcp_connect"
 	}
 
 	res.OK = true
 	res.ElapsedMs = time.Since(start).Milliseconds()
 	return res
+}
+
+func normalizeProbeFamily(family string) string {
+	switch strings.ToLower(strings.TrimSpace(family)) {
+	case "ipv4", "4":
+		return "ipv4"
+	case "ipv6", "6":
+		return "ipv6"
+	default:
+		return "auto"
+	}
+}
+
+// ProbeDialHost chooses the local target used by ProbeInboundFamily. Callers
+// that perform a higher-level check after a successful probe must use this
+// helper rather than selecting their own loopback address, so an IPv6 check
+// cannot accidentally run its data path over IPv4.
+//
+// An explicit address is used in auto
+// mode so the probe matches the bound family; wildcard and empty binds use
+// loopback. Invalid cross-family requests fail before an ambiguous dial.
+func ProbeDialHost(in model.Inbound, family string) (host, selectedFamily string, err error) {
+	requested := normalizeProbeFamily(family)
+	listen := strings.Trim(strings.TrimSpace(in.Listen), "[]")
+	listenIP := net.ParseIP(strings.Split(listen, "%")[0])
+	if requested == "ipv4" {
+		if listenIP != nil && listenIP.To4() == nil && !listenIP.IsUnspecified() {
+			return "", requested, fmt.Errorf("inbound is bound to IPv6 address %q", in.Listen)
+		}
+		if listenIP != nil && listenIP.To4() != nil && !listenIP.IsUnspecified() {
+			return listen, requested, nil
+		}
+		return "127.0.0.1", requested, nil
+	}
+	if requested == "ipv6" {
+		if listenIP != nil && listenIP.To4() != nil && !listenIP.IsUnspecified() {
+			return "", requested, fmt.Errorf("inbound is bound to IPv4 address %q", in.Listen)
+		}
+		if listenIP != nil && listenIP.To4() == nil && !listenIP.IsUnspecified() {
+			return listen, requested, nil
+		}
+		return "::1", requested, nil
+	}
+	if listenIP != nil && !listenIP.IsUnspecified() {
+		if listenIP.To4() == nil {
+			return listen, "ipv6", nil
+		}
+		return listen, "ipv4", nil
+	}
+	// Preserve existing readiness semantics. Callers can explicitly request
+	// IPv6 when they need to prove the IPv6 listener.
+	return "127.0.0.1", "ipv4", nil
 }
 
 // inferTransport returns the human-readable "transport" tag used by probe
@@ -209,11 +289,24 @@ func inferTransport(in model.Inbound) string {
 var procRoot = "/proc/net"
 
 func portIsBound(port int, proto string) bool {
+	return portIsBoundForFamily(port, proto, "auto")
+}
+
+func portIsBoundForFamily(port int, proto, family string) bool {
 	if _, err := os.Stat(procRoot); err != nil {
 		// Non-Linux: trust the dial step to give us the real answer.
 		return true
 	}
 	tables := []string{proto, proto + "6"}
+	switch normalizeProbeFamily(family) {
+	case "ipv4":
+		// Linux reports an IPv6 dual-stack wildcard in tcp6/udp6 even when
+		// it also accepts IPv4-mapped traffic. Keep tcp6/udp6 here and let
+		// the actual IPv4 dial decide whether v6only prevents that traffic.
+		tables = []string{proto, proto + "6"}
+	case "ipv6":
+		tables = []string{proto + "6"}
+	}
 	for _, t := range tables {
 		data, err := os.ReadFile(procRoot + "/" + t)
 		if err != nil {

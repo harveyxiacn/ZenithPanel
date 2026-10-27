@@ -7,18 +7,10 @@ export default defineConfig({
   plugins: [vue()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(import.meta.dirname, './src'),
     },
   },
-  build: {
-    chunkSizeWarningLimit: 1000,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          echarts: ['echarts', 'vue-echarts'],
-          xterm: ['xterm', 'xterm-addon-fit'],
-        },
-      },
-    },
-  },
+	build: {
+		chunkSizeWarningLimit: 750,
+	},
 })

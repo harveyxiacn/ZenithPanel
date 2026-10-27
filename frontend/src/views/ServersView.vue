@@ -2,12 +2,13 @@
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CommandLineIcon, FolderIcon, WrenchIcon, ShieldCheckIcon, ChevronRightIcon, DocumentIcon, ArrowUpIcon, PlusIcon, TrashIcon } from '@heroicons/vue/24/outline'
-import { useAuthStore } from '@/store/auth'
+import { createTerminalTicket } from '@/api/auth'
 import { listContainers, startContainer, stopContainer, restartContainer, removeContainer, listImages, pullImage, removeImage, getContainerLogs, getContainerStats, runContainer, type RunContainerRequest } from '@/api/docker'
 import { listDirectory, readFile, writeFile } from '@/api/fs'
-import { listFirewallRules, addFirewallRule, deleteFirewallRule } from '@/api/firewall'
+import { listFirewallRules, addFirewallRule, deleteFirewallRule, type FirewallFamily, type FirewallRule } from '@/api/firewall'
 import { useToast } from '../composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
+import type { Terminal as XtermTerminal } from '@xterm/xterm'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -27,35 +28,77 @@ const termInitialized = ref(false)
 const termConnecting = ref(false)
 const hostname = window.location.hostname
 let termWs: WebSocket | null = null
+let terminal: XtermTerminal | null = null
+let terminalResizeListener: (() => void) | null = null
+let terminalDisposed = false
+
+function disposeTerminal() {
+  if (terminalResizeListener) {
+    window.removeEventListener('resize', terminalResizeListener)
+    terminalResizeListener = null
+  }
+  if (termWs) {
+    termWs.close()
+    termWs = null
+  }
+  if (terminal) {
+    terminal.dispose()
+    terminal = null
+  }
+  termInitialized.value = false
+  termConnecting.value = false
+}
 
 async function connectTerminal() {
-  if (termInitialized.value || !terminalEl.value) return
+  if (termInitialized.value || termConnecting.value || terminalDisposed || !terminalEl.value) return
+  // A previously closed socket leaves its terminal visible so the disconnect
+  // message remains useful. Release it before a retry creates a new instance.
+  disposeTerminal()
   termConnecting.value = true
   try {
-    const { Terminal } = await import('xterm')
-    await import('xterm/css/xterm.css')
-    const { FitAddon } = await import('xterm-addon-fit')
+		const { Terminal } = await import('@xterm/xterm')
+		await import('@xterm/xterm/css/xterm.css')
+		const { FitAddon } = await import('@xterm/addon-fit')
+    if (terminalDisposed || !terminalEl.value) {
+      termConnecting.value = false
+      return
+    }
     const term = new Terminal({ cursorBlink: true, fontSize: 14, theme: { background: '#1a1b26' } })
+    terminal = term
     const fitAddon = new FitAddon()
     term.loadAddon(fitAddon)
     term.open(terminalEl.value)
     fitAddon.fit()
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-    const token = useAuthStore().token
-    const ws = new WebSocket(`${proto}://${location.host}/api/v1/terminal?token=${token}`)
+		const ticketResponse = await createTerminalTicket()
+		const ticket = ticketResponse.data?.ticket
+		if (!ticket) throw new Error('Terminal ticket was not issued')
+
+    if (terminalDisposed) {
+      termConnecting.value = false
+      disposeTerminal()
+      return
+    }
+		const ws = new WebSocket(`${proto}://${location.host}/api/v1/terminal?ticket=${encodeURIComponent(ticket)}`)
     ws.binaryType = 'arraybuffer'
 
     ws.onopen = () => {
+      if (terminalDisposed || terminal !== term || termWs !== ws) {
+        ws.close()
+        return
+      }
       termInitialized.value = true
       termConnecting.value = false
       // Re-fit now that overlay is gone, then send correct size to PTY
       nextTick(() => {
+        if (terminalDisposed || terminal !== term || termWs !== ws || ws.readyState !== WebSocket.OPEN) return
         fitAddon.fit()
         ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }))
       })
     }
     ws.onmessage = (e) => {
+      if (terminalDisposed || terminal !== term || termWs !== ws) return
       if (e.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(e.data))
       } else {
@@ -64,20 +107,29 @@ async function connectTerminal() {
     }
     term.onData((data: string) => { if (ws.readyState === WebSocket.OPEN) ws.send(data) })
     term.onResize(({ cols, rows }) => {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (!terminalDisposed && terminal === term && termWs === ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'resize', cols, rows }))
       }
     })
-    ws.onclose = () => term.write('\r\n\x1b[31m[Connection closed]\x1b[0m\r\n')
-    ws.onerror = () => {
-      term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n')
+    ws.onclose = () => {
+      if (terminalDisposed || terminal !== term || termWs !== ws) return
+      termWs = null
+      termInitialized.value = false
       termConnecting.value = false
+      term.write('\r\n\x1b[31m[Connection closed]\x1b[0m\r\n')
+    }
+    ws.onerror = () => {
+      if (terminalDisposed || terminal !== term || termWs !== ws) return
+      term.write('\r\n\x1b[31m[Connection error]\x1b[0m\r\n')
+      ws.close()
     }
     termWs = ws
 
-    window.addEventListener('resize', () => fitAddon.fit())
+    terminalResizeListener = () => fitAddon.fit()
+    window.addEventListener('resize', terminalResizeListener)
   } catch {
-    toast.error(t('common.errorOccurred'))
+    if (!terminalDisposed) toast.error(t('common.errorOccurred'))
+    disposeTerminal()
     termConnecting.value = false
   }
 }
@@ -285,23 +337,25 @@ function formatImageSize(size: number) {
 }
 
 // ---- Firewall ----
-const fwRules = ref<any[]>([])
+const fwRules = ref<FirewallRule[]>([])
 const fwLoading = ref(false)
+const fwFamily = ref<FirewallFamily>('ipv4')
 const showFwForm = ref(false)
 const fwForm = ref({ protocol: 'tcp', port: '', action: 'ACCEPT', source: '', comment: '' })
 
 async function fetchFwRules() {
+  const family = fwFamily.value
   fwLoading.value = true
   try {
-    const res = await listFirewallRules() as any
-    if (res.code === 200) fwRules.value = res.data || []
-  } catch { toast.error(t('common.errorOccurred')) }
-  fwLoading.value = false
+    const res = await listFirewallRules(family) as any
+    if (family === fwFamily.value && res.code === 200) fwRules.value = res.data || []
+  } catch { if (family === fwFamily.value) toast.error(t('common.errorOccurred')) }
+  if (family === fwFamily.value) fwLoading.value = false
 }
 
 async function addFwRule() {
   try {
-    await addFirewallRule(fwForm.value)
+    await addFirewallRule({ ...fwForm.value, family: fwFamily.value })
     showFwForm.value = false
     fwForm.value = { protocol: 'tcp', port: '', action: 'ACCEPT', source: '', comment: '' }
     await fetchFwRules()
@@ -309,7 +363,7 @@ async function addFwRule() {
   } catch { toast.error(t('common.errorOccurred')) }
 }
 
-async function deleteFwRule(num: string) {
+async function deleteFwRule(rule: FirewallRule) {
   const ok = await confirmDialog({
     title: t('common.confirm'),
     message: t('servers.firewall.confirmDelete'),
@@ -318,11 +372,16 @@ async function deleteFwRule(num: string) {
   })
   if (!ok) return
   try {
-    await deleteFirewallRule(num)
+    await deleteFirewallRule(rule)
     await fetchFwRules()
     toast.success(t('common.deleted'))
   } catch { toast.error(t('common.errorOccurred')) }
 }
+
+watch(fwFamily, () => {
+  fwRules.value = []
+  if (activeTab.value === 'firewall') fetchFwRules()
+})
 
 // ---- Lifecycle ----
 onMounted(() => {
@@ -334,7 +393,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (termWs) termWs.close()
+  terminalDisposed = true
+  disposeTerminal()
   if (dockerPollTimer) clearInterval(dockerPollTimer)
 })
 
@@ -578,6 +638,14 @@ watch(activeTab, (tab) => {
           </button>
         </div>
 
+        <label class="flex items-center gap-3 mb-4 text-sm text-slate-700">
+          {{ $t('servers.firewall.addressFamily') }}
+          <select v-model="fwFamily" class="input-field text-sm w-auto">
+            <option value="ipv4">IPv4</option>
+            <option value="ipv6">IPv6</option>
+          </select>
+        </label>
+
         <!-- Add Rule Form -->
         <div v-if="showFwForm" class="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-6 grid grid-cols-2 md:grid-cols-5 gap-3">
           <select v-model="fwForm.protocol" class="input-field text-sm">
@@ -616,7 +684,7 @@ watch(activeTab, (tab) => {
               <td class="py-3 text-sm text-slate-500">{{ rule.source }}</td>
               <td class="py-3 text-sm text-slate-500">{{ rule.port || '-' }}</td>
               <td class="py-3 text-right">
-                <button @click="deleteFwRule(rule.num)" class="text-rose-600 hover:text-rose-800">
+                <button @click="deleteFwRule(rule)" class="text-rose-600 hover:text-rose-800" :aria-label="$t('common.delete')">
                   <TrashIcon class="h-4 w-4 inline" />
                 </button>
               </td>

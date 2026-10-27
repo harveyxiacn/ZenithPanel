@@ -111,7 +111,7 @@ func main() {
 	var enabled []model.Inbound
 	if err := config.DB.Where("enable = ?", true).Find(&enabled).Error; err != nil {
 		log.Printf("Warning: Failed to list enabled inbounds: %v", err)
-	} else if len(enabled) > 0 {
+	} else if len(enabled) > 0 && !proxy.ExternalRuntimeEnabled() {
 		wantXray := false
 		wantSingbox := false
 		for _, in := range enabled {
@@ -137,6 +137,11 @@ func main() {
 				log.Printf("Sing-box auto-started in dual mode")
 			}
 		}
+	} else if len(enabled) > 0 {
+		dual := proxy.PersistedDualMode()
+		xm.SetDualMode(dual)
+		sm.SetDualMode(dual)
+		log.Printf("External proxy runtime enabled; skipping local engine auto-start")
 	}
 
 	// 5. Initialize Cron Scheduler
@@ -194,13 +199,11 @@ func main() {
 	// so a long-offline panel catches up on boot. Cleanup hook returned so
 	// graceful shutdown can stop the loop.
 	stopAuditRetention := audit.Start(config.DB, config.GetSetting)
-	_ = stopAuditRetention // shutdown is process-exit so no explicit teardown needed
 
 	// 5d-ter. ACME cert renewer: every 12h scan certs in /opt/zenithpanel/data/certs
 	// and renew any within 30 days of expiry using the stored acme_email.
 	// Best-effort; logs failures and tries again on the next tick.
 	stopCertRenewer := cert.StartRenewer(config.GetSetting)
-	_ = stopCertRenewer
 
 	// 5d-quater. Reconcile the ad-block routing rule against the persisted
 	// setting. Operators flipping the switch in the UI take a different
@@ -235,8 +238,17 @@ func main() {
 			}
 		}
 		check()
-		for range ticker.C {
-			check()
+		for {
+			select {
+			case <-ticker.C:
+				check()
+			case <-notify.ReloadRequests():
+				if current != nil {
+					current.Stop()
+					current = nil
+				}
+				check()
+			}
 		}
 	}()
 
@@ -248,17 +260,8 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.New()
-	// By default gin trusts X-Forwarded-For from any peer, which would let a
-	// client spoof c.ClientIP() past the IP whitelist and login lockout.
-	// Only honour it from proxies the operator explicitly lists.
-	var trustedProxies []string
-	for _, p := range strings.Split(os.Getenv("ZENITH_TRUSTED_PROXIES"), ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			trustedProxies = append(trustedProxies, p)
-		}
-	}
-	if err := r.SetTrustedProxies(trustedProxies); err != nil {
-		log.Fatalf("invalid ZENITH_TRUSTED_PROXIES: %v", err)
+	if err := api.ConfigureTrustedProxies(r, os.Getenv("ZENITH_TRUSTED_PROXIES")); err != nil {
+		log.Fatalf("Invalid ZENITH_TRUSTED_PROXIES: %v", err)
 	}
 	r.Use(gin.Recovery())
 	// Promotes the unix-socket request-context marker into c.Set("trusted_local").
@@ -351,10 +354,7 @@ func main() {
 	setup.PrintSetupIfPending(port)
 
 	// Define HTTP Server
-	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: r,
-	}
+	srv := newPanelServer(":"+port, r)
 
 	// 7a. Unix domain socket listener for the in-host CLI (`zenithctl`). The
 	// socket lives under /run/ (or $XDG_RUNTIME_DIR fallback) with mode 0600;
@@ -398,7 +398,7 @@ func main() {
 					return
 				}
 				// Create a fresh server for HTTP fallback
-				srv = &http.Server{Addr: ":" + port, Handler: r}
+				srv = newPanelServer(":"+port, r)
 			}
 		}
 		log.Printf("ZenithPanel listening on http://0.0.0.0:%s", port)
@@ -415,14 +415,33 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("Shutting down server...")
+	cancelTraffic()
+	stopAuditRetention()
+	stopCertRenewer()
 	sched.Stop()
+	if manager := webserver.Get(); manager != nil {
+		manager.Stop()
+	}
 
 	// The context is used to inform the server it has 5 seconds to finish
 	// the request it is currently handling
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatal("Server forced to shutdown:", err)
+		log.Printf("Server forced to shutdown: %v", err)
+	}
+	if !proxy.ExternalRuntimeEnabled() {
+		if err := xm.Stop(); err != nil {
+			log.Printf("Stop Xray during shutdown: %v", err)
+		}
+		if err := sm.Stop(); err != nil {
+			log.Printf("Stop Sing-box during shutdown: %v", err)
+		}
+	} else {
+		log.Printf("External proxy runtime enabled; leaving proxy runner running during panel shutdown")
+	}
+	if err := config.CloseDB(); err != nil {
+		log.Printf("Close database during shutdown: %v", err)
 	}
 
 	// Best-effort cleanup of the unix socket so the next start binds fresh.
@@ -431,6 +450,18 @@ func main() {
 	}
 
 	log.Println("Server exiting")
+}
+
+func newPanelServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
+	}
 }
 
 // shouldRunCLI is true when argv signals headless mode:

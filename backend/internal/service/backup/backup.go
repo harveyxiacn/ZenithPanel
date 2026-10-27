@@ -10,10 +10,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
+	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
 )
 
@@ -25,12 +27,16 @@ const FormatVersion = 1
 // export nor overwritten on restore. They identify the panel instance and
 // rotating them out would lock the operator out of their own panel.
 var secretSettingKeys = map[string]bool{
-	"jwt_secret":        true,
-	"setup_entry_path":  true,
-	"setup_entry_token": true,
-	"tls_cert_path":     true,
-	"tls_key_path":      true,
+	"jwt_secret":            true,
+	"setup_entry_path":      true,
+	"setup_entry_token":     true,
+	"tls_cert_path":         true,
+	"tls_key_path":          true,
+	"notify_telegram_token": true,
+	"notify_webhook_url":    true,
 }
+
+const maxArchiveJSONBytes = 32 << 20
 
 // archive is the top-level JSON document embedded in the zip.
 type archive struct {
@@ -119,16 +125,69 @@ func ReadArchive(body []byte) (*archive, error) {
 			return nil, fmt.Errorf("open backup.json: %w", err)
 		}
 		defer rc.Close()
+		limited := io.LimitReader(rc, maxArchiveJSONBytes+1)
+		payload, err := io.ReadAll(limited)
+		if err != nil {
+			return nil, fmt.Errorf("read backup.json: %w", err)
+		}
+		if len(payload) > maxArchiveJSONBytes {
+			return nil, fmt.Errorf("backup.json exceeds %d bytes", maxArchiveJSONBytes)
+		}
 		var a archive
-		if err := json.NewDecoder(rc).Decode(&a); err != nil {
+		if err := json.Unmarshal(payload, &a); err != nil {
 			return nil, fmt.Errorf("parse backup.json: %w", err)
 		}
 		if a.Version != FormatVersion {
 			return nil, fmt.Errorf("unsupported archive version %d (expected %d)", a.Version, FormatVersion)
 		}
+		if err := validateArchive(&a); err != nil {
+			return nil, err
+		}
 		return &a, nil
 	}
 	return nil, fmt.Errorf("archive does not contain backup.json")
+}
+
+func validateArchive(a *archive) error {
+	inboundIDs := make(map[uint]struct{}, len(a.Inbounds))
+	enabledPorts := make(map[int]string)
+	for _, inbound := range a.Inbounds {
+		if inbound.ID == 0 {
+			return fmt.Errorf("inbound %q has invalid id 0", inbound.Tag)
+		}
+		if _, duplicate := inboundIDs[inbound.ID]; duplicate {
+			return fmt.Errorf("duplicate inbound id %d", inbound.ID)
+		}
+		inboundIDs[inbound.ID] = struct{}{}
+		if inbound.Enable {
+			if inbound.Port < 1 || inbound.Port > 65535 {
+				return fmt.Errorf("inbound %q has invalid port %d", inbound.Tag, inbound.Port)
+			}
+			if other, exists := enabledPorts[inbound.Port]; exists {
+				return fmt.Errorf("enabled inbounds %q and %q share port %d", other, inbound.Tag, inbound.Port)
+			}
+			enabledPorts[inbound.Port] = inbound.Tag
+		}
+		for field, raw := range map[string]string{"settings": inbound.Settings, "stream": inbound.Stream} {
+			if strings.TrimSpace(raw) != "" && !json.Valid([]byte(raw)) {
+				return fmt.Errorf("inbound %q has invalid %s JSON", inbound.Tag, field)
+			}
+		}
+	}
+	for _, client := range a.Clients {
+		if _, ok := inboundIDs[client.InboundID]; !ok {
+			return fmt.Errorf("client %q references missing inbound %d", client.Email, client.InboundID)
+		}
+	}
+	for _, job := range a.CronJobs {
+		if strings.TrimSpace(job.Schedule) == "" {
+			return fmt.Errorf("cron job %q has empty schedule", job.Name)
+		}
+		if _, err := cron.ParseStandard(job.Schedule); err != nil {
+			return fmt.Errorf("cron job %q has invalid schedule: %w", job.Name, err)
+		}
+	}
+	return nil
 }
 
 // Restore replaces the logical state of the panel with the contents of the
@@ -194,7 +253,13 @@ func Restore(body []byte) (map[string]int, error) {
 			if secretSettingKeys[s.Key] {
 				continue
 			}
-			if err := tx.Save(&s).Error; err != nil {
+			key := strings.TrimSpace(s.Key)
+			if key == "" {
+				return fmt.Errorf("restore setting with empty key")
+			}
+			if err := tx.Where("`key` = ?", key).
+				Assign(model.Setting{Value: s.Value}).
+				FirstOrCreate(&model.Setting{Key: key}).Error; err != nil {
 				return fmt.Errorf("restore setting %s: %w", s.Key, err)
 			}
 		}

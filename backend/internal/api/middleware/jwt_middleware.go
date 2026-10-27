@@ -8,11 +8,11 @@ import (
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
 )
 
-// JWTAuthMiddleware verifies the JWT token present in the Authorization header
-// or in the "token" query parameter (for WebSocket connections).
+// JWTAuthMiddleware verifies the setup JWT in the Authorization header.
 func JWTAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var tokenString string
+		authSource := "header"
 
 		// Try Authorization header first
 		authHeader := c.GetHeader("Authorization")
@@ -22,10 +22,11 @@ func JWTAuthMiddleware() gin.HandlerFunc {
 				tokenString = parts[1]
 			}
 		}
-
-		// Fall back to query parameter (needed for WebSocket connections)
 		if tokenString == "" {
-			tokenString = c.Query("token")
+			if cookieToken, err := c.Cookie(SessionCookieName); err == nil {
+				tokenString = cookieToken
+				authSource = "cookie"
+			}
 		}
 
 		if tokenString == "" {
@@ -35,6 +36,14 @@ func JWTAuthMiddleware() gin.HandlerFunc {
 		claims, err := jwtutil.ValidateToken(tokenString)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"code": 401, "msg": "Invalid or expired token"})
+			return
+		}
+		if claims.Purpose != jwtutil.PurposeSetup || claims.UserID != "setup-admin" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": "Setup token required"})
+			return
+		}
+		if authSource == "cookie" && !sameOriginCookieRequest(c) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"code": 403, "msg": "Cross-origin setup request rejected"})
 			return
 		}
 

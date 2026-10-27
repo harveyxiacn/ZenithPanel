@@ -1,6 +1,7 @@
 package traffic
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -150,9 +151,10 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 		clientTotals = loadClientTotals()
 	}
 	users := make(map[string]*ProxyUserSample, len(clientTotals))
-	for email, tot := range clientTotals {
-		users[email] = &ProxyUserSample{
-			Email:         email,
+	for identity, tot := range clientTotals {
+		users[identity] = &ProxyUserSample{
+			Email:    tot.email,
+			ClientID: tot.id, InboundID: tot.inboundID,
 			UploadTotal:   tot.up,
 			DownloadTotal: tot.down,
 			Engine:        tot.engine,
@@ -183,6 +185,21 @@ func (a *proxyAggregator) sample(sm *proxy.SingboxManager, withTotals bool) ([]P
 	curConnDelta := make(map[string]pendingDelta, len(byID))
 	var sumUp, sumDown uint64
 	for user, conns := range connsByUser {
+		if _, ok := users[user]; !ok {
+			match := ""
+			for id, t := range clientTotals {
+				if t.email == user {
+					if match != "" {
+						match = ""
+						break
+					}
+					match = id
+				}
+			}
+			if match != "" {
+				user = match
+			}
+		}
 		us, ok := users[user]
 		if !ok {
 			us = &ProxyUserSample{Email: user}
@@ -409,11 +426,13 @@ func (a *proxyAggregator) fetchConnections(sm *proxy.SingboxManager) (map[string
 }
 
 type clientTotals struct {
-	up         int64
-	down       int64
-	engine     string
-	protocol   string
-	inboundTag string
+	id, inboundID uint
+	email         string
+	up            int64
+	down          int64
+	engine        string
+	protocol      string
+	inboundTag    string
 }
 
 // xrayEngineProtocols are the protocols Xray can serve. Anything else
@@ -441,30 +460,29 @@ func loadClientTotals() map[string]clientTotals {
 	if config.DB == nil {
 		return out
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	db := config.ReadDB().WithContext(ctx)
 	var inbounds []model.Inbound
-	config.DB.Find(&inbounds)
+	if db.Find(&inbounds).Error != nil {
+		return out
+	}
 	inboundByID := make(map[uint]model.Inbound, len(inbounds))
 	for _, in := range inbounds {
 		inboundByID[in.ID] = in
 	}
 	var clients []model.Client
-	config.DB.Where("enable = ?", true).Find(&clients)
-	// Keyed by the same per-client identity the engines report under, so
-	// live rates line up with totals and rows sharing an email (one per
-	// protocol) don't overwrite each other.
-	idents := proxy.LoadStatsIdentities()
+	if db.Where("enable = ?", true).Find(&clients).Error != nil {
+		return out
+	}
 	for _, c := range clients {
-		t := clientTotals{up: c.UpLoad, down: c.DownLoad}
+		t := clientTotals{id: c.ID, inboundID: c.InboundID, email: c.Email, up: c.UpLoad, down: c.DownLoad}
 		if in, ok := inboundByID[c.InboundID]; ok {
 			t.protocol = in.Protocol
 			t.inboundTag = in.Tag
 			t.engine = engineForProtocol(in.Protocol)
 		}
-		key := idents[c.ID]
-		if key == "" {
-			key = c.Email
-		}
-		out[key] = t
+		out[proxy.ClientIdentity(c.ID)] = t
 	}
 	return out
 }

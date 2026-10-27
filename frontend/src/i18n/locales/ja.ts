@@ -195,6 +195,7 @@ export default {
       addRule: 'ルール追加',
       port: 'ポート',
       sourceIp: '送信元 IP（任意）',
+      addressFamily: 'IP バージョン',
       target: 'ターゲット',
       protocol: 'プロトコル',
       source: '送信元',

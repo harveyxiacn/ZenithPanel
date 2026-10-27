@@ -58,14 +58,19 @@ func createAPIToken(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Invalid parameters"})
 		return
 	}
+	if req.ExpiresInDays < 0 || req.ExpiresInDays > 3650 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "expires_in_days must be between 0 and 3650"})
+		return
+	}
 	req.Name = strings.TrimSpace(req.Name)
 	if !tokenNameRe.MatchString(req.Name) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Name must match [a-zA-Z0-9_.-]{1,64}"})
 		return
 	}
-	scopes := strings.TrimSpace(req.Scopes)
-	if scopes == "" {
-		scopes = "*"
+	scopes, ok := middleware.ValidateScopeList(req.Scopes)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "msg": "Unknown or invalid scope"})
+		return
 	}
 
 	row, plaintext, err := mintToken(req.Name, scopes, req.ExpiresInDays)

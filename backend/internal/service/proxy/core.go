@@ -1,11 +1,13 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,7 +26,26 @@ type CoreManager interface {
 
 // WriteConfigToFile writes the given configuration string to a file
 func WriteConfigToFile(path, content string) error {
-	return os.WriteFile(path, []byte(content), 0600)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".proxy-config-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.WriteString(content); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 // configUnchanged reports whether a running engine is already serving
@@ -129,21 +150,39 @@ func (r *ringBuffer) Reset() {
 type BaseCore struct {
 	BinaryPath string
 	ConfigPath string
-	mu         sync.RWMutex
-	cmd        *exec.Cmd
-	lastErr    string
-	outputBuf  *ringBuffer
-	dualMode   bool
+	// externalEngine identifies the core inside an explicitly configured
+	// external proxy runner. It is empty for ordinary local managers.
+	externalEngine string
+	mu             sync.RWMutex
+	cmd            *exec.Cmd
+	lastErr        string
+	outputBuf      *ringBuffer
+	dualMode       bool
 	// startedAt is set when Start succeeds and cleared on stop/crash. Exposed
 	// via Uptime() for /health and Prometheus metrics so operators can spot
 	// engine flapping at a glance.
-	startedAt time.Time
+	startedAt    time.Time
+	done         chan struct{}
+	runtimeState RuntimeStatus
 }
 
 // Uptime returns how long the engine has been running, or zero when it's
 // stopped. Read under the same lock that protects `cmd` so concurrent
 // start/stop transitions can't tear the value.
 func (c *BaseCore) Uptime() time.Duration {
+	// The runner owns the process start time in external mode. Do not invent an
+	// uptime from the panel's own start time.
+	if ExternalRuntimeEnabled() && c.externalEngine != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if !ExternalEngineRunning(ctx, c.externalEngine) {
+			return 0
+		}
+		if uptime, ok := ExternalRuntimeUptime(ctx); ok {
+			return uptime
+		}
+		return 0
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.cmd == nil || c.startedAt.IsZero() {
@@ -169,6 +208,11 @@ func (c *BaseCore) IsDualMode() bool {
 }
 
 func (c *BaseCore) Status() bool {
+	if ExternalRuntimeEnabled() && c.externalEngine != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		return ExternalEngineRunning(ctx, c.externalEngine)
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.cmd != nil
@@ -181,9 +225,10 @@ func (c *BaseCore) LastError() string {
 	return c.lastErr
 }
 
-func (c *BaseCore) setCmd(cmd *exec.Cmd) {
+func (c *BaseCore) setCmd(cmd *exec.Cmd, done chan struct{}) {
 	c.mu.Lock()
 	c.cmd = cmd
+	c.done = done
 	c.startedAt = time.Now()
 	c.mu.Unlock()
 }
@@ -200,25 +245,31 @@ func (c *BaseCore) clearCmd(cmd *exec.Cmd) {
 	c.mu.Unlock()
 }
 
-// validateConfig runs the engine's built-in config check if available.
-// sing-box supports "check -c", xray does not have a validation subcommand.
-// If validation is not available, we skip it and rely on crash detection.
+// validateConfig uses the engine's offline configuration checker.
 func (c *BaseCore) validateConfig() error {
-	if c.BinaryPath != "sing-box" {
-		// Xray has no config validation command — skip, rely on crash detection
-		return nil
+	return c.validateConfigFile(context.Background(), c.ConfigPath)
+}
+
+func (c *BaseCore) validateConfigFile(ctx context.Context, path string) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	args := []string{"run", "-test", "-c", path}
+	if strings.Contains(filepath.Base(c.BinaryPath), "sing-box") {
+		args = []string{"check", "-c", path}
 	}
-	cmd := exec.Command(c.BinaryPath, "check", "-c", c.ConfigPath)
-	out, err := cmd.CombinedOutput()
+	cmd := exec.CommandContext(ctx, c.BinaryPath, args...)
+	buf := newRingBuffer(8 * 1024)
+	cmd.Stdout, cmd.Stderr = buf, buf
+	err := cmd.Run()
 	if err != nil {
-		output := string(out)
+		output := buf.String()
 		if len(output) > 800 {
 			output = output[len(output)-800:]
 		}
 		if output == "" {
 			output = err.Error()
 		}
-		hint := annotateSingboxError(c.ConfigPath, output)
+		hint := annotateSingboxError(path, output)
 		if hint != "" {
 			return fmt.Errorf("config validation failed:\n%s\n\n%s", output, hint)
 		}
@@ -297,32 +348,37 @@ func (c *BaseCore) startAndVerify(cmd *exec.Cmd) error {
 		return fmt.Errorf("%s %v", c.BinaryPath, err)
 	}
 
+	c.mu.Lock()
 	if c.outputBuf == nil {
 		c.outputBuf = newRingBuffer(8 * 1024)
 	} else {
 		c.outputBuf.Reset()
 	}
+	outputBuf := c.outputBuf
+	c.mu.Unlock()
 	// Capture both stdout and stderr — xray writes errors to stdout
-	cmd.Stdout = c.outputBuf
-	cmd.Stderr = c.outputBuf
+	cmd.Stdout = outputBuf
+	cmd.Stderr = outputBuf
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start %s: %w", c.BinaryPath, err)
 	}
-	c.setCmd(cmd)
+	done := make(chan struct{})
+	c.setCmd(cmd, done)
 
 	// Single goroutine owns cmd.Wait(); signals via channel for early crash detection.
 	exited := make(chan error, 1)
 	go func() {
 		err := cmd.Wait()
-		exited <- err
 		c.clearCmd(cmd)
+		close(done)
+		exited <- err
 	}()
 
 	select {
 	case err := <-exited:
 		// Process exited within the grace period — config or runtime error
-		output := c.outputBuf.String()
+		output := outputBuf.String()
 		if len(output) > 800 {
 			output = output[len(output)-800:]
 		}
@@ -338,11 +394,16 @@ func (c *BaseCore) startAndVerify(cmd *exec.Cmd) error {
 }
 
 func (c *BaseCore) Stop() error {
-	c.mu.Lock()
+	if ExternalRuntimeEnabled() && c.externalEngine != "" {
+		// The panel never owns this PID. Callers must use the explicit external
+		// runner transition; returning success here would falsely claim that a
+		// still-serving proxy had stopped.
+		return fmt.Errorf("%s is managed by external proxy runner", c.externalEngine)
+	}
+	c.mu.RLock()
 	cmd := c.cmd
-	c.cmd = nil
-	c.startedAt = time.Time{}
-	c.mu.Unlock()
+	done := c.done
+	c.mu.RUnlock()
 
 	if cmd == nil || cmd.Process == nil {
 		return nil
@@ -350,6 +411,15 @@ func (c *BaseCore) Stop() error {
 
 	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			return fmt.Errorf("timed out stopping %s", c.BinaryPath)
+		}
+	} else {
+		c.clearCmd(cmd)
 	}
 	return nil
 }

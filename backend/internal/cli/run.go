@@ -61,6 +61,8 @@ func Run(argv []string) int {
 	case "version":
 		fmt.Println("zenithctl " + version.Version)
 		return 0
+	case "ready":
+		return runSimpleGet(client, "/api/v1/proxy/readiness", gf)
 	case "status":
 		return runSimpleGet(client, "/api/v1/health", gf)
 	case "login":
@@ -220,7 +222,7 @@ func runToken(c *Client, cfg *Config, args []string, gf globalFlags) int {
 	case "create":
 		fs := flag.NewFlagSet("token create", flag.ContinueOnError)
 		name := fs.String("name", "", "token name (required)")
-		scopes := fs.String("scopes", "*", "comma-separated scopes")
+		scopes := fs.String("scopes", "read", "comma-separated scopes")
 		days := fs.Int("expires-in", 0, "expire in N days; 0 = never")
 		if err := fs.Parse(args[1:]); err != nil {
 			return 1

@@ -1,17 +1,34 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { logoutAllSessions } from '@/api/auth'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/store/auth'
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { KeyIcon, LockClosedIcon, FingerPrintIcon, ShieldCheckIcon, ArrowPathIcon, ArrowDownTrayIcon, GlobeAltIcon, Cog6ToothIcon, BoltIcon, CpuChipIcon, AdjustmentsHorizontalIcon, TrashIcon } from '@heroicons/vue/24/outline'
-import { checkForUpdate, applyUpdate, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup, downloadBackup, restoreBackup, getDNSSettings, updateDNSSettings, listApiTokens, createApiToken, revokeApiToken, getAdBlockStatus, setAdBlockEnabled, type ApiTokenRow } from '@/api/system'
+import { checkForUpdate, applyUpdate, getUpdateStatus, changePassword, get2FAStatus, setup2FA, verify2FA, disable2FA, getTLSStatus, uploadTLSCerts, removeTLS, getAccessConfig, updateAccessConfig, restartPanel, getCFProtectionStatus, enableCFProtection, disableCFProtection, getBBRStatus, enableBBR, disableBBR, getSwapStatus, createSwap, removeSwap, getSysctlStatus, enableSysctl, disableSysctl, getCleanupInfo, runCleanup, downloadBackup, restoreBackup, getDNSSettings, updateDNSSettings, getAdBlockStatus, setAdBlockEnabled, issueAcmeCertificate, getNotifyConfig, updateNotifyConfig, testNotification, type CleanupInfo, type CleanupResult, type NotificationTestPayload, type UpdateStatus } from '@/api/system'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '../composables/useToast'
 import { useUsageProfile } from '@/composables/useUsageProfile'
+import ApiTokenPanel from '@/components/security/ApiTokenPanel.vue'
 import { usageProfileOptions, type UsageProfile, type UsageProfileOptionTone } from '@/config/usage-profiles'
+import { waitForUpdateCompletion } from '@/utils/update-polling'
 
+const router = useRouter()
+const auth = useAuthStore()
+async function returnToLogin() { auth.clearSession(); await router.replace('/login') }
 const { t } = useI18n()
 const { confirm: confirmDialog } = useConfirm()
 const toast = useToast()
 const { usageProfile, loadUsageProfile, syncUsageProfile } = useUsageProfile()
+
+const revokingSessions = ref(false)
+async function signOutAllSessions() {
+ if (!(await confirmDialog({title: 'Sign out all devices', message: 'All current administrator sessions will end. You will need to sign in again.', variant: 'warning'}))) return
+ revokingSessions.value = true
+ try {await logoutAllSessions();await returnToLogin()}
+ catch {toast.error('Could not sign out all devices')}
+ finally {revokingSessions.value = false}
+}
 
 // ---- Change Password ----
 const showPasswordForm = ref(false)
@@ -41,7 +58,7 @@ async function onChangePassword() {
   }
   passwordChanging.value = true
   try {
-    const res = await changePassword(oldPassword.value, newPassword.value) as any
+    const res = await changePassword(oldPassword.value, newPassword.value)
     if (res.code === 200) {
       passwordMsg.value = t('security.auth.passwordChanged')
       passwordMsgType.value = 'success'
@@ -49,6 +66,7 @@ async function onChangePassword() {
       newPassword.value = ''
       confirmNewPassword.value = ''
       showPasswordForm.value = false
+      await returnToLogin()
       toast.success(t('common.saved'))
     } else {
       passwordMsg.value = res.msg || 'Failed'
@@ -77,7 +95,7 @@ const codesSaved = ref(false)
 
 async function load2FAStatus() {
   try {
-    const res = await get2FAStatus() as any
+    const res = await get2FAStatus()
     if (res.code === 200) twoFAEnabled.value = res.data.enabled
   } catch { toast.error(t('common.errorOccurred')) }
 }
@@ -86,7 +104,7 @@ async function onSetup2FA() {
   twoFALoading.value = true
   twoFAMsg.value = ''
   try {
-    const res = await setup2FA() as any
+    const res = await setup2FA()
     if (res.code === 200) {
       twoFAQR.value = res.data.qr_base64
       twoFASecret.value = res.data.secret
@@ -107,7 +125,7 @@ async function onVerify2FA() {
   twoFALoading.value = true
   twoFAMsg.value = ''
   try {
-    const res = await verify2FA(twoFACode.value) as any
+    const res = await verify2FA(twoFACode.value)
     if (res.code === 200) {
       twoFAStep.value = 'codes'
       twoFAEnabled.value = true
@@ -126,12 +144,13 @@ async function onDisable2FA() {
   twoFALoading.value = true
   twoFAMsg.value = ''
   try {
-    const res = await disable2FA(twoFADisablePassword.value) as any
+    const res = await disable2FA(twoFADisablePassword.value)
     if (res.code === 200) {
       twoFAEnabled.value = false
       showDisable2FA.value = false
       twoFADisablePassword.value = ''
       twoFAStep.value = 'idle'
+      await returnToLogin()
     } else {
       twoFAMsg.value = res.msg || 'Failed'
     }
@@ -143,6 +162,7 @@ async function onDisable2FA() {
 }
 
 function finish2FASetup() {
+ void returnToLogin()
   twoFAStep.value = 'idle'
   twoFACode.value = ''
   codesSaved.value = false
@@ -166,7 +186,7 @@ const adblockLoading = ref(false)
 
 async function loadAdBlockStatus() {
   try {
-    const res = await getAdBlockStatus() as any
+    const res = await getAdBlockStatus()
     adblockEnabled.value = !!res.data?.enabled
   } catch {
     // Older panels without this endpoint just leave the toggle off.
@@ -201,20 +221,12 @@ async function onAcmeIssue() {
   acmeIssuing.value = true
   acmeResult.value = null
   try {
-    const res = await fetch('/api/v1/proxy/tls/issue', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${localStorage.getItem('token') || ''}`,
-      },
-      body: JSON.stringify({ domain: acmeDomain.value.trim(), email: acmeEmail.value.trim() }),
-    })
-    const data = await res.json()
-    if (data.code === 200 && data.data) {
-      acmeResult.value = data.data
+    const res = await issueAcmeCertificate(acmeDomain.value.trim(), acmeEmail.value.trim())
+    if (res.code === 200 && res.data) {
+      acmeResult.value = res.data
       toast.success(t('security.acme.issued'))
     } else {
-      toast.error(data.msg || t('common.errorOccurred'))
+      toast.error(res.msg || t('common.errorOccurred'))
     }
   } catch {
     toast.error(t('common.errorOccurred'))
@@ -230,7 +242,7 @@ function formatAcmeExpiry(unix?: number): string {
 
 async function loadTLSStatus() {
   try {
-    const res = await getTLSStatus() as any
+    const res = await getTLSStatus()
     if (res.code === 200) tlsEnabled.value = res.data.enabled
   } catch { toast.error(t('common.errorOccurred')) }
 }
@@ -247,9 +259,9 @@ async function onUploadTLS() {
   fd.append('cert', certFile.value)
   fd.append('key', keyFile.value)
   try {
-    const res = await uploadTLSCerts(fd) as any
+    const res = await uploadTLSCerts(fd)
     if (res.code === 200) {
-      tlsMsg.value = res.msg
+      tlsMsg.value = res.msg ?? ''
       tlsMsgType.value = 'success'
       tlsEnabled.value = true
       toast.success(t('common.saved'))
@@ -275,10 +287,10 @@ async function onRemoveTLS() {
   if (!ok) return
   tlsLoading.value = true
   try {
-    const res = await removeTLS() as any
+    const res = await removeTLS()
     if (res.code === 200) {
       tlsEnabled.value = false
-      tlsMsg.value = res.msg
+      tlsMsg.value = res.msg ?? ''
       tlsMsgType.value = 'success'
       toast.success(t('common.deleted'))
     }
@@ -306,7 +318,7 @@ const dnsLoading = ref(false)
 
 async function loadDNSSettings() {
   try {
-    const res = await getDNSSettings() as any
+    const res = await getDNSSettings()
     if (res.code === 200) {
       dnsMode.value = res.data.dns_mode || 'plain'
       dnsPrimary.value = res.data.dns_primary || ''
@@ -351,7 +363,7 @@ function profileToneClasses(tone: UsageProfileOptionTone, selected: boolean) {
 async function loadAccessConfig() {
   try {
     await loadUsageProfile()
-    const res = await getAccessConfig() as any
+    const res = await getAccessConfig()
     if (res.code === 200) {
       accessPath.value = res.data.panel_path || ''
       accessPort.value = res.data.port || ''
@@ -375,10 +387,10 @@ async function onSaveAccess() {
       port: accessPort.value,
       usage_profile: accessUsageProfile.value,
       ip_whitelist: accessIPWhitelist.value,
-    }) as any
+    })
     if (res.code === 200) {
       syncUsageProfile(accessUsageProfile.value)
-      accessMsg.value = res.msg
+      accessMsg.value = res.msg ?? ''
       accessMsgType.value = 'success'
       toast.success(t('common.saved'))
     } else {
@@ -410,7 +422,7 @@ async function onRestartPanel() {
   try {
     // Save first, then restart
     await updateAccessConfig({ panel_path: newPath, port: newPort })
-    const res = await restartPanel() as any
+    const res = await restartPanel()
     if (res.code === 200) {
       let countdown = 10
       const timer = setInterval(() => {
@@ -453,7 +465,7 @@ const cfPort = ref('')
 
 async function loadCFStatus() {
   try {
-    const res = await getCFProtectionStatus() as any
+    const res = await getCFProtectionStatus()
     if (res.code === 200) {
       cfEnabled.value = res.data.enabled
       cfPort.value = res.data.port
@@ -466,11 +478,11 @@ async function onToggleCF() {
   cfMsg.value = ''
   try {
     const res = cfEnabled.value
-      ? await disableCFProtection() as any
-      : await enableCFProtection() as any
+      ? await disableCFProtection()
+      : await enableCFProtection()
     if (res.code === 200) {
       cfEnabled.value = !cfEnabled.value
-      cfMsg.value = res.msg
+      cfMsg.value = res.msg ?? ''
       cfMsgType.value = 'success'
       toast.success(t('common.applied'))
     } else {
@@ -494,12 +506,15 @@ const currentImageID = ref('')
 const latestImageID = ref('')
 const updateError = ref('')
 const updateChecked = ref(false)
+const updateProgress = ref('')
+const updateStatus = ref<UpdateStatus | null>(null)
+let updatePollingCancelled = false
 
 async function onCheckUpdate() {
   updateChecking.value = true
   updateError.value = ''
   try {
-    const res = await checkForUpdate() as any
+    const res = await checkForUpdate()
     if (res.code === 200 && res.data) {
       updateAvailable.value = res.data.available
       currentVersion.value = res.data.current_version || ''
@@ -516,6 +531,45 @@ async function onCheckUpdate() {
   updateChecking.value = false
 }
 
+async function pollUpdateStatus(reloadOnSuccess: boolean) {
+  const status = await waitForUpdateCompletion(
+    async () => (await getUpdateStatus()).data,
+    {
+      isCancelled: () => updatePollingCancelled,
+      onProgress: (progress) => {
+        updateStatus.value = progress
+        updateProgress.value = progress.message || progress.phase || 'Update is running'
+      },
+    },
+  )
+  updateStatus.value = status
+  updateProgress.value = ''
+  if (status.state === 'succeeded') {
+    if (reloadOnSuccess) window.location.reload()
+    return
+  }
+  updateError.value = status.message || (status.state === 'rollback_failed' ? 'Rollback failed; manual recovery is required.' : 'Update rolled back')
+}
+
+async function resumeUpdateStatus() {
+  try {
+    const status = (await getUpdateStatus()).data
+    if (!status) return
+    updateStatus.value = status
+    if (status.state === 'running') {
+      updateApplying.value = true
+      updateProgress.value = status.message || status.phase || 'Update is running'
+      await pollUpdateStatus(false)
+    } else if (status.state === 'failed' || status.state === 'rolled_back' || status.state === 'rollback_failed') {
+      updateError.value = status.message || 'Previous update did not complete'
+    }
+  } catch {
+    // Status is best effort: a new install may not expose an update record yet.
+  } finally {
+    updateApplying.value = false
+  }
+}
+
 async function onApplyUpdate() {
   const ok = await confirmDialog({
     title: t('common.confirm'),
@@ -526,30 +580,21 @@ async function onApplyUpdate() {
   if (!ok) return
   updateApplying.value = true
   updateError.value = ''
+  updateProgress.value = 'Starting update…'
+  updatePollingCancelled = false
   try {
-    const res = await applyUpdate() as any
-    if (res.code === 200) {
-      let countdown = 10
-      updateError.value = ''
-      const timer = setInterval(() => {
-        countdown--
-        updateError.value = t('security.update.restarting', { n: countdown })
-        if (countdown <= 0) {
-          clearInterval(timer)
-          const poll = setInterval(async () => {
-            try {
-              const r = await fetch('/api/v1/ping', { signal: AbortSignal.timeout(3000) })
-              if (r.ok) { clearInterval(poll); window.location.reload() }
-            } catch { /* still restarting */ }
-          }, 2000)
-        }
-      }, 1000)
-    } else {
+    const res = await applyUpdate()
+    if (res.code !== 202) {
       updateError.value = res.msg || 'Update failed'
       updateApplying.value = false
+      return
     }
+
+    await pollUpdateStatus(true)
+    if (updateError.value) toast.error(updateError.value)
+    updateApplying.value = false
   } catch (e: any) {
-    updateError.value = e?.response?.data?.msg || 'Update request failed'
+    updateError.value = e?.response?.data?.msg || e?.message || 'Update request failed'
     toast.error(updateError.value)
     updateApplying.value = false
   }
@@ -565,7 +610,7 @@ const bbrMsgType = ref<'success' | 'error'>('success')
 
 async function loadBBRStatus() {
   try {
-    const res = await getBBRStatus() as any
+    const res = await getBBRStatus()
     if (res.code === 200) {
       bbrEnabled.value = res.data.enabled
       bbrCurrent.value = res.data.current
@@ -579,10 +624,10 @@ async function onToggleBBR() {
   bbrMsg.value = ''
   try {
     const res = bbrEnabled.value
-      ? await disableBBR() as any
-      : await enableBBR() as any
+      ? await disableBBR()
+      : await enableBBR()
     if (res.code === 200) {
-      bbrMsg.value = res.msg
+      bbrMsg.value = res.msg ?? ''
       bbrMsgType.value = 'success'
       toast.success(t('common.applied'))
       await loadBBRStatus()
@@ -610,7 +655,7 @@ const swapSizeMB = ref(1024)
 
 async function loadSwapStatus() {
   try {
-    const res = await getSwapStatus() as any
+    const res = await getSwapStatus()
     if (res.code === 200) {
       swapEnabled.value = res.data.enabled
       swapTotalMB.value = res.data.total_mb
@@ -624,9 +669,9 @@ async function onCreateSwap() {
   swapLoading.value = true
   swapMsg.value = ''
   try {
-    const res = await createSwap(swapSizeMB.value) as any
+    const res = await createSwap(swapSizeMB.value)
     if (res.code === 200) {
-      swapMsg.value = res.msg
+      swapMsg.value = res.msg ?? ''
       swapMsgType.value = 'success'
       toast.success(t('common.created'))
       await loadSwapStatus()
@@ -653,9 +698,9 @@ async function onRemoveSwap() {
   swapLoading.value = true
   swapMsg.value = ''
   try {
-    const res = await removeSwap() as any
+    const res = await removeSwap()
     if (res.code === 200) {
-      swapMsg.value = res.msg
+      swapMsg.value = res.msg ?? ''
       swapMsgType.value = 'success'
       toast.success(t('common.deleted'))
       await loadSwapStatus()
@@ -679,7 +724,7 @@ const sysctlMsgType = ref<'success' | 'error'>('success')
 
 async function loadSysctlStatus() {
   try {
-    const res = await getSysctlStatus() as any
+    const res = await getSysctlStatus()
     if (res.code === 200) {
       sysctlEnabled.value = res.data.enabled
     }
@@ -691,10 +736,10 @@ async function onToggleSysctl() {
   sysctlMsg.value = ''
   try {
     const res = sysctlEnabled.value
-      ? await disableSysctl() as any
-      : await enableSysctl() as any
+      ? await disableSysctl()
+      : await enableSysctl()
     if (res.code === 200) {
-      sysctlMsg.value = res.msg
+      sysctlMsg.value = res.msg ?? ''
       sysctlMsgType.value = 'success'
       toast.success(t('common.applied'))
       await loadSysctlStatus()
@@ -711,8 +756,8 @@ async function onToggleSysctl() {
 }
 
 // ---- System Cleanup ----
-const cleanupInfo = ref<any>(null)
-const cleanupResult = ref<any>(null)
+const cleanupInfo = ref<CleanupInfo | null>(null)
+const cleanupResult = ref<CleanupResult | null>(null)
 const cleanupScanning = ref(false)
 const cleanupRunning = ref(false)
 const cleanupMsg = ref('')
@@ -722,7 +767,7 @@ async function onScanCleanup() {
   cleanupScanning.value = true
   cleanupResult.value = null
   try {
-    const res = await getCleanupInfo() as any
+    const res = await getCleanupInfo()
     if (res.code === 200) cleanupInfo.value = res.data
   } catch { toast.error(t('common.errorOccurred')) }
   cleanupScanning.value = false
@@ -739,10 +784,10 @@ async function onRunCleanup() {
   cleanupRunning.value = true
   cleanupMsg.value = ''
   try {
-    const res = await runCleanup() as any
+    const res = await runCleanup()
     if (res.code === 200) {
       cleanupResult.value = res.data
-      cleanupMsg.value = res.msg
+      cleanupMsg.value = res.msg ?? ''
       cleanupMsgType.value = 'success'
       toast.success(t('common.applied'))
       cleanupInfo.value = null
@@ -769,11 +814,7 @@ async function onExportBackup() {
   backupExporting.value = true
   backupMsg.value = ''
   try {
-    const res = await downloadBackup() as any
-    const blob = res instanceof Blob ? res : res.data
-    if (!(blob instanceof Blob)) {
-      throw new Error('Unexpected response body')
-    }
+    const blob = await downloadBackup()
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -809,7 +850,7 @@ async function onRestoreFileChosen(ev: Event) {
   backupRestoring.value = true
   backupMsg.value = ''
   try {
-    const res = await restoreBackup(file) as any
+    const res = await restoreBackup(file)
     if (res.code === 200) {
       backupMsg.value = t('security.backup.restored')
       backupMsgType.value = 'success'
@@ -850,12 +891,9 @@ const notifyTestLoading = ref<'telegram' | 'webhook' | null>(null)
 
 async function loadNotifyConfig() {
   try {
-    const res = await fetch('/api/v1/admin/notify', {
-      headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` }
-    })
-    const data = await res.json()
-    if (data.code === 200 && data.data) {
-      Object.assign(notifyConfig.value, data.data)
+    const res = await getNotifyConfig()
+    if (res.code === 200 && res.data) {
+      Object.assign(notifyConfig.value, res.data)
     }
   } catch { /* silent */ }
 }
@@ -863,17 +901,9 @@ async function loadNotifyConfig() {
 async function saveNotifyConfig() {
   notifySaving.value = true
   try {
-    const res = await fetch('/api/v1/admin/notify', {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('token') || ''}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(notifyConfig.value),
-    })
-    const data = await res.json()
-    if (data.code === 200) toast.success(t('common.saved'))
-    else toast.error(data.msg || t('common.errorOccurred'))
+    const res = await updateNotifyConfig(notifyConfig.value)
+    if (res.code === 200) toast.success(t('common.saved'))
+    else toast.error(res.msg || t('common.errorOccurred'))
   } catch { toast.error(t('common.errorOccurred')) }
   notifySaving.value = false
 }
@@ -881,112 +911,18 @@ async function saveNotifyConfig() {
 async function testNotify(channel: 'telegram' | 'webhook') {
   notifyTestLoading.value = channel
   try {
-    const payload: Record<string, string> = { channel }
+    const payload: NotificationTestPayload = { channel }
     if (channel === 'telegram') {
       payload.token = notifyConfig.value.notify_telegram_token
       payload.chat_id = notifyConfig.value.notify_telegram_chat_id
     } else {
       payload.url = notifyConfig.value.notify_webhook_url
     }
-    const res = await fetch('/api/v1/admin/notify/test', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('token') || ''}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    })
-    const data = await res.json()
-    if (data.code === 200) toast.success('Test notification sent')
-    else toast.error(data.msg || 'Test failed')
+    const res = await testNotification(payload)
+    if (res.code === 200) toast.success('Test notification sent')
+    else toast.error(res.msg || 'Test failed')
   } catch { toast.error(t('common.errorOccurred')) }
   notifyTestLoading.value = null
-}
-
-// ---- API Tokens (used by zenithctl CLI / automation) ----
-// Plaintext is shown exactly once in a banner after creation; revisiting the
-// list page only ever shows redacted metadata. This mirrors how every modern
-// API token UI works (Stripe, GitHub PATs) and is enforced server-side —
-// we never re-fetch plaintext, the server doesn't keep it.
-const tokens = ref<ApiTokenRow[]>([])
-const tokensLoading = ref(false)
-const tokenName = ref('')
-const tokenScopes = ref('*')
-const tokenExpiresDays = ref<number | null>(null)
-const tokenCreating = ref(false)
-const tokenPlaintext = ref('')
-const tokenPlaintextName = ref('')
-
-async function loadTokens() {
-  tokensLoading.value = true
-  try {
-    const res = await listApiTokens()
-    tokens.value = res.data?.data ?? []
-  } catch {
-    toast.error(t('common.errorOccurred'))
-  } finally {
-    tokensLoading.value = false
-  }
-}
-
-async function onCreateToken() {
-  if (!tokenName.value.trim()) {
-    toast.error(t('security.apiTokens.errorNameRequired'))
-    return
-  }
-  tokenCreating.value = true
-  try {
-    const res = await createApiToken({
-      name: tokenName.value.trim(),
-      scopes: tokenScopes.value.trim() || '*',
-      expires_in_days: tokenExpiresDays.value ?? 0,
-    })
-    const data = res.data?.data
-    if (data?.token) {
-      tokenPlaintext.value = data.token
-      tokenPlaintextName.value = data.name
-      tokenName.value = ''
-      tokenExpiresDays.value = null
-      await loadTokens()
-    } else {
-      toast.error(res.data?.msg || t('common.errorOccurred'))
-    }
-  } catch (e: any) {
-    toast.error(e?.response?.data?.msg || t('common.errorOccurred'))
-  } finally {
-    tokenCreating.value = false
-  }
-}
-
-async function onRevokeToken(row: ApiTokenRow) {
-  const ok = await confirmDialog({
-    title: t('security.apiTokens.revokeConfirmTitle'),
-    message: t('security.apiTokens.revokeConfirmBody', { name: row.name }),
-    confirmText: t('common.confirm'),
-    cancelText: t('common.cancel'),
-    variant: 'danger',
-  })
-  if (!ok) return
-  try {
-    await revokeApiToken(row.id)
-    await loadTokens()
-    toast.success(t('security.apiTokens.revokedToast'))
-  } catch {
-    toast.error(t('common.errorOccurred'))
-  }
-}
-
-function copyTokenToClipboard() {
-  if (!tokenPlaintext.value) return
-  navigator.clipboard?.writeText(tokenPlaintext.value).then(
-    () => toast.success(t('security.apiTokens.copied')),
-    () => toast.error(t('common.errorOccurred')),
-  )
-}
-
-function formatTokenTimestamp(ts: number): string {
-  if (!ts) return '—'
-  return new Date(ts * 1000).toLocaleString()
 }
 
 onMounted(() => {
@@ -999,9 +935,11 @@ onMounted(() => {
   loadSysctlStatus()
   loadNotifyConfig()
   loadDNSSettings()
-  loadTokens()
   loadAdBlockStatus()
+  void resumeUpdateStatus()
 })
+
+onBeforeUnmount(() => { updatePollingCancelled = true })
 </script>
 
 <template>
@@ -1050,6 +988,9 @@ onMounted(() => {
             </div>
             <div v-if="updateError" class="bg-rose-50 border border-rose-200 rounded-lg p-3 text-sm text-rose-700">
               {{ updateError }}
+            </div>
+            <div v-if="updateProgress" class="bg-sky-50 border border-sky-200 rounded-lg p-3 text-sm text-sky-700" role="status" aria-live="polite">
+              {{ updateProgress }}
             </div>
             <div class="flex items-center space-x-3 pt-2">
               <button @click="onCheckUpdate" :disabled="updateChecking || updateApplying" class="flex items-center bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 px-4 py-2 rounded-lg text-sm font-medium transition">
@@ -1562,94 +1503,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- API Tokens (used by zenithctl / automation) -->
-        <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-          <div class="p-6 border-b border-slate-100 flex items-center">
-            <div class="bg-violet-500/10 text-violet-500 p-2 rounded-lg mr-4">
-              <KeyIcon class="h-6 w-6" />
-            </div>
-            <div>
-              <h3 class="text-lg font-medium text-slate-800">{{ $t('security.apiTokens.title') }}</h3>
-              <p class="text-sm text-slate-500">{{ $t('security.apiTokens.subtitle') }}</p>
-            </div>
-          </div>
-          <div class="p-6 space-y-5">
-            <!-- One-time plaintext banner (shows after a successful create) -->
-            <div v-if="tokenPlaintext" class="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-              <div class="flex items-start justify-between gap-3">
-                <div class="flex-1">
-                  <p class="text-sm font-medium text-emerald-800">{{ $t('security.apiTokens.justCreated', { name: tokenPlaintextName }) }}</p>
-                  <p class="text-xs text-emerald-700 mt-0.5">{{ $t('security.apiTokens.copyNowWarn') }}</p>
-                  <code class="block mt-2 font-mono text-xs bg-white border border-emerald-200 rounded-lg p-2 break-all">{{ tokenPlaintext }}</code>
-                </div>
-                <div class="flex flex-col gap-2">
-                  <button @click="copyTokenToClipboard" class="bg-emerald-500 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded-lg transition">
-                    {{ $t('security.apiTokens.copy') }}
-                  </button>
-                  <button @click="tokenPlaintext = ''" class="bg-white border border-emerald-200 hover:bg-emerald-100 text-emerald-700 text-xs px-3 py-1.5 rounded-lg transition">
-                    {{ $t('security.apiTokens.dismiss') }}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Create form -->
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
-              <div class="md:col-span-2">
-                <label class="text-xs font-medium text-slate-500">{{ $t('security.apiTokens.nameLabel') }}</label>
-                <input v-model="tokenName" :placeholder="$t('security.apiTokens.namePlaceholder')" class="input-field text-sm mt-1 w-full" />
-              </div>
-              <div>
-                <label class="text-xs font-medium text-slate-500">{{ $t('security.apiTokens.scopesLabel') }}</label>
-                <input v-model="tokenScopes" placeholder="*" class="input-field text-sm mt-1 w-full" />
-              </div>
-              <div>
-                <label class="text-xs font-medium text-slate-500">{{ $t('security.apiTokens.expiresLabel') }}</label>
-                <input v-model.number="tokenExpiresDays" type="number" min="0" placeholder="0" class="input-field text-sm mt-1 w-full" />
-              </div>
-            </div>
-            <div class="flex justify-end">
-              <button @click="onCreateToken" :disabled="tokenCreating || !tokenName.trim()" class="bg-violet-500 hover:bg-violet-600 disabled:opacity-50 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
-                {{ tokenCreating ? $t('security.apiTokens.creating') : $t('security.apiTokens.create') }}
-              </button>
-            </div>
-
-            <!-- Existing tokens table -->
-            <div v-if="tokensLoading" class="text-sm text-slate-500">{{ $t('common.loading') }}</div>
-            <div v-else-if="tokens.length === 0" class="text-sm text-slate-500">{{ $t('security.apiTokens.empty') }}</div>
-            <div v-else class="overflow-x-auto">
-              <table class="min-w-full text-sm">
-                <thead class="text-xs text-slate-500 uppercase border-b border-slate-100">
-                  <tr>
-                    <th class="text-left py-2 pr-3 font-medium">{{ $t('security.apiTokens.colName') }}</th>
-                    <th class="text-left py-2 pr-3 font-medium">{{ $t('security.apiTokens.colScopes') }}</th>
-                    <th class="text-left py-2 pr-3 font-medium">{{ $t('security.apiTokens.colExpiry') }}</th>
-                    <th class="text-left py-2 pr-3 font-medium">{{ $t('security.apiTokens.colLastUsed') }}</th>
-                    <th class="text-left py-2 pr-3 font-medium">{{ $t('security.apiTokens.colStatus') }}</th>
-                    <th class="text-right py-2 font-medium">{{ $t('security.apiTokens.colActions') }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="row in tokens" :key="row.id" class="border-b border-slate-50 last:border-0">
-                    <td class="py-2 pr-3 font-mono text-xs text-slate-700">{{ row.name }}</td>
-                    <td class="py-2 pr-3 text-slate-600">{{ row.scopes }}</td>
-                    <td class="py-2 pr-3 text-slate-600">{{ row.expires_at ? formatTokenTimestamp(row.expires_at) : '—' }}</td>
-                    <td class="py-2 pr-3 text-slate-600">{{ formatTokenTimestamp(row.last_used_at) }}</td>
-                    <td class="py-2 pr-3">
-                      <span v-if="row.revoked" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-rose-50 text-rose-700">{{ $t('security.apiTokens.revoked') }}</span>
-                      <span v-else class="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-emerald-50 text-emerald-700">{{ $t('security.apiTokens.active') }}</span>
-                    </td>
-                    <td class="py-2 text-right">
-                      <button v-if="!row.revoked" @click="onRevokeToken(row)" class="text-xs bg-rose-50 hover:bg-rose-100 text-rose-700 px-2 py-1 rounded-md transition">
-                        {{ $t('security.apiTokens.revoke') }}
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+        <ApiTokenPanel />
 
         <!-- Notification Settings -->
         <div class="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
@@ -1733,6 +1587,7 @@ onMounted(() => {
               <h3 class="text-lg font-medium text-slate-800">{{ $t('security.auth.title') }}</h3>
               <p class="text-sm text-slate-500">{{ $t('security.auth.subtitle') }}</p>
             </div>
+            <button @click="signOutAllSessions" :disabled="revokingSessions" class="ml-auto shrink-0 rounded-lg px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50">Sign out all devices</button>
           </div>
           <div class="p-6 space-y-4">
             <!-- Password -->

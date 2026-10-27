@@ -60,9 +60,9 @@ function switchLang(code: string) {
   showLangMenu.value = false
 }
 
-const handleLogout = () => {
-  authStore.logout()
-  router.push('/login')
+const handleLogout = async () => {
+	await authStore.logout()
+	router.push('/login')
 }
 
 const handleNavClick = () => {

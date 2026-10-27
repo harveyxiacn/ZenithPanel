@@ -1,8 +1,11 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 
@@ -28,10 +31,8 @@ const smartDeployCertRoot = "/opt/zenithpanel/data/certs"
 
 func getOrchestrator() *deploy.Orchestrator {
 	deployOrchestratorOnce.Do(func() {
-		// ACME is not yet wired in Phase 1. The cert manager returns
-		// ErrACMENotConfigured when Mode=acme is requested without a
-		// client; the orchestrator surfaces that as a deployment failure.
-		mgr := cert.NewManager(smartDeployCertRoot, nil)
+		// Reuse the existing ACME issuer and renewal settings.
+		mgr := cert.NewProductionManager(smartDeployCertRoot)
 		deployOrchestrator = deploy.NewOrchestrator(config.DB, mgr)
 	})
 	return deployOrchestrator
@@ -39,7 +40,10 @@ func getOrchestrator() *deploy.Orchestrator {
 
 // RegisterDeployRoutes attaches the /api/v1/deploy/* endpoints to an
 // already-auth'd route group. Called from SetupRoutes.
-func RegisterDeployRoutes(authGroup *gin.RouterGroup) {
+func RegisterDeployRoutes(authGroup *gin.RouterGroup, apply ...func(context.Context) error) {
+	if len(apply) > 0 {
+		getOrchestrator().SetRuntimeApply(apply[0])
+	}
 	g := authGroup.Group("/deploy")
 	g.POST("/probe", handleDeployProbe)
 	g.POST("/preview", handleDeployPreview)
@@ -198,13 +202,22 @@ func handleDeployClients(c *gin.Context) {
 		return
 	}
 
-	// For Phase 1, return the inbound IDs and a note directing the user to
-	// the existing inbound-detail page for now. Full per-deployment
-	// subscription wiring lands alongside Task 9 (frontend wizard) when the
-	// frontend generates the subscription URL from the inbound ids.
-	c.JSON(http.StatusOK, gin.H{"code": 200, "data": gin.H{
-		"deployment_id": dep.ID,
-		"inbound_ids":   dep.InboundIDs,
-		"note":          "Use /api/v1/sub or the inbound detail page to fetch client configs for these inbounds.",
-	}})
+	var inboundIDs []uint
+	if err := json.Unmarshal([]byte(dep.InboundIDs), &inboundIDs); err != nil {
+		c.JSON(500, gin.H{"code": 500, "msg": "invalid deployment inbound list"})
+		return
+	}
+	var clients []model.Client
+	if len(inboundIDs) > 0 {
+		if err := config.ReadDB().WithContext(c.Request.Context()).Where("inbound_id IN ? AND enable = ?", inboundIDs, true).Find(&clients).Error; err != nil {
+			c.JSON(500, gin.H{"code": 500, "msg": "cannot load deployment clients"})
+			return
+		}
+	}
+	result := make([]gin.H, 0, len(clients))
+	for _, client := range clients {
+		result = append(result, gin.H{"id": client.ID, "inbound_id": client.InboundID, "email": client.Email, "subscription_path": "/api/v1/sub/" + url.PathEscape(client.UUID)})
+	}
+	c.JSON(200, gin.H{"code": 200, "data": gin.H{"deployment_id": dep.ID, "inbound_ids": dep.InboundIDs, "clients": result}})
+
 }

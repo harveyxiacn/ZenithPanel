@@ -110,3 +110,45 @@ func TestStaleManagedRules(t *testing.T) {
 		t.Fatalf("spec = %q", strings.Join(got[0], " "))
 	}
 }
+
+func TestFirewallFamilySelection(t *testing.T) {
+	for _, tc := range []struct{ family, want string }{
+		{"", "iptables"}, {"ipv4", "iptables"}, {"ipv6", "ip6tables"},
+	} {
+		got, err := firewallBinary(tc.family)
+		if err != nil || got != tc.want {
+			t.Errorf("family %q: got %q, %v; want %q", tc.family, got, err, tc.want)
+		}
+	}
+	if _, err := firewallBinary("both"); err == nil {
+		t.Fatal("unknown family accepted")
+	}
+}
+
+func TestRejectMismatchedSourceAndProtocolBeforeExecuting(t *testing.T) {
+	for _, tc := range []struct{ family, protocol, source string }{
+		{"ipv4", "tcp", "2001:db8::/32"},
+		{"ipv6", "udp", "192.0.2.1"},
+		{"ipv6", "icmp", ""},
+		{"ipv4", "ipv6-icmp", ""},
+	} {
+		if err := AddRuleForFamily(tc.family, tc.protocol, "", "ACCEPT", tc.source, ""); err == nil {
+			t.Errorf("accepted incompatible rule: %+v", tc)
+		}
+	}
+}
+
+func TestDeleteRejectsUnrepresentedMatches(t *testing.T) {
+	base := Rule{Family: "ipv6", Chain: "INPUT", Options: "--", InInterface: "*", OutInterface: "*", Protocol: "tcp", Target: "ACCEPT", Source: "::/0", Destination: "::/0", Port: "443", Extra: "tcp dpt:443"}
+	for _, modify := range []func(*Rule){
+		func(r *Rule) { r.InInterface = "eth0" },
+		func(r *Rule) { r.Extra += " ctstate NEW" },
+		func(r *Rule) { r.Extra += " /* comment */" },
+	} {
+		rule := base
+		modify(&rule)
+		if err := DeleteRule(rule); err == nil {
+			t.Fatalf("accepted rule with additional matches: %+v", rule)
+		}
+	}
+}

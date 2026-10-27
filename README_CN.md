@@ -110,6 +110,7 @@ docker run -d \
   --name zenithpanel \
   --restart always \
   -p 8080:8080 \
+  -e ZENITH_PORT=8080 \
   -v /opt/zenithpanel/data:/opt/zenithpanel/data \
   -v /var/run/docker.sock:/var/run/docker.sock \
   ghcr.io/harveyxiacn/zenithpanel:main

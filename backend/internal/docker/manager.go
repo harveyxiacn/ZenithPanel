@@ -4,14 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/netip"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/volume"
+	"github.com/moby/moby/client"
 )
 
 // Manager wraps the docker client.
@@ -33,7 +33,7 @@ type RunContainerRequest struct {
 
 // NewManager creates a new Docker client manager.
 func NewManager() (*Manager, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, err
 	}
@@ -41,52 +41,59 @@ func NewManager() (*Manager, error) {
 }
 
 // ListContainers returns a list of containers (all=true includes stopped).
-func (m *Manager) ListContainers(ctx context.Context, all bool) ([]types.Container, error) {
-	return m.cli.ContainerList(ctx, types.ContainerListOptions{All: all})
+func (m *Manager) ListContainers(ctx context.Context, all bool) ([]container.Summary, error) {
+	result, err := m.cli.ContainerList(ctx, client.ContainerListOptions{All: all})
+	return result.Items, err
 }
 
 // StartContainer starts a stopped container.
 func (m *Manager) StartContainer(ctx context.Context, id string) error {
-	return m.cli.ContainerStart(ctx, id, types.ContainerStartOptions{})
+	_, err := m.cli.ContainerStart(ctx, id, client.ContainerStartOptions{})
+	return err
 }
 
 // StopContainer stops a running container with a 10-second timeout.
 func (m *Manager) StopContainer(ctx context.Context, id string) error {
 	timeout := 10
-	return m.cli.ContainerStop(ctx, id, container.StopOptions{Timeout: &timeout})
+	_, err := m.cli.ContainerStop(ctx, id, client.ContainerStopOptions{Timeout: &timeout})
+	return err
 }
 
 // RestartContainer restarts a container with a 10-second timeout.
 func (m *Manager) RestartContainer(ctx context.Context, id string) error {
 	timeout := 10
-	return m.cli.ContainerRestart(ctx, id, container.StopOptions{Timeout: &timeout})
+	_, err := m.cli.ContainerRestart(ctx, id, client.ContainerRestartOptions{Timeout: &timeout})
+	return err
 }
 
 // RemoveContainer removes a container, optionally with force.
 func (m *Manager) RemoveContainer(ctx context.Context, id string, force bool) error {
-	return m.cli.ContainerRemove(ctx, id, types.ContainerRemoveOptions{Force: force})
+	_, err := m.cli.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: force})
+	return err
 }
 
 // ListImages returns all local images.
-func (m *Manager) ListImages(ctx context.Context) ([]types.ImageSummary, error) {
-	return m.cli.ImageList(ctx, types.ImageListOptions{})
+func (m *Manager) ListImages(ctx context.Context) ([]image.Summary, error) {
+	result, err := m.cli.ImageList(ctx, client.ImageListOptions{})
+	return result.Items, err
 }
 
 // PullImage pulls an image from a registry. Returns a ReadCloser that streams
 // JSON progress events; the caller must drain and close it.
 func (m *Manager) PullImage(ctx context.Context, ref string) (io.ReadCloser, error) {
-	return m.cli.ImagePull(ctx, ref, types.ImagePullOptions{})
+	return m.cli.ImagePull(ctx, ref, client.ImagePullOptions{})
 }
 
 // RemoveImage removes an image by ID or reference.
-func (m *Manager) RemoveImage(ctx context.Context, id string, force bool) ([]types.ImageDeleteResponseItem, error) {
-	return m.cli.ImageRemove(ctx, id, types.ImageRemoveOptions{Force: force})
+func (m *Manager) RemoveImage(ctx context.Context, id string, force bool) ([]image.DeleteResponse, error) {
+	result, err := m.cli.ImageRemove(ctx, id, client.ImageRemoveOptions{Force: force, PruneChildren: true})
+	return result.Items, err
 }
 
 // GetContainerLogs returns the last `tail` lines from a container's stdout+stderr.
 // Pass tail="all" for all lines.
 func (m *Manager) GetContainerLogs(ctx context.Context, id string, tail string) (string, error) {
-	rc, err := m.cli.ContainerLogs(ctx, id, types.ContainerLogsOptions{
+	rc, err := m.cli.ContainerLogs(ctx, id, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       tail,
@@ -111,13 +118,13 @@ type ContainerStatsSnapshot struct {
 
 // GetContainerStats returns a single CPU/memory snapshot for a container.
 func (m *Manager) GetContainerStats(ctx context.Context, id string) (*ContainerStatsSnapshot, error) {
-	resp, err := m.cli.ContainerStatsOneShot(ctx, id)
+	resp, err := m.cli.ContainerStats(ctx, id, client.ContainerStatsOptions{IncludePreviousSample: true})
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var raw types.StatsJSON
+	var raw container.StatsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, err
 	}
@@ -143,16 +150,27 @@ func (m *Manager) GetContainerStats(ctx context.Context, id string) (*ContainerS
 
 // RunContainer creates and starts a new container. Returns the container ID.
 func (m *Manager) RunContainer(ctx context.Context, req RunContainerRequest) (string, error) {
-	exposedPorts := nat.PortSet{}
-	portBindings := nat.PortMap{}
+	exposedPorts := network.PortSet{}
+	portBindings := network.PortMap{}
 	for _, p := range req.Ports {
 		binding, err := nat.ParsePortSpec(p)
 		if err != nil {
 			return "", err
 		}
 		for _, b := range binding {
-			exposedPorts[b.Port] = struct{}{}
-			portBindings[b.Port] = append(portBindings[b.Port], b.Binding)
+			port, err := network.ParsePort(string(b.Port))
+			if err != nil {
+				return "", err
+			}
+			hostIP := netip.Addr{}
+			if b.Binding.HostIP != "" {
+				hostIP, err = netip.ParseAddr(b.Binding.HostIP)
+				if err != nil {
+					return "", err
+				}
+			}
+			exposedPorts[port] = struct{}{}
+			portBindings[port] = append(portBindings[port], network.PortBinding{HostIP: hostIP, HostPort: b.Binding.HostPort})
 		}
 	}
 
@@ -164,7 +182,7 @@ func (m *Manager) RunContainer(ctx context.Context, req RunContainerRequest) (st
 		hostCfg.NetworkMode = container.NetworkMode(req.NetworkMode)
 	}
 	if req.RestartPolicy != "" {
-		hostCfg.RestartPolicy = container.RestartPolicy{Name: req.RestartPolicy}
+		hostCfg.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(req.RestartPolicy)}
 	}
 
 	cfg := &container.Config{
@@ -174,31 +192,38 @@ func (m *Manager) RunContainer(ctx context.Context, req RunContainerRequest) (st
 		ExposedPorts: exposedPorts,
 	}
 
-	resp, err := m.cli.ContainerCreate(ctx, cfg, hostCfg, &network.NetworkingConfig{}, nil, req.Name)
+	resp, err := m.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           cfg,
+		HostConfig:       hostCfg,
+		NetworkingConfig: &network.NetworkingConfig{},
+		Name:             req.Name,
+	})
 	if err != nil {
 		return "", err
 	}
-	if err := m.cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+	if _, err := m.cli.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 		return resp.ID, err
 	}
 	return resp.ID, nil
 }
 
 // InspectContainer returns detailed information about a container.
-func (m *Manager) InspectContainer(ctx context.Context, id string) (types.ContainerJSON, error) {
-	return m.cli.ContainerInspect(ctx, id)
+func (m *Manager) InspectContainer(ctx context.Context, id string) (container.InspectResponse, error) {
+	result, err := m.cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	return result.Container, err
 }
 
 // ListVolumes returns all Docker volumes.
-func (m *Manager) ListVolumes(ctx context.Context) ([]*volume.Volume, error) {
-	resp, err := m.cli.VolumeList(ctx, volume.ListOptions{})
+func (m *Manager) ListVolumes(ctx context.Context) ([]volume.Volume, error) {
+	resp, err := m.cli.VolumeList(ctx, client.VolumeListOptions{})
 	if err != nil {
 		return nil, err
 	}
-	return resp.Volumes, nil
+	return resp.Items, nil
 }
 
 // ListNetworks returns all Docker networks.
-func (m *Manager) ListNetworks(ctx context.Context) ([]types.NetworkResource, error) {
-	return m.cli.NetworkList(ctx, types.NetworkListOptions{Filters: filters.NewArgs()})
+func (m *Manager) ListNetworks(ctx context.Context) ([]network.Summary, error) {
+	result, err := m.cli.NetworkList(ctx, client.NetworkListOptions{})
+	return result.Items, err
 }

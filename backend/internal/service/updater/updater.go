@@ -5,19 +5,28 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/netip"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/service/proxy"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/version"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/client"
 )
 
 const DefaultImage = "ghcr.io/harveyxiacn/zenithpanel:main"
+
+func updateImage() string {
+	if configured := strings.TrimSpace(os.Getenv("ZENITH_UPDATE_IMAGE")); configured != "" {
+		return configured
+	}
+	return DefaultImage
+}
 
 // UpdateInfo contains the result of an update check.
 type UpdateInfo struct {
@@ -102,15 +111,78 @@ func getContainerIDFromCgroup() (string, error) {
 	return "", fmt.Errorf("container ID not found in cgroup")
 }
 
-// newUpdateInfo compares the running container's image ID against the registry
-// distribution descriptor without pulling any layers.
-func newUpdateInfo(currentImageID string, inspect registry.DistributionInspect) *UpdateInfo {
+// newUpdateInfo compares like-for-like registry manifest digests. Docker's
+// container inspect Image field is a config-object digest, while distribution
+// inspect returns a manifest digest; directly comparing those two always
+// reports an update. RepoDigests are the registry digests attached to the
+// locally pulled image and therefore the correct comparison source.
+func newUpdateInfo(currentImageID string, repoDigests []string, imageRef string, inspect registry.DistributionInspect) *UpdateInfo {
 	latestImageID := inspect.Descriptor.Digest.String()
+	currentID := currentImageID
+	available := true
+	repository := imageRepository(imageRef)
+	for _, repoDigest := range repoDigests {
+		name, digest, ok := strings.Cut(repoDigest, "@")
+		if !ok {
+			continue
+		}
+		if repository == "" || strings.EqualFold(name, repository) {
+			currentID = digest
+			if digest == latestImageID {
+				available = false
+			}
+			break
+		}
+	}
 	return &UpdateInfo{
-		Available: currentImageID != latestImageID,
-		CurrentID: truncID(currentImageID),
+		Available: available,
+		CurrentID: truncID(currentID),
 		LatestID:  truncID(latestImageID),
 	}
+}
+
+func imageRepository(ref string) string {
+	if at := strings.IndexByte(ref, '@'); at >= 0 {
+		return ref[:at]
+	}
+	lastSlash := strings.LastIndexByte(ref, '/')
+	if colon := strings.LastIndexByte(ref, ':'); colon > lastSlash {
+		return ref[:colon]
+	}
+	return ref
+}
+
+var runCosignVerify = func(ctx context.Context, candidate, identity, issuer string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "cosign", "verify",
+		"--certificate-identity", identity,
+		"--certificate-oidc-issuer", issuer,
+		candidate,
+	)
+	return cmd.CombinedOutput()
+}
+
+func verifyCandidateSignature(ctx context.Context, candidate string) error {
+	verifySetting := strings.ToLower(strings.TrimSpace(os.Getenv("ZENITH_COSIGN_VERIFY")))
+	if verifySetting == "false" || verifySetting == "0" || verifySetting == "no" {
+		return nil
+	}
+	identity := strings.TrimSpace(os.Getenv("ZENITH_COSIGN_IDENTITY"))
+	if identity == "" {
+		identity = "https://github.com/harveyxiacn/ZenithPanel/.github/workflows/main.yml@refs/heads/main"
+	}
+	issuer := strings.TrimSpace(os.Getenv("ZENITH_COSIGN_ISSUER"))
+	if issuer == "" {
+		issuer = "https://token.actions.githubusercontent.com"
+	}
+	output, err := runCosignVerify(ctx, candidate, identity, issuer)
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return fmt.Errorf("cosign verify %s: %s", candidate, message)
+	}
+	return nil
 }
 
 // swapScript builds the helper-container script that performs the actual
@@ -121,30 +193,166 @@ func newUpdateInfo(currentImageID string, inspect registry.DistributionInspect) 
 // images, so other containers' tagged images are never touched. It must run
 // after `docker rm` — until the old container is gone its image is still
 // referenced and the prune would skip it.
-func swapScript(oldID, newID string) string {
-	return fmt.Sprintf(
-		`sleep 2; docker stop -t 10 %s 2>/dev/null; docker start %s; docker rm %s 2>/dev/null; docker image prune -f >/dev/null 2>&1; true`,
-		oldID, newID, oldID,
-	)
+func swapScript() string {
+	return `set -u
+old_id="$ZENITH_OLD_ID"
+new_id="$ZENITH_NEW_ID"
+original_name="$ZENITH_ORIGINAL_NAME"
+status_file="$ZENITH_UPDATE_STATUS_FILE"
+previous_image="$ZENITH_PREVIOUS_IMAGE"
+candidate_image="$ZENITH_CANDIDATE_IMAGE"
+
+write_status() {
+  target="$1"
+  state="$2"
+  phase="$3"
+  message="$4"
+  rolled_back="$5"
+  # The helper shares the original data volume, so failures remain visible
+  # even when neither panel container can execute a command.
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  tmp="${status_file}.tmp"
+  printf '{"state":"%s","phase":"%s","message":"%s","previous_image":"%s","candidate_image":"%s","rolled_back":%s,"updated_at":"%s"}\n' \
+   "$state" "$phase" "$message" "$previous_image" "$candidate_image" "$rolled_back" "$now" > "$tmp" && mv "$tmp" "$status_file"
+
+}
+
+rollback() {
+ needs_rollback=0
+ restored=1
+ docker rm -f "$new_id" >/dev/null 2>&1 || restored=0
+ docker rename "$old_id" "$original_name" >/dev/null 2>&1 || restored=0
+ docker start "$old_id" >/dev/null 2>&1 || restored=0
+ if [ "$restored" = "1" ]; then
+  attempt=0
+  restored=0
+  while [ "$attempt" -lt 30 ]; do
+   if docker exec "$old_id" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q status >/dev/null 2>&1; then restored=1;break;fi
+   attempt=$((attempt+1));sleep 2
+  done
+ fi
+ if [ "$restored" = "1" ]; then
+  write_status "$old_id" "rolled_back" "rollback" "candidate failed; previous container restarted and database health verified" "true"
+ else
+  write_status "$old_id" "rollback_failed" "rollback" "previous container recovery failed; operator action required" "false"
+  echo "rollback_failed: previous container recovery failed" >&2
+ fi
+}
+
+needs_rollback=0
+trap 'if [ "$needs_rollback" = "1" ]; then rollback; fi' EXIT
+trap 'exit 1' HUP INT TERM
+
+write_status "$old_id" "running" "switch" "stopping previous container" "false"
+needs_rollback=1
+if ! docker stop -t 10 "$old_id" >/dev/null; then
+  exit 1
+fi
+if ! docker start "$new_id" >/dev/null; then
+  exit 1
+fi
+write_status "$new_id" "running" "health_check" "candidate container started" "false"
+
+attempt=0
+healthy=0
+while [ "$attempt" -lt 30 ]; do
+	if docker exec "$new_id" /opt/zenithpanel/zenithpanel ctl --host unix:///run/zenithpanel.sock -q ready >/dev/null 2>&1; then
+ healthy=$((healthy+1))
+ if [ "$healthy" -ge 3 ]; then
+    if ! docker rm "$old_id" >/dev/null; then
+      exit 1
+    fi
+    needs_rollback=0
+		write_status "$new_id" "succeeded" "commit" "candidate passed health check and previous container was removed" "false"
+    docker image prune -f >/dev/null 2>&1 || true
+    exit 0
+ fi
+ else
+ healthy=0
+  fi
+  attempt=$((attempt + 1))
+  sleep 2
+done
+
+exit 1`
 }
 
 // buildHelperContainerConfig returns the container and host config for the
 // updater helper. Uses the panel image directly to avoid `apk add` at runtime.
-func buildHelperContainerConfig(image, swapScript string) (*container.Config, *container.HostConfig) {
+func buildHelperContainerConfig(image, oldID, newID, originalName, previousImage, candidateImage string) (*container.Config, *container.HostConfig) {
 	return &container.Config{
 			Image:      image,
 			Entrypoint: []string{"sh", "-c"},
-			Cmd:        []string{swapScript},
+			Cmd:        []string{swapScript()},
+			Env: []string{
+				"ZENITH_OLD_ID=" + oldID,
+				"ZENITH_NEW_ID=" + newID,
+				"ZENITH_ORIGINAL_NAME=" + originalName,
+				"ZENITH_UPDATE_STATUS_FILE=" + statusPath(),
+				"ZENITH_PREVIOUS_IMAGE=" + previousImage,
+				"ZENITH_CANDIDATE_IMAGE=" + candidateImage,
+			},
 		}, &container.HostConfig{
-			Binds:      []string{"/var/run/docker.sock:/var/run/docker.sock"},
-			AutoRemove: true,
+			Binds:       []string{"/var/run/docker.sock:/var/run/docker.sock"},
+			VolumesFrom: []string{oldID + ":rw"},
+			AutoRemove:  true,
 		}
+}
+
+const panelDataPath = "/opt/zenithpanel/data"
+
+func dataMountIdentity(info container.InspectResponse) (string, bool) {
+	for _, m := range info.Mounts {
+		if m.Destination != panelDataPath || !m.RW {
+			continue
+		}
+		if m.Name != "" {
+			return string(m.Type) + ":name:" + m.Name, true
+		}
+		if m.Source != "" {
+			return string(m.Type) + ":source:" + m.Source, true
+		}
+	}
+	return "", false
+}
+
+// validateExternalRunnerTopology prevents a panel update from claiming
+// connection preservation when its runner cannot share the listeners and
+// generated configs. Both containers must use host networking and the exact
+// same writable persistent data mount.
+func validateExternalRunnerTopology(panel, runner container.InspectResponse) error {
+	if panel.HostConfig == nil || panel.HostConfig.NetworkMode != "host" {
+		return fmt.Errorf("external proxy runtime requires the panel container to use host networking")
+	}
+	if runner.HostConfig == nil || runner.HostConfig.NetworkMode != "host" {
+		return fmt.Errorf("external proxy runner must use host networking")
+	}
+	panelData, ok := dataMountIdentity(panel)
+	if !ok {
+		return fmt.Errorf("panel container has no writable %s mount", panelDataPath)
+	}
+	runnerData, ok := dataMountIdentity(runner)
+	if !ok || runnerData != panelData {
+		return fmt.Errorf("external proxy runner must share the panel's writable %s mount", panelDataPath)
+	}
+	return nil
+}
+
+func validateExternalRunnerIdentity(panelID, runnerID, runnerName, panelName string) error {
+	if runnerID == panelID {
+		return fmt.Errorf("external proxy runner resolves to the panel container itself")
+	}
+	oldName := panelName + "-old"
+	if runnerName == panelName || runnerName == oldName || runnerName == "zenith-updater" {
+		return fmt.Errorf("external proxy runner name %q conflicts with panel update container lifecycle", runnerName)
+	}
+	return nil
 }
 
 // CheckForUpdate inspects the registry digest without pulling layers and
 // compares it with the running container's image ID.
 func CheckForUpdate(ctx context.Context) (*UpdateInfo, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("docker client: %w", err)
 	}
@@ -155,17 +363,23 @@ func CheckForUpdate(ctx context.Context) (*UpdateInfo, error) {
 		return nil, fmt.Errorf("get container ID: %w", err)
 	}
 
-	info, err := cli.ContainerInspect(ctx, containerID)
+	inspectResult, err := cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("inspect container: %w", err)
 	}
+	info := inspectResult.Container
 
-	distInspect, err := cli.DistributionInspect(ctx, DefaultImage, "")
+	imageRef := updateImage()
+	distInspect, err := cli.DistributionInspect(ctx, imageRef, client.DistributionInspectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("inspect registry image: %w", err)
 	}
+	imageInspect, err := cli.ImageInspect(ctx, info.Image)
+	if err != nil {
+		return nil, fmt.Errorf("inspect current image: %w", err)
+	}
 
-	ui := newUpdateInfo(info.Image, registry.DistributionInspect(distInspect))
+	ui := newUpdateInfo(info.Image, imageInspect.RepoDigests, imageRef, distInspect.DistributionInspect)
 	ui.CurrentVersion = version.Version
 	return ui, nil
 }
@@ -177,20 +391,63 @@ func CheckForUpdate(ctx context.Context) (*UpdateInfo, error) {
 // IMPORTANT: This function uses its own background context (not the HTTP request
 // context) to prevent Docker API calls from being cancelled if the HTTP
 // connection drops or times out during the operation.
-func PerformUpdate(_ context.Context) error {
+func PerformUpdate(_ context.Context) (retErr error) {
+	status := Status{State: "running", Phase: "prepare", Message: "preparing signed candidate image"}
+	if err := writeStatus(status); err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			status.State = "failed"
+			status.Message = retErr.Error()
+			_ = writeStatus(status)
+		}
+	}()
 	// Use a background context so Docker operations survive HTTP request cancellation.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
 	defer func() { _ = cli.Close() }()
 
+	// An external runner is the only supported mode in which replacing this
+	// panel container preserves proxy processes. Refuse before pulling or
+	// renaming anything if the operator enabled it but its runner is absent.
+	if err := proxy.RequireExternalRuntimeReady(ctx); err != nil {
+		return err
+	}
+
+	imageRef := updateImage()
+	distInspect, err := cli.DistributionInspect(ctx, imageRef, client.DistributionInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect candidate image: %w", err)
+	}
+	digest := distInspect.Descriptor.Digest.String()
+	if digest == "" {
+		return fmt.Errorf("inspect candidate image: registry returned an empty digest")
+	}
+	candidateRef := imageRepository(imageRef) + "@" + digest
+	status.Candidate = candidateRef
+	status.Phase = "signature_verify"
+	status.Message = "verifying Sigstore identity"
+	if err := writeStatus(status); err != nil {
+		return err
+	}
+	if err := verifyCandidateSignature(ctx, candidateRef); err != nil {
+		return err
+	}
+
 	// 1. Pull latest image (may already be cached from check)
-	log.Println("OTA: pulling latest image...")
-	reader, err := cli.ImagePull(ctx, DefaultImage, types.ImagePullOptions{})
+	status.Phase = "pull"
+	status.Message = "pulling digest-pinned candidate"
+	if err := writeStatus(status); err != nil {
+		return err
+	}
+	log.Printf("OTA: pulling digest-pinned image %s...", candidateRef)
+	reader, err := cli.ImagePull(ctx, candidateRef, client.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("pull image: %w", err)
 	}
@@ -205,9 +462,31 @@ func PerformUpdate(_ context.Context) error {
 	}
 	log.Printf("OTA: detected self container ID: %s", containerID)
 
-	info, err := cli.ContainerInspect(ctx, containerID)
+	inspectResult, err := cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return fmt.Errorf("inspect container %s: %w", containerID, err)
+	}
+	info := inspectResult.Container
+	externalRunnerID := ""
+	externalRunnerContainerName := ""
+	if proxy.ExternalRuntimeEnabled() {
+		runnerName, err := proxy.ExternalRunnerName()
+		if err != nil {
+			return err
+		}
+		runnerInspect, err := cli.ContainerInspect(ctx, runnerName, client.ContainerInspectOptions{})
+		if err != nil {
+			return fmt.Errorf("inspect external proxy runner %q: %w", runnerName, err)
+		}
+		if err := validateExternalRunnerTopology(info, runnerInspect.Container); err != nil {
+			return err
+		}
+		externalRunnerID = runnerInspect.Container.ID
+		externalRunnerContainerName = strings.TrimPrefix(runnerInspect.Container.Name, "/")
+	}
+	status.Previous = info.Image
+	if err := writeStatus(status); err != nil {
+		return err
 	}
 
 	// 3. Prepare new container config with updated image.
@@ -221,7 +500,7 @@ func PerformUpdate(_ context.Context) error {
 	// the UI and trust those ports to survive the next OTA — see
 	// docs/qr_setup_guide.md.
 	newConfig := info.Config
-	newConfig.Image = DefaultImage
+	newConfig.Image = candidateRef
 	newConfig.Hostname = ""
 	newConfig.Domainname = ""
 	hostConfig := info.HostConfig
@@ -232,6 +511,11 @@ func PerformUpdate(_ context.Context) error {
 	containerName := strings.TrimPrefix(info.Name, "/")
 	containerName = strings.TrimSuffix(containerName, "-old")
 	oldName := containerName + "-old"
+	if externalRunnerID != "" {
+		if err := validateExternalRunnerIdentity(info.ID, externalRunnerID, externalRunnerContainerName, containerName); err != nil {
+			return err
+		}
+	}
 
 	log.Printf("OTA: container name=%s, will rename to=%s", containerName, oldName)
 
@@ -239,43 +523,50 @@ func PerformUpdate(_ context.Context) error {
 	// these can legitimately fail with "no such container" on a first-time
 	// upgrade; drop the error and let the rename step below decide whether
 	// the host is in a recoverable state.
-	_ = cli.ContainerStop(ctx, oldName, container.StopOptions{})
-	_ = cli.ContainerRemove(ctx, oldName, types.ContainerRemoveOptions{Force: true})
-	_ = cli.ContainerStop(ctx, "zenith-updater", container.StopOptions{})
-	_ = cli.ContainerRemove(ctx, "zenith-updater", types.ContainerRemoveOptions{Force: true})
+	_, _ = cli.ContainerStop(ctx, oldName, client.ContainerStopOptions{})
+	_, _ = cli.ContainerRemove(ctx, oldName, client.ContainerRemoveOptions{Force: true})
+	_, _ = cli.ContainerStop(ctx, "zenith-updater", client.ContainerStopOptions{})
+	_, _ = cli.ContainerRemove(ctx, "zenith-updater", client.ContainerRemoveOptions{Force: true})
 
 	// 4. Rename old container to free the name
-	if err := cli.ContainerRename(ctx, containerID, oldName); err != nil {
+	if _, err := cli.ContainerRename(ctx, containerID, client.ContainerRenameOptions{NewName: oldName}); err != nil {
 		return fmt.Errorf("rename container %s -> %s: %w", containerID[:12], oldName, err)
 	}
 	log.Printf("OTA: renamed %s -> %s", containerID[:12], oldName)
 
 	// 5. Create new container with same config + new image
-	resp, err := cli.ContainerCreate(ctx, newConfig, hostConfig, nil, nil, containerName)
+	resp, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: newConfig, HostConfig: hostConfig, Name: containerName})
 	if err != nil {
 		log.Printf("OTA: create failed, rolling back rename: %v", err)
-		_ = cli.ContainerRename(ctx, containerID, containerName) // rollback
+		_, _ = cli.ContainerRename(ctx, containerID, client.ContainerRenameOptions{NewName: containerName}) // rollback
 		return fmt.Errorf("create container: %w", err)
 	}
 	log.Printf("OTA: created new container %s", resp.ID[:12])
 
 	// 6. Spawn a helper container to orchestrate the swap using the panel image
 	// (already present locally). Avoids `apk add` at runtime and alpine dependency.
-	helperCfg, helperHC := buildHelperContainerConfig(DefaultImage, swapScript(containerID, resp.ID))
+	// The helper runs from the known-good current image ID, not the candidate
+	// tag. This keeps rollback available even if the pulled image is broken.
+	helperCfg, helperHC := buildHelperContainerConfig(info.Image, containerID, resp.ID, containerName, info.Image, candidateRef)
 
-	helperResp, err := cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
+	helperResp, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: helperCfg, HostConfig: helperHC, Name: "zenith-updater"})
 	if err != nil {
-		_ = cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-		_ = cli.ContainerRename(ctx, containerID, containerName)
+		_, _ = cli.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{})
+		_, _ = cli.ContainerRename(ctx, containerID, client.ContainerRenameOptions{NewName: containerName})
 		return fmt.Errorf("create updater helper: %w", err)
 	}
-	if err := cli.ContainerStart(ctx, helperResp.ID, types.ContainerStartOptions{}); err != nil {
-		_ = cli.ContainerRemove(ctx, helperResp.ID, types.ContainerRemoveOptions{})
-		_ = cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-		_ = cli.ContainerRename(ctx, containerID, containerName)
+	if _, err := cli.ContainerStart(ctx, helperResp.ID, client.ContainerStartOptions{}); err != nil {
+		_, _ = cli.ContainerRemove(ctx, helperResp.ID, client.ContainerRemoveOptions{})
+		_, _ = cli.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{})
+		_, _ = cli.ContainerRename(ctx, containerID, client.ContainerRenameOptions{NewName: containerName})
 		return fmt.Errorf("start updater helper: %w", err)
 	}
 
+	status.Phase = "helper_started"
+	status.Message = "candidate switch delegated to updater helper"
+	if err := writeStatus(status); err != nil {
+		log.Printf("OTA: persist helper_started status: %v", err)
+	}
 	log.Printf("OTA: helper container started, will swap %s -> %s in ~2s", containerID[:12], resp.ID[:12])
 	return nil
 }
@@ -286,7 +577,7 @@ func RestartSelf(_ context.Context, newPort string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return fmt.Errorf("docker client: %w", err)
 	}
@@ -298,10 +589,11 @@ func RestartSelf(_ context.Context, newPort string) error {
 	}
 	log.Printf("Restart: detected self container ID: %s", containerID)
 
-	info, err := cli.ContainerInspect(ctx, containerID)
+	inspectResult, err := cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return fmt.Errorf("inspect container %s: %w", containerID, err)
 	}
+	info := inspectResult.Container
 
 	newConfig := info.Config
 	newConfig.Hostname = ""
@@ -310,8 +602,11 @@ func RestartSelf(_ context.Context, newPort string) error {
 
 	// Update port mapping if a new port is specified
 	if newPort != "" {
-		tcpPort := nat.Port(newPort + "/tcp")
-		newConfig.ExposedPorts = nat.PortSet{tcpPort: struct{}{}}
+		tcpPort, err := network.ParsePort(newPort + "/tcp")
+		if err != nil {
+			return fmt.Errorf("invalid panel port %q: %w", newPort, err)
+		}
+		newConfig.ExposedPorts = network.PortSet{tcpPort: struct{}{}}
 
 		// Update ZENITH_PORT env var
 		envUpdated := false
@@ -327,8 +622,8 @@ func RestartSelf(_ context.Context, newPort string) error {
 		}
 
 		// Update host port bindings: map container port to same host port
-		hostConfig.PortBindings = nat.PortMap{
-			tcpPort: []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: newPort}},
+		hostConfig.PortBindings = network.PortMap{
+			tcpPort: []network.PortBinding{{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: newPort}},
 		}
 	}
 
@@ -339,38 +634,38 @@ func RestartSelf(_ context.Context, newPort string) error {
 	log.Printf("Restart: container name=%s, will rename to=%s", containerName, oldName)
 
 	// Clean up leftovers
-	_ = cli.ContainerStop(ctx, oldName, container.StopOptions{})
-	_ = cli.ContainerRemove(ctx, oldName, types.ContainerRemoveOptions{Force: true})
-	_ = cli.ContainerStop(ctx, "zenith-updater", container.StopOptions{})
-	_ = cli.ContainerRemove(ctx, "zenith-updater", types.ContainerRemoveOptions{Force: true})
+	_, _ = cli.ContainerStop(ctx, oldName, client.ContainerStopOptions{})
+	_, _ = cli.ContainerRemove(ctx, oldName, client.ContainerRemoveOptions{Force: true})
+	_, _ = cli.ContainerStop(ctx, "zenith-updater", client.ContainerStopOptions{})
+	_, _ = cli.ContainerRemove(ctx, "zenith-updater", client.ContainerRemoveOptions{Force: true})
 
 	// Rename old container
-	if err := cli.ContainerRename(ctx, containerID, oldName); err != nil {
+	if _, err := cli.ContainerRename(ctx, containerID, client.ContainerRenameOptions{NewName: oldName}); err != nil {
 		return fmt.Errorf("rename container: %w", err)
 	}
 	log.Printf("Restart: renamed %s -> %s", containerID[:12], oldName)
 
 	// Create new container with same image, updated config
-	resp, err := cli.ContainerCreate(ctx, newConfig, hostConfig, nil, nil, containerName)
+	resp, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: newConfig, HostConfig: hostConfig, Name: containerName})
 	if err != nil {
 		log.Printf("Restart: create failed, rolling back: %v", err)
-		_ = cli.ContainerRename(ctx, containerID, containerName)
+		_, _ = cli.ContainerRename(ctx, containerID, client.ContainerRenameOptions{NewName: containerName})
 		return fmt.Errorf("create container: %w", err)
 	}
 	log.Printf("Restart: created new container %s", resp.ID[:12])
 
 	// Helper container to swap, using the panel image (already local, no apk needed)
-	helperCfg, helperHC := buildHelperContainerConfig(newConfig.Image, swapScript(containerID, resp.ID))
-	helperResp, err := cli.ContainerCreate(ctx, helperCfg, helperHC, nil, nil, "zenith-updater")
+	helperCfg, helperHC := buildHelperContainerConfig(info.Image, containerID, resp.ID, containerName, info.Image, info.Image)
+	helperResp, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: helperCfg, HostConfig: helperHC, Name: "zenith-updater"})
 	if err != nil {
-		_ = cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-		_ = cli.ContainerRename(ctx, containerID, containerName)
+		_, _ = cli.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{})
+		_, _ = cli.ContainerRename(ctx, containerID, client.ContainerRenameOptions{NewName: containerName})
 		return fmt.Errorf("create helper: %w", err)
 	}
-	if err := cli.ContainerStart(ctx, helperResp.ID, types.ContainerStartOptions{}); err != nil {
-		_ = cli.ContainerRemove(ctx, helperResp.ID, types.ContainerRemoveOptions{})
-		_ = cli.ContainerRemove(ctx, resp.ID, types.ContainerRemoveOptions{})
-		_ = cli.ContainerRename(ctx, containerID, containerName)
+	if _, err := cli.ContainerStart(ctx, helperResp.ID, client.ContainerStartOptions{}); err != nil {
+		_, _ = cli.ContainerRemove(ctx, helperResp.ID, client.ContainerRemoveOptions{})
+		_, _ = cli.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{})
+		_, _ = cli.ContainerRename(ctx, containerID, client.ContainerRenameOptions{NewName: containerName})
 		return fmt.Errorf("start helper: %w", err)
 	}
 

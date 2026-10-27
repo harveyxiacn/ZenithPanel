@@ -21,8 +21,9 @@ type XrayManager struct {
 func NewXrayManager() *XrayManager {
 	return &XrayManager{
 		BaseCore: BaseCore{
-			BinaryPath: "xray",
-			ConfigPath: "data/xray_config.json",
+			BinaryPath:     "xray",
+			ConfigPath:     "data/xray_config.json",
+			externalEngine: "xray",
 		},
 	}
 }
@@ -215,7 +216,7 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]any,
 		if len(clients) > 0 {
 			clientList := []map[string]any{}
 			for _, c := range clients {
-				cm := map[string]any{"id": c.UUID, "email": c.Email}
+				cm := map[string]any{"id": c.UUID, "email": ClientIdentity(c.ID)}
 				// Preserve flow if set in settings template
 				if flow, ok := settings["flow"]; ok {
 					cm["flow"] = flow
@@ -232,7 +233,7 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]any,
 			for _, c := range clients {
 				clientList = append(clientList, map[string]any{
 					"id":      c.UUID,
-					"email":   c.Email,
+					"email":   ClientIdentity(c.ID),
 					"alterId": 0,
 				})
 			}
@@ -245,7 +246,7 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]any,
 			for _, c := range clients {
 				clientList = append(clientList, map[string]any{
 					"password": c.UUID,
-					"email":    c.Email,
+					"email":    ClientIdentity(c.ID),
 				})
 			}
 			settings["clients"] = clientList
@@ -260,7 +261,7 @@ func buildXrayInbound(in model.Inbound, clients []model.Client) (map[string]any,
 				for _, c := range clients {
 					clientList = append(clientList, map[string]any{
 						"password": c.UUID,
-						"email":    c.Email,
+						"email":    ClientIdentity(c.ID),
 					})
 				}
 				settings["clients"] = clientList
@@ -296,12 +297,7 @@ func fetchClientsByInbound(inbounds []model.Inbound) map[uint][]model.Client {
 	}
 	var clients []model.Client
 	config.DB.Where("inbound_id IN ? AND enable = ?", ids, true).Find(&clients)
-	// These copies only feed config generation, where Email becomes the
-	// engine's per-user stats key: make it unique across all rows (see
-	// StatsIdentities) so traffic is never credited to several clients.
-	idents := LoadStatsIdentities()
 	for _, c := range clients {
-		c.Email = identityOf(idents, c)
 		grouped[c.InboundID] = append(grouped[c.InboundID], c)
 	}
 	return grouped
@@ -339,6 +335,9 @@ func buildXrayRoutingRule(r model.RoutingRule) map[string]any {
 }
 
 func (x *XrayManager) Start() error {
+	if ExternalRuntimeEnabled() {
+		return fmt.Errorf("xray is managed by external proxy runner; use proxy apply to update its configuration")
+	}
 	if x.Status() {
 		return fmt.Errorf("xray is already running")
 	}

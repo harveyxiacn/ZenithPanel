@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/store/auth'
 import { setupLogin, setupComplete } from '@/api/auth'
 import { CheckCircleIcon, ShieldCheckIcon, CubeTransparentIcon, ArrowRightIcon } from '@heroicons/vue/24/outline'
 import { useI18n } from 'vue-i18n'
@@ -9,7 +8,6 @@ import { buildSetupPayload } from './SetupWizard.helpers'
 import { usageProfileOptions, type UsageProfile, type UsageProfileOptionTone } from '@/config/usage-profiles'
 
 const router = useRouter()
-const authStore = useAuthStore()
 const { t } = useI18n()
 
 const step = ref(1)
@@ -53,9 +51,8 @@ const handleInitialLogin = async () => {
 
   try {
     const res: any = await setupLogin(form.initialPassword)
-    if (res.code === 200 && res.data?.token) {
-      authStore.setToken(res.data.token)
-      step.value = 2
+		if (res.code === 200) {
+			step.value = 2
     } else {
       errorMsg.value = res.msg || 'Verification failed'
     }
@@ -98,8 +95,7 @@ const handleCompleteSetup = async () => {
 }
 
 const goToLogin = () => {
-  authStore.logout()
-  router.push('/login')
+	router.push('/login')
 }
 </script>
 

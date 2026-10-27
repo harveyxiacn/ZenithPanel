@@ -35,7 +35,11 @@ Request:
 
 Fields:
 - `name` *(string, required)* — unique, 1-64 chars, `[a-zA-Z0-9_.-]+`.
-- `scopes` *(string, optional)* — comma-separated scopes; default `*`.
+- `scopes` *(string, optional)* — comma-separated scopes; default `read`.
+  Valid values are `read`, `write`, `proxy:apply`, `infra:read`,
+  `infra:write`, `terminal`, and `admin`. `admin` grants every capability;
+  `*` is retained for local-root/bootstrap compatibility and cannot be mixed
+  with narrower scopes.
 - `expires_in_days` *(int, optional)* — `0` or omitted = no expiry.
 
 Response `200`:
@@ -213,6 +217,19 @@ Prometheus text-format scrape endpoint. Authenticated like every other
 | `backup export`                           | `GET /admin/backup/export`                        |
 | `backup restore --file f.zip`             | `POST /admin/backup/restore`                      |
 | `raw <METHOD> <PATH>`                     | passthrough                                       |
+
+The firewall rules API defaults to IPv4 for compatibility. Use
+`GET /api/v1/firewall/rules?family=ipv6` to list IPv6 rules and add
+`"family":"ipv6"` to a rule creation request to select `ip6tables`.
+Delete requests must include the full rule returned by the list endpoint,
+including its `family`. IPv4 and IPv6 firewall policies are independent;
+the Cloudflare protection feature currently manages IPv4 rules only.
+
+For a local IPv6 listener probe, use `GET /api/v1/proxy/test/:id?family=ipv6`.
+The result's `verification` field identifies the completed check. A
+`udp_local_bind` result is not a Hysteria2 handshake. On a properly configured
+Linux host, `scripts/proto_sweep_ipv6.sh --help` describes a separate real
+client tunnel test, including IPv6 egress verification.
 
 ## 4. CLI Config File
 

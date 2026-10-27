@@ -1,8 +1,12 @@
 package backup
 
 import (
+	"archive/zip"
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
@@ -14,7 +18,8 @@ import (
 // relevant tables migrated. Returns a cleanup closer.
 func setupTestDB(t *testing.T) func() {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:backup_%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open in-memory db: %v", err)
 	}
@@ -43,6 +48,8 @@ func TestBackupRoundTrip(t *testing.T) {
 	config.DB.Create(&model.Setting{Key: "panel_path", Value: "/admin"})
 	// Secret setting that MUST NOT appear in backup
 	config.DB.Create(&model.Setting{Key: "jwt_secret", Value: "super-secret"})
+	config.DB.Create(&model.Setting{Key: "notify_telegram_token", Value: "bot-secret"})
+	config.DB.Create(&model.Setting{Key: "notify_webhook_url", Value: "https://hook.example/secret"})
 
 	// Export
 	var buf bytes.Buffer
@@ -64,8 +71,8 @@ func TestBackupRoundTrip(t *testing.T) {
 		t.Fatalf("read archive: %v", err)
 	}
 	for _, s := range a.Settings {
-		if s.Key == "jwt_secret" {
-			t.Fatalf("jwt_secret must not be present in archive, but found: %s", s.Value)
+		if secretSettingKeys[s.Key] {
+			t.Fatalf("secret setting %s must not be present in archive", s.Key)
 		}
 	}
 
@@ -100,6 +107,66 @@ func TestBackupRoundTrip(t *testing.T) {
 	config.DB.Where("`key` = ?", "jwt_secret").First(&jwt)
 	if jwt.Value != "super-secret" {
 		t.Fatalf("expected jwt_secret to be preserved across restore, got %q", jwt.Value)
+	}
+}
+
+func encodeArchiveForTest(t *testing.T, a archive) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("backup.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.NewEncoder(w).Encode(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestRestoreSettingsUpsertByKeyNotSourceID(t *testing.T) {
+	cleanup := setupTestDB(t)
+	defer cleanup()
+	config.DB.Create(&model.Setting{Key: "existing-other", Value: "keep"})
+	config.DB.Create(&model.Setting{Key: "panel_path", Value: "/target"})
+
+	body := encodeArchiveForTest(t, archive{
+		Version:  FormatVersion,
+		Settings: []model.Setting{{ID: 1, Key: "panel_path", Value: "/source"}},
+	})
+	if _, err := Restore(body); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if got := config.GetSetting("panel_path"); got != "/source" {
+		t.Fatalf("panel_path=%q, want /source", got)
+	}
+	if got := config.GetSetting("existing-other"); got != "keep" {
+		t.Fatalf("unrelated setting overwritten: %q", got)
+	}
+}
+
+func TestValidateArchiveRejectsBrokenRelationshipsAndCron(t *testing.T) {
+	base := archive{
+		Version:  FormatVersion,
+		Inbounds: []model.Inbound{{ID: 1, Tag: "a", Port: 443, Enable: true}},
+	}
+	brokenClient := base
+	brokenClient.Clients = []model.Client{{InboundID: 99, Email: "orphan"}}
+	if err := validateArchive(&brokenClient); err == nil {
+		t.Fatal("expected orphan client validation error")
+	}
+	brokenCron := base
+	brokenCron.CronJobs = []model.CronJob{{Name: "bad", Schedule: "not cron"}}
+	if err := validateArchive(&brokenCron); err == nil {
+		t.Fatal("expected invalid cron validation error")
+	}
+	duplicatePort := base
+	duplicatePort.Inbounds = append(duplicatePort.Inbounds, model.Inbound{ID: 2, Tag: "b", Port: 443, Enable: true})
+	if err := validateArchive(&duplicatePort); err == nil {
+		t.Fatal("expected duplicate port validation error")
 	}
 }
 

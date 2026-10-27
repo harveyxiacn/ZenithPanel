@@ -89,3 +89,27 @@ func TestResolveSandboxPathAcceptsValidPath(t *testing.T) {
 		t.Fatalf("expected non-empty resolved path")
 	}
 }
+
+func TestResolveVirtualSandboxPathMapsRootAndRejectsTraversal(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "home")
+	child := filepath.Join(root, "user", "file.txt")
+	if err := os.MkdirAll(filepath.Dir(child), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(child, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gotRoot, ok := resolveVirtualSandboxPath(root, "/")
+	if !ok || filepath.Clean(gotRoot) != filepath.Clean(root) {
+		t.Fatalf("virtual root=%q,%v want %q", gotRoot, ok, root)
+	}
+	gotChild, ok := resolveVirtualSandboxPath(root, "/user/file.txt")
+	if !ok || filepath.Clean(gotChild) != filepath.Clean(child) {
+		t.Fatalf("virtual child=%q,%v want %q", gotChild, ok, child)
+	}
+	for _, invalid := range []string{"../secret", "/../../secret", `\windows\path`} {
+		if got, ok := resolveVirtualSandboxPath(root, invalid); ok {
+			t.Fatalf("invalid virtual path %q resolved to %q", invalid, got)
+		}
+	}
+}

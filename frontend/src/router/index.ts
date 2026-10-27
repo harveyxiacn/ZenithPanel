@@ -2,7 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 import type { RouteRecordRaw } from 'vue-router'
 import SetupWizard from '../views/SetupWizard.vue'
 import LoginView from '../views/LoginView.vue'
-import DashboardView from '@/views/DashboardView.vue'
 import MainLayout from '@/components/layout/MainLayout.vue'
 import { useAuthStore } from '@/store/auth'
 import { useUsageProfile } from '@/composables/useUsageProfile'
@@ -28,7 +27,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'dashboard',
         name: 'Dashboard',
-        component: DashboardView
+		component: () => import('@/views/DashboardView.vue')
       },
       // Stubs for future pages
       {
@@ -84,7 +83,10 @@ router.beforeEach(async (to) => {
   const authStore = useAuthStore()
   const { homeRoute, loadUsageProfile, usageProfileLoaded } = useUsageProfile()
 
-  const isAuthenticated = authStore.isAuthenticated
+	if (!String(to.path).startsWith('/zenith-setup-')) {
+		await authStore.ensureSession()
+	}
+	const isAuthenticated = authStore.isAuthenticated
 
   if (to.meta.requiresAuth && !isAuthenticated) {
     return '/login'

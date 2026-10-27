@@ -2,6 +2,7 @@ package api
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -60,5 +61,29 @@ func pathWithinSandbox(root, candidate string) bool {
 // isPathSafe is the package-level entry point used by file-manager route handlers.
 // It delegates to resolveSandboxPath using the configured fsSandboxRoot.
 func isPathSafe(userPath string) (string, bool) {
-	return resolveSandboxPath(fsSandboxRoot, userPath)
+	return resolveVirtualSandboxPath(fsSandboxRoot, userPath)
+}
+
+// resolveVirtualSandboxPath presents the host sandbox as a virtual `/` to API
+// clients. The browser never receives or submits host paths such as /home, and
+// traversal is rejected before filesystem-specific symlink resolution runs.
+func resolveVirtualSandboxPath(root, virtualPath string) (string, bool) {
+	if virtualPath == "" {
+		virtualPath = "/"
+	}
+	if !strings.HasPrefix(virtualPath, "/") || strings.Contains(virtualPath, "\\") {
+		return "", false
+	}
+	for _, segment := range strings.Split(virtualPath, "/") {
+		if segment == ".." {
+			return "", false
+		}
+	}
+	cleaned := path.Clean(virtualPath)
+	if cleaned == "/.." || strings.HasPrefix(cleaned, "/../") {
+		return "", false
+	}
+	relative := strings.TrimPrefix(cleaned, "/")
+	candidate := filepath.Join(root, filepath.FromSlash(relative))
+	return resolveSandboxPath(root, candidate)
 }

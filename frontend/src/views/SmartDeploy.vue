@@ -59,7 +59,8 @@ const previewError = ref('')
 const deployment = ref<Deployment | null>(null)
 const applyLoading = ref(false)
 const applyError = ref('')
-const clientsInfo = ref<{ inbound_ids: string; note: string } | null>(null)
+const clientsInfo = ref<Awaited<ReturnType<typeof deployClients>> | null>(null)
+const subscriptionOrigin = window.location.origin
 
 onMounted(() => {
   void runProbe()
@@ -430,9 +431,12 @@ const warnings = computed(() => {
           <p class="text-sm text-emerald-700 dark:text-emerald-300 mt-1">
             {{ t('smartDeploy.result.deployId', { id: deployment.id }) }}
           </p>
-          <p v-if="clientsInfo" class="text-sm text-emerald-700 dark:text-emerald-300 mt-2">
-            {{ clientsInfo.note }}
-          </p>
+          <ul v-if="clientsInfo?.clients.length" class="mt-3 space-y-3">
+            <li v-for="client in clientsInfo.clients" :key="client.id" class="text-sm">
+              <label :for="`deploy-sub-${client.id}`" class="block font-medium">{{ client.email }} · Inbound {{ client.inbound_id }}</label>
+              <input :id="`deploy-sub-${client.id}`" readonly :value="subscriptionOrigin + client.subscription_path" @focus="($event.target as HTMLInputElement).select()" class="mt-1 w-full rounded border border-emerald-200 bg-white px-3 py-2 text-slate-800" />
+            </li>
+          </ul>
         </div>
         <div v-else
              class="bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded-lg p-6">
@@ -443,7 +447,7 @@ const warnings = computed(() => {
             {{ deployment.error || t('smartDeploy.result.unknownError') }}
           </p>
           <p class="text-xs text-rose-600 dark:text-rose-400 mt-2">
-            {{ t('smartDeploy.result.autoRolledBack') }}
+            Check the error above for the recovery result before retrying.
           </p>
         </div>
 

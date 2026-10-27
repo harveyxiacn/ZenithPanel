@@ -37,11 +37,22 @@ func registerEgressRoutes(rg *gin.RouterGroup, eg *traffic.EgressCollector) {
 		return true
 	}
 
+	rg.GET("/traffic/egress/status", func(c *gin.Context) {
+		if !guard(c) {
+			return
+		}
+		c.JSON(200, gin.H{"code": 200, "data": eg.Status()})
+	})
 	rg.GET("/traffic/egress", func(c *gin.Context) {
 		if !guard(c) {
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": eg.Query(egressFilterFromQuery(c))})
+		rows, err := eg.QueryContext(c.Request.Context(), egressFilterFromQuery(c))
+		if err != nil {
+			c.JSON(503, gin.H{"code": 503, "msg": "Traffic query failed or timed out"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": rows})
 	})
 
 	rg.GET("/traffic/egress/summary", func(c *gin.Context) {
@@ -49,7 +60,12 @@ func registerEgressRoutes(rg *gin.RouterGroup, eg *traffic.EgressCollector) {
 			return
 		}
 		groupBy := strings.TrimSpace(c.DefaultQuery("group_by", "domain"))
-		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": eg.Summary(egressFilterFromQuery(c), groupBy)})
+		rows, err := eg.SummaryContext(c.Request.Context(), egressFilterFromQuery(c), groupBy)
+		if err != nil {
+			c.JSON(503, gin.H{"code": 503, "msg": "Traffic query failed or timed out"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": rows})
 	})
 
 	rg.GET("/traffic/egress/series", func(c *gin.Context) {
@@ -57,7 +73,12 @@ func registerEgressRoutes(rg *gin.RouterGroup, eg *traffic.EgressCollector) {
 			return
 		}
 		split := c.Query("split") == "instance"
-		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": eg.Series(egressFilterFromQuery(c), split)})
+		rows, err := eg.SeriesContext(c.Request.Context(), egressFilterFromQuery(c), split)
+		if err != nil {
+			c.JSON(503, gin.H{"code": 503, "msg": "Traffic query failed or timed out"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": rows})
 	})
 
 	rg.GET("/traffic/egress/export", func(c *gin.Context) {
@@ -66,7 +87,20 @@ func registerEgressRoutes(rg *gin.RouterGroup, eg *traffic.EgressCollector) {
 		}
 		scope := strings.TrimSpace(c.DefaultQuery("scope", "detail"))
 		f := egressFilterFromQuery(c)
+		var details []traffic.EgressRow
+		var summary []traffic.EgressSummaryRow
+		var err error
+		if scope == "dest" {
+			summary, err = eg.SummaryContext(c.Request.Context(), f, "dest")
+		} else {
+			details, err = eg.ExportContext(c.Request.Context(), f)
+		}
+		if err != nil {
+			c.JSON(503, gin.H{"code": 503, "msg": "Export query failed or timed out"})
+			return
+		}
 		filename := fmt.Sprintf("zenith-egress-%s-%s.csv", scope, time.Now().UTC().Format("20060102-150405"))
+		c.Header("X-Zenith-Export-Limit", "20000")
 		c.Header("Content-Type", "text/csv; charset=utf-8")
 		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 		// Streaming to the HTTP response: a write error means the client hung up
@@ -78,13 +112,13 @@ func registerEgressRoutes(rg *gin.RouterGroup, eg *traffic.EgressCollector) {
 		n := 0
 		if scope == "dest" {
 			_ = w.Write([]string{"key", "kind", "as_org", "country", "bytes_up", "bytes_down", "bytes_total", "hits"})
-			for _, r := range eg.Summary(f, "dest") {
+			for _, r := range summary {
 				_ = w.Write([]string{r.Key, r.Kind, r.ASOrg, r.Country, strconv.FormatInt(r.BytesUp, 10), strconv.FormatInt(r.BytesDown, 10), strconv.FormatInt(r.BytesTotal, 10), strconv.FormatInt(r.Hits, 10)})
 				n++
 			}
 		} else {
 			_ = w.Write([]string{"time", "bucket", "instance", "user_email", "dest_host", "dest_ip", "dest_rdns", "asn", "as_org", "country", "direction", "bytes_up", "bytes_down", "hits"})
-			for _, r := range eg.Export(f) {
+			for _, r := range details {
 				_ = w.Write([]string{time.Unix(r.Bucket, 0).UTC().Format(time.RFC3339), strconv.FormatInt(r.Bucket, 10), r.Instance, r.UserEmail, r.DestHost, r.DestIP, r.DestRDNS, r.ASN, r.ASOrg, r.Country, r.Direction, strconv.FormatInt(r.BytesUp, 10), strconv.FormatInt(r.BytesDown, 10), strconv.FormatInt(r.Hits, 10)})
 				n++
 			}
@@ -98,7 +132,12 @@ func registerEgressRoutes(rg *gin.RouterGroup, eg *traffic.EgressCollector) {
 		if !guard(c) {
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": eg.Coverage()})
+		rows, err := eg.CoverageContext(c.Request.Context())
+		if err != nil {
+			c.JSON(503, gin.H{"code": 503, "msg": "Traffic query failed or timed out"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 200, "msg": "Success", "data": rows})
 	})
 
 	rg.GET("/traffic/egress/config", func(c *gin.Context) {

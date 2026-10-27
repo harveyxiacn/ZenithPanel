@@ -90,3 +90,6 @@ dev_log.md
 /backend/vendor/
 /backend/bin/
 /.worktrees/
+
+# Local verification caches
+/.tmp-gocache/

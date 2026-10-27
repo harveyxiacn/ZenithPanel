@@ -1,6 +1,8 @@
 import apiClient from './client'
 
 export interface ProxyUserSample {
+ client_id?: number
+ inbound_id?: number
   email: string
   upload_rate_bps: number
   download_rate_bps: number

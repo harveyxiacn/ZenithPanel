@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -762,8 +763,12 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 
 	sb.WriteString("rules:\n")
 	for _, ruleServer := range serverRules {
-		if net.ParseIP(ruleServer) != nil {
-			fmt.Fprintf(sb, "  - IP-CIDR,%s/32,DIRECT,no-resolve\n", ruleServer)
+		if ip := net.ParseIP(ruleServer); ip != nil {
+			if ip.To4() == nil {
+				fmt.Fprintf(sb, "  - IP-CIDR6,%s/128,DIRECT,no-resolve\n", ruleServer)
+			} else {
+				fmt.Fprintf(sb, "  - IP-CIDR,%s/32,DIRECT,no-resolve\n", ruleServer)
+			}
 			continue
 		}
 		fmt.Fprintf(sb, "  - DOMAIN,%s,DIRECT\n", ruleServer)
@@ -869,6 +874,14 @@ func ShareLink(in model.Inbound, client model.Client, server string) string {
 	return ""
 }
 
+// subscriptionHostPort returns a URI-compatible host:port authority. IPv6
+// literals require brackets so their colons cannot be mistaken for the port
+// separator by subscription clients.
+func subscriptionHostPort(server string, port int) string {
+	host := strings.TrimPrefix(strings.TrimSuffix(server, "]"), "[")
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
 // buildVLESSLink generates a vless:// share link.
 func buildVLESSLink(in model.Inbound, client model.Client, server string, si streamInfo) string {
 	flow := parseSettingsFlow(in.Settings)
@@ -909,8 +922,8 @@ func buildVLESSLink(in model.Inbound, client model.Client, server string, si str
 
 	appendTransportParams(params, si)
 
-	return fmt.Sprintf("vless://%s@%s:%d?%s#%s",
-		client.UUID, server, in.Port, params.Encode(), url.PathEscape(remark))
+	return fmt.Sprintf("vless://%s@%s?%s#%s",
+		client.UUID, subscriptionHostPort(server, in.Port), params.Encode(), url.PathEscape(remark))
 }
 
 // buildVMessLink generates a vmess:// share link (V2RayN JSON format).
@@ -1010,8 +1023,8 @@ func buildTrojanLink(in model.Inbound, client model.Client, server string, si st
 
 	appendTransportParams(params, si)
 
-	return fmt.Sprintf("trojan://%s@%s:%d?%s#%s",
-		url.PathEscape(client.UUID), server, in.Port, params.Encode(), url.PathEscape(remark))
+	return fmt.Sprintf("trojan://%s@%s?%s#%s",
+		url.PathEscape(client.UUID), subscriptionHostPort(server, in.Port), params.Encode(), url.PathEscape(remark))
 }
 
 // appendTransportParams sets the transport-specific query fields for vless/trojan URIs.
@@ -1057,7 +1070,7 @@ func buildSSLink(in model.Inbound, client model.Client, server string, remark st
 	clientPSK := ssClientPassword(method, password, client.UUID)
 	// SIP002: userinfo is base64url(method:password) without padding.
 	userInfo := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + clientPSK))
-	base := fmt.Sprintf("ss://%s@%s:%d", userInfo, server, in.Port)
+	base := fmt.Sprintf("ss://%s@%s", userInfo, subscriptionHostPort(server, in.Port))
 
 	pluginName, pluginOpts := parseSSPlugin(in.Settings)
 	if pluginName != "" {
@@ -1122,9 +1135,9 @@ func buildTUICLink(in model.Inbound, client model.Client, server string, si stre
 	if encoded := params.Encode(); encoded != "" {
 		q = "?" + encoded
 	}
-	return fmt.Sprintf("tuic://%s:%s@%s:%d%s#%s",
+	return fmt.Sprintf("tuic://%s:%s@%s%s#%s",
 		url.PathEscape(client.UUID), url.PathEscape(client.UUID),
-		server, in.Port, q, url.PathEscape(remark))
+		subscriptionHostPort(server, in.Port), q, url.PathEscape(remark))
 }
 
 // buildHysteria2Link generates a hysteria2:// share link.
@@ -1154,8 +1167,8 @@ func buildHysteria2Link(in model.Inbound, client model.Client, server string, si
 	if encoded := params.Encode(); encoded != "" {
 		q = "?" + encoded
 	}
-	return fmt.Sprintf("hysteria2://%s@%s:%d%s#%s",
-		url.PathEscape(client.UUID), server, in.Port, q, url.PathEscape(remark))
+	return fmt.Sprintf("hysteria2://%s@%s%s#%s",
+		url.PathEscape(client.UUID), subscriptionHostPort(server, in.Port), q, url.PathEscape(remark))
 }
 
 // parseSSSettings extracts method and password from Shadowsocks settings JSON.

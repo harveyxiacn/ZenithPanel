@@ -170,7 +170,7 @@ export interface DeploymentDetail {
 export interface ClientsResponse {
   deployment_id: number
   inbound_ids: string
-  note: string
+  clients: Array<{ id: number; inbound_id: number; email: string; subscription_path: string }>
 }
 
 // UI helper: preset display metadata used by the wizard cards.

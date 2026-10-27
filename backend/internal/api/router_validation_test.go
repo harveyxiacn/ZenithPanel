@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/api/middleware"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/pkg/jwtutil"
@@ -43,13 +44,12 @@ func setupLogin(t *testing.T, router *gin.Engine, password string) (int, string)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	var resp struct {
-		Data struct {
-			Token string `json:"token"`
-		} `json:"data"`
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == middleware.SessionCookieName {
+			return rec.Code, cookie.Value
+		}
 	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-	return rec.Code, resp.Data.Token
+	return rec.Code, ""
 }
 
 func TestSetupLoginRejectedAfterSetupComplete(t *testing.T) {
@@ -96,9 +96,9 @@ func TestSetupCompleteRequiresSetupToken(t *testing.T) {
 
 func TestApplySetupCompletePersistsUsageProfile(t *testing.T) {
 	router, _ := setupRouterValidationTestServer(t, false)
-	code, token := setupLogin(t, router, "one-time-test-token")
-	if code != http.StatusOK {
-		t.Fatalf("setup login failed: %d", code)
+	token, err := jwtutil.GenerateSetupToken(time.Hour)
+	if err != nil {
+		t.Fatalf("generate setup token: %v", err)
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/setup/complete", bytes.NewBufferString(`{
@@ -264,6 +264,11 @@ func setupRouterValidationTestServer(t *testing.T, setupComplete bool) (*gin.Eng
 	cfg.SetupURLSuffix = "testsuffix"
 	cfg.SetupOneTimeToken = "one-time-test-token"
 
+	if setupComplete {
+		if err := db.Create(&model.AdminUser{Username: "admin", PasswordHash: "test-hash"}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	jwtutil.InitSecret([]byte("0123456789abcdef0123456789abcdef"))
 	token, err := jwtutil.GenerateToken("1", "admin", time.Hour)
 	if err != nil {
