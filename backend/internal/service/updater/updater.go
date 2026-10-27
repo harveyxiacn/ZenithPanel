@@ -21,6 +21,31 @@ import (
 
 const DefaultImage = "ghcr.io/harveyxiacn/zenithpanel:main"
 
+const ociImageLabelPrefix = "org.opencontainers.image."
+
+// mergeContainerLabels keeps labels explicitly assigned to the old
+// container, while taking OCI image metadata from the candidate image. Docker
+// does not reliably replace labels when a container Config is cloned, so stale
+// org.opencontainers.image.* values must be removed before the candidate ones
+// are applied.
+func mergeContainerLabels(containerLabels, candidateImageLabels map[string]string) map[string]string {
+	merged := make(map[string]string, len(containerLabels)+len(candidateImageLabels))
+	for key, value := range containerLabels {
+		if !strings.HasPrefix(key, ociImageLabelPrefix) {
+			merged[key] = value
+		}
+	}
+	for key, value := range candidateImageLabels {
+		if strings.HasPrefix(key, ociImageLabelPrefix) {
+			merged[key] = value
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
 func updateImage() string {
 	if configured := strings.TrimSpace(os.Getenv("ZENITH_UPDATE_IMAGE")); configured != "" {
 		return configured
@@ -201,6 +226,7 @@ original_name="$ZENITH_ORIGINAL_NAME"
 status_file="$ZENITH_UPDATE_STATUS_FILE"
 previous_image="$ZENITH_PREVIOUS_IMAGE"
 candidate_image="$ZENITH_CANDIDATE_IMAGE"
+candidate_image_id="${ZENITH_CANDIDATE_IMAGE_ID:-}"
 
 write_status() {
   target="$1"
@@ -250,6 +276,13 @@ if ! docker stop -t 10 "$old_id" >/dev/null; then
 fi
 if ! docker start "$new_id" >/dev/null; then
   exit 1
+fi
+if [ -n "$candidate_image_id" ]; then
+  actual_image=$(docker inspect --format '{{.Image}}' "$new_id" 2>/dev/null || true)
+  if [ "$actual_image" != "$candidate_image_id" ]; then
+    echo "candidate container image ID mismatch" >&2
+    exit 1
+  fi
 fi
 write_status "$new_id" "running" "health_check" "candidate container started" "false"
 
@@ -454,6 +487,13 @@ func PerformUpdate(_ context.Context) (retErr error) {
 	io.Copy(io.Discard, reader)
 	reader.Close()
 	log.Println("OTA: image pull complete")
+	candidateInspect, err := cli.ImageInspect(ctx, candidateRef)
+	if err != nil {
+		return fmt.Errorf("inspect pulled candidate image: %w", err)
+	}
+	if strings.TrimSpace(candidateInspect.ID) == "" {
+		return fmt.Errorf("inspect pulled candidate image: empty image ID")
+	}
 
 	// 2. Get current container ID and full config
 	containerID, err := getContainerID()
@@ -500,7 +540,12 @@ func PerformUpdate(_ context.Context) (retErr error) {
 	// the UI and trust those ports to survive the next OTA — see
 	// docs/qr_setup_guide.md.
 	newConfig := info.Config
-	newConfig.Image = candidateRef
+	newConfig.Image = candidateInspect.ID
+	if candidateInspect.Config != nil {
+		newConfig.Labels = mergeContainerLabels(newConfig.Labels, candidateInspect.Config.Labels)
+	} else {
+		newConfig.Labels = mergeContainerLabels(newConfig.Labels, nil)
+	}
 	newConfig.Hostname = ""
 	newConfig.Domainname = ""
 	hostConfig := info.HostConfig
@@ -548,6 +593,7 @@ func PerformUpdate(_ context.Context) (retErr error) {
 	// The helper runs from the known-good current image ID, not the candidate
 	// tag. This keeps rollback available even if the pulled image is broken.
 	helperCfg, helperHC := buildHelperContainerConfig(info.Image, containerID, resp.ID, containerName, info.Image, candidateRef)
+	helperCfg.Env = append(helperCfg.Env, "ZENITH_CANDIDATE_IMAGE_ID="+candidateInspect.ID)
 
 	helperResp, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: helperCfg, HostConfig: helperHC, Name: "zenith-updater"})
 	if err != nil {

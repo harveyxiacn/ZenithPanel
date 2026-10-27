@@ -36,6 +36,40 @@ func TestNewUpdateInfoUsesRegistryDescriptorDigest(t *testing.T) {
 	}
 }
 
+func TestMergeContainerLabelsUsesCandidateOCIAndPreservesOperatorLabels(t *testing.T) {
+	got := mergeContainerLabels(
+		map[string]string{
+			"operator.example/role":             "panel",
+			"org.opencontainers.image.revision": "old-revision",
+			"org.opencontainers.image.version":  "old-version",
+		},
+		map[string]string{
+			"org.opencontainers.image.revision": "new-revision",
+			"org.opencontainers.image.version":  "new-version",
+			"com.example/image-build":           "candidate-only-metadata",
+		},
+	)
+	if got["operator.example/role"] != "panel" {
+		t.Fatalf("operator label was not preserved: %#v", got)
+	}
+	if got["org.opencontainers.image.revision"] != "new-revision" || got["org.opencontainers.image.version"] != "new-version" {
+		t.Fatalf("candidate OCI labels were not applied: %#v", got)
+	}
+	if _, ok := got["com.example/image-build"]; ok {
+		t.Fatalf("non-OCI candidate image label should not become a container label: %#v", got)
+	}
+}
+
+func TestSwapScriptChecksCandidateImageIDBeforeHealth(t *testing.T) {
+	s := swapScript()
+	idEnv := strings.Index(s, `candidate_image_id="${ZENITH_CANDIDATE_IMAGE_ID:-}"`)
+	check := strings.Index(s, `docker inspect --format '{{.Image}}' "$new_id"`)
+	health := strings.Index(s, `docker exec "$new_id"`)
+	if idEnv == -1 || check == -1 || health == -1 || check > health {
+		t.Fatalf("swap script must validate candidate image ID before health: %s", s)
+	}
+}
+
 func TestValidateExternalRunnerTopology(t *testing.T) {
 	withData := func(mode, source string) container.InspectResponse {
 		return container.InspectResponse{

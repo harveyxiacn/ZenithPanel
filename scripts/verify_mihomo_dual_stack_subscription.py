@@ -139,10 +139,15 @@ def reject_insecure_provider_file(path: Path) -> None:
         raise VerificationError("private provider explicitly disables TLS certificate verification")
 
 
-def request_json(port: int, secret: str, method: str, path: str, timeout: float = 8.0) -> tuple[int, Any]:
+def request_json(port: int, secret: str, method: str, path: str, payload: Any | None = None, timeout: float = 8.0) -> tuple[int, Any]:
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    headers = {"Authorization": "Bearer " + secret}
+    body = None
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        body = json.dumps(payload, separators=(",", ":"))
     try:
-        connection.request(method, path, headers={"Authorization": "Bearer " + secret})
+        connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
         raw = response.read()
     finally:
@@ -181,7 +186,7 @@ def wait_for_controller(port: int, secret: str, process: subprocess.Popen[str], 
     raise VerificationError("timed out waiting for temporary Mihomo controller")
 
 
-def provider_proxies(port: int, secret: str, provider_file: Path) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+def provider_proxies(port: int, secret: str, provider_file: Path) -> dict[str, dict[str, Any]]:
     status, _ = request_json(port, secret, "PUT", "/providers/proxies/zenith-private", timeout=20.0)
     if status not in (200, 204):
         raise VerificationError("Mihomo could not refresh the private proxy provider")
@@ -192,17 +197,11 @@ def provider_proxies(port: int, secret: str, provider_file: Path) -> tuple[dict[
             provider = {entry.get("name"): entry for entry in body["proxies"] if isinstance(entry, dict) and isinstance(entry.get("name"), str)}
             if provider:
                 reject_insecure_provider_file(provider_file)
-                # /providers confirms exactly what the downloaded document
-                # supplied.  /proxies is then used for each documented
-                # controller delay request, rather than relying on an
-                # implementation-specific provider-health endpoint.
-                all_status, all_body = request_json(port, secret, "GET", "/proxies")
-                if all_status == 200 and isinstance(all_body, dict) and isinstance(all_body.get("proxies"), dict):
-                    controller = {
-                        name: entry for name, entry in all_body["proxies"].items()
-                        if isinstance(name, str) and isinstance(entry, dict)
-                    }
-                    return provider, controller
+                # Real Mihomo releases can omit provider nodes from top-level
+                # /proxies; they expose the VERIFY selector there instead.
+                selector_status, selector = request_json(port, secret, "GET", "/proxies/VERIFY")
+                if selector_status == 200 and isinstance(selector, dict) and str(selector.get("type", "")).lower() == "selector":
+                    return provider
         time.sleep(0.25)
     raise VerificationError("Mihomo did not load any proxies from the private subscription")
 
@@ -228,7 +227,15 @@ def print_result(protocol: str, family: str, delay: int | str, passed: bool) -> 
     print(f"{protocol:12} {family:4} {str(delay):>6} {'PASS' if passed else 'FAIL'}")
 
 
-def validate_nodes(provider: dict[str, dict[str, Any]], controller: dict[str, dict[str, Any]], port: int, secret: str, test_url: str) -> bool:
+def select_and_confirm(port: int, secret: str, name: str) -> bool:
+    status, _ = request_json(port, secret, "PUT", "/proxies/VERIFY", {"name": name})
+    if status != 204:
+        return False
+    status, selector = request_json(port, secret, "GET", "/proxies/VERIFY")
+    return status == 200 and isinstance(selector, dict) and selector.get("now") == name
+
+
+def validate_nodes(provider: dict[str, dict[str, Any]], port: int, secret: str, test_url: str) -> bool:
     expected_names = set(EXPECTED_NODES)
     actual_names = set(provider)
     success = True
@@ -238,14 +245,15 @@ def validate_nodes(provider: dict[str, dict[str, Any]], controller: dict[str, di
         success = False
     for name, (protocol, family) in EXPECTED_NODES.items():
         provider_proxy = provider.get(name)
-        proxy = controller.get(name)
         provider_type = str(provider_proxy.get("type", "")).lower() if isinstance(provider_proxy, dict) else ""
-        if provider_type != protocol or proxy is None or is_insecure_proxy(proxy):
+        if provider_type != protocol or not isinstance(provider_proxy, dict) or is_insecure_proxy(provider_proxy):
             print_result(protocol, family, "-", False)
             success = False
             continue
-        path = "/proxies/" + quote(name, safe="") + "/delay?url=" + quote(test_url, safe="") + "&timeout=15000&expected=204"
         try:
+            if not select_and_confirm(port, secret, name):
+                raise VerificationError("selector did not retain the requested provider node")
+            path = "/proxies/VERIFY/delay?url=" + quote(test_url, safe="") + "&timeout=15000&expected=204"
             status, body = request_json(port, secret, "GET", path, timeout=22.0)
             delay = body.get("delay") if isinstance(body, dict) else None
             passed = status == 200 and isinstance(delay, int) and delay >= 0
@@ -331,8 +339,8 @@ def main(argv: list[str]) -> int:
                 text=True,
             )
         wait_for_controller(controller_port, controller_secret, process)
-        provider, controller = provider_proxies(controller_port, controller_secret, work / "zenith-private-provider.yaml")
-        passed = validate_nodes(provider, controller, controller_port, controller_secret, args.test_url)
+        provider = provider_proxies(controller_port, controller_secret, work / "zenith-private-provider.yaml")
+        passed = validate_nodes(provider, controller_port, controller_secret, args.test_url)
         retain_failed_evidence = not passed
         return 0 if passed else 2
     except VerificationError as exc:
