@@ -93,7 +93,7 @@ gofmt -w "$tmpdir/reality_target.go"
 go build -o "$tmpdir/reality-target" "$tmpdir/reality_target.go" >"$tmpdir/reality-target.log" 2>&1 || { report_failure; exit 1; }
 "$tmpdir/reality-target" "$tmpdir/server.crt" "$tmpdir/server.key" >>"$tmpdir/reality-target.log" 2>&1 & pids+=("$!"); wait_alive "${pids[-1]}" reality-target
 cat >"$tmpdir/xray.json" <<EOF
-{"log":{"loglevel":"debug"},"inbounds":[{"listen":"::1","port":48181,"protocol":"vless","settings":{"clients":[{"id":"$uuid","email":"zc:1","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"show":true,"target":"[::1]:48182","serverNames":["localhost"],"privateKey":"$reality_private","shortIds":["0123456789abcdef"]}}}],"outbounds":[{"protocol":"freedom","tag":"direct"}]}
+{"log":{"loglevel":"debug"},"inbounds":[{"listen":"::1","port":48181,"protocol":"vless","settings":{"clients":[{"id":"$uuid","email":"zc:1","flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"show":false,"target":"[::1]:48182","serverNames":["localhost"],"privateKey":"$reality_private","shortIds":["0123456789abcdef"]}}}],"outbounds":[{"protocol":"freedom","tag":"direct","settings":{"finalRules":[{"action":"allow","network":"tcp","port":"48180","ip":["::1/128"]}]}}]}
 EOF
 "$XRAY_BIN" run -c "$tmpdir/xray.json" >"$tmpdir/xray.log" 2>&1 & pids+=("$!"); wait_alive "${pids[-1]}" xray
 cat >"$tmpdir/vless-client.json" <<EOF

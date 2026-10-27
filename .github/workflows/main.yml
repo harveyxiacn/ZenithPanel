@@ -145,7 +145,7 @@ jobs:
         run: govulncheck ./...
 
   ipv6-protocol-e2e:
-    # A real local data path: sing-box client -> IPv6 loopback -> Xray VLESS
+    # A real local data path: compatible client -> IPv6 loopback -> Xray VLESS
     # or sing-box Hysteria2 -> IPv6 loopback HTTP origin. It needs no VPS or
     # Internet egress after these pinned binaries are downloaded.
     runs-on: ubuntu-latest
@@ -212,7 +212,7 @@ jobs:
           # Tiny startup grace; the polling loop covers slow boots.
           sleep 2
 
-      - name: Verify persistent external runner preserves a VLESS stream
+      - name: Verify external runner preserves VLESS and Hysteria2 streams
         # This creates uniquely named, host-networked test containers and a
         # temporary volume, then cleans them with a trap. It replaces only a
         # panel test container; it never pulls or updates a published image.

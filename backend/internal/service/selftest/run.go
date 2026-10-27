@@ -106,7 +106,7 @@ func Run(ctx context.Context, link string, opt Options) Result {
 	cmd.Stderr = &stderr
 	cmd.Stdout = io.Discard
 	if err := cmd.Start(); err != nil {
-		return Result{Err: "start sing-box client: " + err.Error()}
+		return Result{Err: "start " + engine + " client: " + err.Error()}
 	}
 	defer func() {
 		_ = cmd.Process.Kill()

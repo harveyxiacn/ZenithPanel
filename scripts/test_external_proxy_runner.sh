@@ -75,7 +75,15 @@ cat > "$workdir/xray_config.json" <<EOF
     "settings": {"clients": [{"id": "${uuid}", "email": "e2e"}], "decryption": "none"},
     "streamSettings": {"network": "tcp", "security": "none"}
   }],
-  "outbounds": [{"protocol": "freedom", "tag": "direct"}]
+  "outbounds": [{
+    "protocol": "freedom", "tag": "direct",
+    "settings": {
+      "finalRules": [{
+        "action": "allow", "network": "tcp", "port": "${origin_port}",
+        "ip": ["127.0.0.1/32"]
+      }]
+    }
+  }]
 }
 EOF
 cat > "$workdir/vless_client.json" <<EOF
