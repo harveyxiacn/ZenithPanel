@@ -291,6 +291,7 @@ setup_cookie="$workdir/setup.cookie"
 curl --fail --silent --show-error --cookie-jar "$setup_cookie" -H 'Content-Type: application/json' \
   --data "{\"password\":\"${setup_password}\"}" "http://127.0.0.1:${panel_port}/api/setup/login" | grep -q '"code":200'
 curl --fail --silent --show-error --cookie "$setup_cookie" -H 'Content-Type: application/json' \
+  -H "Origin: http://127.0.0.1:${panel_port}" \
   --data '{"username":"runneradmin","password":"runner-e2e-password","usage_profile":"vps_ops"}' \
   "http://127.0.0.1:${panel_port}/api/setup/complete" | grep -q '"code":200'
 
