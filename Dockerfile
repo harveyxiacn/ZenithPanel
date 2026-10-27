@@ -33,6 +33,18 @@ ARG TARGETARCH
 ARG VERSION=dev
 RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags "-s -w -X github.com/harveyxiacn/ZenithPanel/backend/internal/version.Version=${VERSION}" -o /zenithpanel main.go
 
+# Build upstream Sing-box with the security-patched dependency lock in
+# tools/singbox. The same build script is used by IPv6 CI so production and
+# test protocol behavior share the official feature tags and linker settings.
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS singbox-builder
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src
+COPY tools/singbox/go.mod tools/singbox/go.sum ./
+COPY tools/singbox/build.sh ./build.sh
+RUN chmod 755 ./build.sh && go mod download all
+RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} SINGBOX_OUTPUT=/out/sing-box ./build.sh
+
 # Final Runtime Image
 FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
 WORKDIR /opt/zenithpanel
@@ -40,7 +52,6 @@ WORKDIR /opt/zenithpanel
 # Pinned proxy engine versions — update these when a new release is desired.
 # Using ARGs avoids GitHub API rate-limit failures during CI builds.
 ARG XRAY_VERSION=v26.10.21
-ARG SINGBOX_VERSION=v1.14.4
 ARG COSIGN_VERSION=v3.1.4
 # Set automatically by BuildKit to the platform being built (amd64 / arm64).
 ARG TARGETARCH
@@ -84,28 +95,9 @@ RUN set -ex && \
     rm -f /tmp/xray.zip && \
     xray version
 
-# Download Sing-box binary (required for Hysteria2, TUIC, and alternative engine)
-RUN set -ex && \
-    ARCH="${TARGETARCH:-$(apk --print-arch)}" && \
-    case "$ARCH" in \
-      amd64|x86_64)  SB_ARCH=amd64; SINGBOX_SHA256=8f7c5f0651238850d96a0e488e5473cd77ec1a0098f63942e943f475a12057ca ;; \
-      arm64|aarch64) SB_ARCH=arm64; SINGBOX_SHA256=b95e25f921dc5e17a4cf13327243d1177642c7e35425bf5372862c477c359f56 ;; \
-      *) echo "unsupported arch: $ARCH" >&2; exit 1 ;; \
-    esac && \
-    SINGBOX_VER_STRIP="${SINGBOX_VERSION#v}" && \
-    SB_BASE="https://github.com/SagerNet/sing-box/releases/download/${SINGBOX_VERSION}" && \
-    # Alpine requires the musl build. Pin each architecture's release checksum.
-    SB_NAME="sing-box-${SINGBOX_VER_STRIP}-linux-${SB_ARCH}-musl" && \
-    wget -O /tmp/singbox.tar.gz "${SB_BASE}/${SB_NAME}.tar.gz" && \
-    echo "${SINGBOX_SHA256}  /tmp/singbox.tar.gz" | sha256sum -c - && \
-    tar -xzf /tmp/singbox.tar.gz -C /tmp && \
-    cp /tmp/${SB_NAME}/sing-box /usr/local/bin/sing-box && \
-    chmod 755 /usr/local/bin/sing-box && \
-    rm -rf /tmp/singbox.tar.gz /tmp/sing-box-* && \
-    sing-box version
-
 # Copy backend binary (frontend is already embedded via go:embed)
 COPY --from=backend-builder /zenithpanel /opt/zenithpanel/zenithpanel
+COPY --from=singbox-builder /out/sing-box /usr/local/bin/sing-box
 
 # Package vps_check.sh so diagnostics work in container deployments
 COPY scripts/vps_check.sh /opt/zenithpanel/scripts/vps_check.sh

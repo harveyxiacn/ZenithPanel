@@ -153,11 +153,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6.0.2
 
-      - name: Set up Go for local Reality target
+      - name: Set up Go for protocol fixtures
         uses: actions/setup-go@v6.4.0
         with:
           go-version-file: backend/go.mod
-          cache: false
+          cache-dependency-path: tools/singbox/go.sum
 
       - name: Download pinned protocol engines
         run: |
@@ -166,11 +166,14 @@ jobs:
           echo '0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978  /tmp/zenith-ipv6-e2e/xray.zip' | sha256sum -c -
           unzip -q /tmp/zenith-ipv6-e2e/xray.zip xray -d /tmp/zenith-ipv6-e2e
           chmod 755 /tmp/zenith-ipv6-e2e/xray
-          curl -fsSL -o /tmp/zenith-ipv6-e2e/sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.14.4/sing-box-1.14.4-linux-amd64.tar.gz
-          echo '699a1b510aa4396b2176d32d1181920399ebf1e267835da6f3b598d0f7c24968  /tmp/zenith-ipv6-e2e/sing-box.tar.gz' | sha256sum -c -
-          tar -xzf /tmp/zenith-ipv6-e2e/sing-box.tar.gz -C /tmp/zenith-ipv6-e2e
-          cp /tmp/zenith-ipv6-e2e/sing-box-1.14.4-linux-amd64/sing-box /tmp/zenith-ipv6-e2e/sing-box
-          chmod 755 /tmp/zenith-ipv6-e2e/sing-box
+
+      - name: Build Sing-box with locked security fixes
+        working-directory: tools/singbox
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          SINGBOX_OUTPUT: /tmp/zenith-ipv6-e2e/sing-box
+        run: sh ./build.sh
 
       - name: Exercise IPv6 VLESS and Hysteria2 data paths
         run: XRAY_BIN=/tmp/zenith-ipv6-e2e/xray SINGBOX_BIN=/tmp/zenith-ipv6-e2e/sing-box bash scripts/test_ipv6_protocol_e2e.sh
