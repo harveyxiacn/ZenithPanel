@@ -8,20 +8,24 @@ import (
 
 // Inbound represents a proxy entry point (e.g., VLESS, VMess, Trojan, Hysteria2)
 type Inbound struct {
-	ID            uint           `gorm:"primaryKey" json:"id"`
-	Tag           string         `gorm:"uniqueIndex;not null" json:"tag"`    // Unique identifier for the inbound
-	Protocol      string         `gorm:"not null" json:"protocol"`           // vless, vmess, trojan, hysteria2, wireguard
-	Listen        string         `gorm:"default:''" json:"listen"`           // Empty = dual-stack/default bind
-	ServerAddress string         `gorm:"default:''" json:"server_address"`   // Public host/IP used in generated subscriptions
-	Port          int            `gorm:"not null" json:"port"`               // Listening port
-	Network       string         `gorm:"default:'tcp'" json:"network"`       // tcp, ws, grpc, h2, httpupgrade
-	Settings      string         `gorm:"type:text;not null" json:"settings"` // JSON string of protocol specific settings
-	Stream        string         `gorm:"type:text" json:"stream"`            // JSON string of TLS/Transport settings
-	Enable        bool           `gorm:"default:true" json:"enable"`         // Is inbound active
-	Remark        string         `json:"remark"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt `gorm:"index" json:"-"`
+	ID            uint   `gorm:"primaryKey" json:"id"`
+	Tag           string `gorm:"uniqueIndex;not null" json:"tag"`  // Unique identifier for the inbound
+	Protocol      string `gorm:"not null" json:"protocol"`         // vless, vmess, trojan, hysteria2, wireguard
+	Listen        string `gorm:"default:''" json:"listen"`         // Empty = dual-stack/default bind
+	ServerAddress string `gorm:"default:''" json:"server_address"` // Public host/IP used in generated subscriptions
+	// Optional literal endpoints for dual-stack subscriptions. ServerAddress
+	// remains the legacy host/domain fallback for byte-compatible subscriptions.
+	ServerAddressIPv4 string         `gorm:"default:''" json:"server_address_ipv4"`
+	ServerAddressIPv6 string         `gorm:"default:''" json:"server_address_ipv6"`
+	Port              int            `gorm:"not null" json:"port"`               // Listening port
+	Network           string         `gorm:"default:'tcp'" json:"network"`       // tcp, ws, grpc, h2, httpupgrade
+	Settings          string         `gorm:"type:text;not null" json:"settings"` // JSON string of protocol specific settings
+	Stream            string         `gorm:"type:text" json:"stream"`            // JSON string of TLS/Transport settings
+	Enable            bool           `gorm:"default:true" json:"enable"`         // Is inbound active
+	Remark            string         `json:"remark"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // Client represents a proxy user with traffic tracking

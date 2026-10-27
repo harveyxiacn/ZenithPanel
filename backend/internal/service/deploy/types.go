@@ -166,6 +166,10 @@ type InboundSpec struct {
 	// it share links fall back to whatever host the admin used to reach the
 	// panel — 127.0.0.1 through an SSH tunnel.
 	ServerAddress string `json:"server_address,omitempty"`
+	// Optional literal endpoints. Smart Deploy leaves these empty unless an
+	// explicit caller supplies them, preserving existing single-address plans.
+	ServerAddressIPv4 string `json:"server_address_ipv4,omitempty"`
+	ServerAddressIPv6 string `json:"server_address_ipv6,omitempty"`
 }
 
 // TuneSpec names a reversible system-tuning operation plus its parameters.

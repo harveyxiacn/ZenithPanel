@@ -2,13 +2,27 @@ package sub
 
 import (
 	"encoding/base64"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"github.com/harveyxiacn/ZenithPanel/backend/internal/config"
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/model"
+	"gopkg.in/yaml.v3"
+	"gorm.io/gorm"
 )
+
+var subscriptionTestSeq atomic.Uint64
 
 func setInboundServerAddress(t *testing.T, in *model.Inbound, value string) {
 	t.Helper()
@@ -25,6 +39,303 @@ func setInboundServerAddress(t *testing.T, in *model.Inbound, value string) {
 		t.Fatalf("Inbound.ServerAddress is not settable")
 	}
 	field.SetString(value)
+}
+
+func testSubscriptionDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:sub_generator_%d?mode=memory&cache=shared", subscriptionTestSeq.Add(1))), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Inbound{}, &model.Client{}); err != nil {
+		t.Fatal(err)
+	}
+	original := config.DB
+	config.DB = db
+	InvalidateSubCache()
+	t.Cleanup(func() {
+		InvalidateSubCache()
+		config.DB = original
+	})
+	return db
+}
+
+func subscriptionResponse(t *testing.T, uuid, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/sub/:uuid", GenerateSubscription)
+	req := httptest.NewRequest(http.MethodGet, "/sub/"+uuid+query, nil)
+	req.Host = "panel.example.test"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func parsedClash(t *testing.T, body string) map[string]any {
+	t.Helper()
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(body), &parsed); err != nil {
+		t.Fatalf("invalid Clash YAML: %v\n%s", err, body)
+	}
+	return parsed
+}
+
+func proxyGroup(t *testing.T, config map[string]any, name string) map[string]any {
+	t.Helper()
+	groups, ok := config["proxy-groups"].([]any)
+	if !ok {
+		t.Fatalf("proxy-groups missing or malformed: %#v", config["proxy-groups"])
+	}
+	for _, raw := range groups {
+		group, ok := raw.(map[string]any)
+		if ok && group["name"] == name {
+			return group
+		}
+	}
+	t.Fatalf("proxy group %q missing", name)
+	return nil
+}
+
+func stringList(t *testing.T, raw any) []string {
+	t.Helper()
+	items, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("expected YAML list, got %#v", raw)
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		value, ok := item.(string)
+		if !ok {
+			t.Fatalf("expected string item, got %#v", item)
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func TestDualStackClashSubscriptionAllProtocolsAndGroups(t *testing.T) {
+	db := testSubscriptionDB(t)
+	const uuid = "dual-stack-user"
+	protocols := []string{"vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic"}
+	for i, protocol := range protocols {
+		in := model.Inbound{
+			Tag:               "node-" + protocol,
+			Protocol:          protocol,
+			Port:              20000 + i,
+			Enable:            true,
+			Settings:          `{"method":"aes-256-gcm","password":"server"}`,
+			Stream:            `{"network":"tcp","security":"tls","tlsSettings":{"serverName":"node.example.com"}}`,
+			ServerAddress:     "203.0.113.10",
+			ServerAddressIPv4: "203.0.113.10",
+			ServerAddressIPv6: "2001:db8:1::10",
+		}
+		if protocol == "hysteria2" || protocol == "tuic" {
+			in.Network = "udp"
+			in.Stream = `{"network":"udp","security":"tls","tlsSettings":{"serverName":"node.example.com","alpn":["h3"]}}`
+		}
+		if protocol == "vless" {
+			// Exercise YAML quoting for proxy names and every group reference.
+			in.Tag = "node-\"vless\\edge"
+		}
+		if err := db.Create(&in).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&model.Client{InboundID: in.ID, Email: "member-" + protocol, UUID: uuid, Enable: true}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	response := subscriptionResponse(t, uuid, "?format=clash&dual_stack=1")
+	if response.Code != http.StatusOK {
+		t.Fatalf("dual-stack subscription status = %d: %s", response.Code, response.Body.String())
+	}
+	parsed := parsedClash(t, response.Body.String())
+	if parsed["allow-lan"] != false {
+		t.Fatal("dual-stack profile must keep the client proxy local by default")
+	}
+	if parsed["ipv6"] != true {
+		t.Fatalf("global IPv6 was not enabled: %#v", parsed["ipv6"])
+	}
+	dns, ok := parsed["dns"].(map[string]any)
+	if !ok || dns["ipv6"] != true {
+		t.Fatalf("DNS IPv6 was not enabled: %#v", parsed["dns"])
+	}
+	proxies, ok := parsed["proxies"].([]any)
+	if !ok || len(proxies) != len(protocols)*2 {
+		t.Fatalf("proxies = %#v, want %d dual-family proxies", parsed["proxies"], len(protocols)*2)
+	}
+	for _, raw := range proxies {
+		proxy, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("malformed proxy: %#v", raw)
+		}
+		family, _ := proxy["ip-version"].(string)
+		server, _ := proxy["server"].(string)
+		switch family {
+		case "ipv6":
+			if server != "2001:db8:1::10" {
+				t.Fatalf("IPv6 proxy server = %q", server)
+			}
+		case "ipv4":
+			if server != "203.0.113.10" {
+				t.Fatalf("IPv4 proxy server = %q", server)
+			}
+		default:
+			t.Fatalf("unexpected proxy family %#v", proxy["ip-version"])
+		}
+	}
+
+	proxy := proxyGroup(t, parsed, "PROXY")
+	proxyChoices := stringList(t, proxy["proxies"])
+	if len(proxyChoices) < 3 || proxyChoices[0] != "AUTO" || proxyChoices[1] != "IPV6-FIRST" || strings.Contains(strings.Join(proxyChoices, "|"), "FASTEST") {
+		t.Fatalf("PROXY choices = %#v", proxyChoices)
+	}
+	if auto := proxyGroup(t, parsed, "AUTO"); auto["type"] != "url-test" || auto["url"] != "https://www.gstatic.com/generate_204" || auto["interval"] != 60 || auto["lazy"] != false || auto["timeout"] != 5000 || auto["tolerance"] != 20 {
+		t.Fatalf("AUTO = %#v", auto)
+	}
+	fallback := proxyGroup(t, parsed, "IPV6-FIRST")
+	if fallback["type"] != "fallback" {
+		t.Fatalf("IPV6-FIRST = %#v", fallback)
+	}
+	fallbackNodes := stringList(t, fallback["proxies"])
+	if len(fallbackNodes) != len(protocols)*2 || !strings.Contains(fallbackNodes[0], "· IPv6") || !strings.Contains(fallbackNodes[len(protocols)-1], "· IPv6") || !strings.Contains(fallbackNodes[len(protocols)], "· IPv4") {
+		t.Fatalf("IPV6-FIRST order = %#v", fallbackNodes)
+	}
+}
+
+func TestDualStackClashSubscriptionAuthorizationExpiryAndCacheSeparation(t *testing.T) {
+	db := testSubscriptionDB(t)
+	const uuid = "shared-user"
+	valid := model.Inbound{Tag: "valid", Protocol: "vless", Port: 2443, Enable: true, ServerAddress: "198.51.100.20", ServerAddressIPv4: "198.51.100.20", ServerAddressIPv6: "2001:db8:2::20", Stream: `{"network":"tcp","security":"reality"}`}
+	expired := model.Inbound{Tag: "expired", Protocol: "hysteria2", Port: 2444, Enable: true, ServerAddress: "198.51.100.21", ServerAddressIPv4: "198.51.100.21", ServerAddressIPv6: "2001:db8:2::21", Stream: `{"network":"udp","security":"tls"}`}
+	unrelated := model.Inbound{Tag: "unrelated", Protocol: "tuic", Port: 2445, Enable: true, ServerAddress: "198.51.100.22", ServerAddressIPv4: "198.51.100.22", ServerAddressIPv6: "2001:db8:2::22", Stream: `{"network":"udp","security":"tls"}`}
+	for _, in := range []*model.Inbound{&valid, &expired, &unrelated} {
+		if err := db.Create(in).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Create(&model.Client{InboundID: valid.ID, Email: "valid", UUID: uuid, Enable: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Client{InboundID: expired.ID, Email: "expired", UUID: uuid, Enable: true, ExpiryTime: time.Now().Add(-time.Minute).Unix()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Client{InboundID: unrelated.ID, Email: "unrelated", UUID: "other-user", Enable: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	regular := subscriptionResponse(t, uuid, "?format=clash")
+	if regular.Code != http.StatusOK || strings.Contains(regular.Body.String(), "ip-version:") || !strings.Contains(regular.Body.String(), "server: 198.51.100.20") {
+		t.Fatalf("regular subscription changed or rejected: %d\n%s", regular.Code, regular.Body.String())
+	}
+	dual := subscriptionResponse(t, uuid, "?format=clash&dual_stack=true")
+	if dual.Code != http.StatusOK {
+		t.Fatalf("dual-stack subscription status = %d: %s", dual.Code, dual.Body.String())
+	}
+	if !strings.Contains(dual.Body.String(), "valid · IPv6") || !strings.Contains(dual.Body.String(), "valid · IPv4") {
+		t.Fatalf("valid dual-stack nodes missing:\n%s", dual.Body.String())
+	}
+	for _, forbidden := range []string{"expired", "unrelated", "2001:db8:2::21", "2001:db8:2::22"} {
+		if strings.Contains(dual.Body.String(), forbidden) {
+			t.Fatalf("subscription leaked %q:\n%s", forbidden, dual.Body.String())
+		}
+	}
+}
+
+func TestDualStackClashNodesDoNotFabricateMissingFamily(t *testing.T) {
+	inbounds := []model.Inbound{
+		{ID: 1, Tag: "v4", Protocol: "vless", Port: 443, ServerAddress: "198.51.100.30"},
+		{ID: 2, Tag: "v6", Protocol: "hysteria2", Port: 8443, ServerAddress: "2001:db8:3::30"},
+		{ID: 3, Tag: "dual-dns", Protocol: "tuic", Port: 9443, ServerAddress: "edge.example.com"},
+		{ID: 4, Tag: "mixed", Protocol: "vmess", Port: 10443, ServerAddress: "198.51.100.31", ServerAddressIPv6: "2001:db8:3::31"},
+		{ID: 5, Tag: "duplicate", Protocol: "trojan", Port: 11443, ServerAddressIPv4: "198.51.100.32"},
+		{ID: 6, Tag: "duplicate", Protocol: "trojan", Port: 12443, ServerAddressIPv4: "198.51.100.33"},
+		{ID: 7, Tag: "unsupported", Protocol: "wireguard", Port: 13443, ServerAddressIPv4: "198.51.100.34"},
+	}
+	nodes := dualStackClashNodes(inbounds, "panel.example.test")
+	if len(nodes) != 8 {
+		t.Fatalf("nodes = %#v, want eight real/family-resolved endpoints", nodes)
+	}
+	want := map[string]string{
+		"v4 · IPv4": "198.51.100.30", "v6 · IPv6": "2001:db8:3::30",
+		"dual-dns · IPv6": "edge.example.com", "dual-dns · IPv4": "edge.example.com",
+		"mixed · IPv6": "2001:db8:3::31", "mixed · IPv4": "198.51.100.31",
+		"duplicate · IPv4": "198.51.100.32", "duplicate · IPv4 #6": "198.51.100.33",
+	}
+	for _, node := range nodes {
+		if got, ok := want[node.Name]; !ok || got != node.Server {
+			t.Fatalf("unexpected node %#v", node)
+		}
+	}
+}
+
+func TestResolveServerAddressPrefersConfiguredFamilyLiterals(t *testing.T) {
+	in := model.Inbound{Protocol: "vless", Port: 443, ServerAddressIPv6: "2001:db8:4::40", Stream: `{"network":"tcp","security":"tls","tlsSettings":{"serverName":"ignored.example.com"}}`}
+	if got := ResolveServerAddress(in, "127.0.0.1"); got != "2001:db8:4::40" {
+		t.Fatalf("ResolveServerAddress = %q, want configured IPv6", got)
+	}
+	client := model.Client{UUID: "test-uuid"}
+	links := buildBase64Links([]model.Inbound{in}, client, "127.0.0.1")
+	raw, err := base64.StdEncoding.DecodeString(links)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "@[2001:db8:4::40]:443") {
+		t.Fatalf("base64 subscription did not use configured IPv6: %s", raw)
+	}
+	clash := buildClashConfig([]model.Inbound{in}, client, "127.0.0.1")
+	if !strings.Contains(clash, "server: 2001:db8:4::40") || strings.Contains(clash, "server: 127.0.0.1") || strings.Contains(clash, "server: ignored.example.com") {
+		t.Fatalf("regular Clash subscription did not use configured IPv6:\n%s", clash)
+	}
+}
+
+// TestMihomoParsesGeneratedDualStackAllProtocols is intentionally opt-in so
+// normal unit-test runs do not download or require a client binary. CI/release
+// validation sets MIHOMO_BIN to an official Mihomo executable. The YAML comes
+// from the production generator, not a hand-written fixture.
+func TestMihomoParsesGeneratedDualStackAllProtocols(t *testing.T) {
+	binary := os.Getenv("MIHOMO_BIN")
+	if binary == "" {
+		t.Skip("set MIHOMO_BIN to validate generated YAML with Mihomo")
+	}
+	const uuid = "11111111-1111-4111-8111-111111111111"
+	protocols := []string{"vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic"}
+	inbounds := make([]model.Inbound, 0, len(protocols))
+	for i, protocol := range protocols {
+		in := model.Inbound{
+			ID:                uint(i + 1),
+			Tag:               "mihomo-" + protocol,
+			Protocol:          protocol,
+			Port:              31000 + i,
+			Settings:          `{"method":"aes-256-gcm","password":"classic-shared-password"}`,
+			Stream:            `{"network":"tcp","security":"tls","tlsSettings":{"serverName":"node.example.com"}}`,
+			ServerAddressIPv4: "203.0.113.10",
+			ServerAddressIPv6: "2001:db8:1::10",
+		}
+		if protocol == "vless" {
+			in.Settings = `{"flow":"xtls-rprx-vision"}`
+			in.Stream = `{"network":"tcp","security":"reality","realitySettings":{"serverNames":["www.microsoft.com"],"shortIds":["0123456789abcdef"],"settings":{"publicKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","fingerprint":"chrome"}}}`
+		}
+		if protocol == "hysteria2" || protocol == "tuic" {
+			in.Network = "udp"
+			in.Stream = `{"network":"udp","security":"tls","tlsSettings":{"serverName":"node.example.com","alpn":["h3"]}}`
+		}
+		inbounds = append(inbounds, in)
+	}
+
+	path := filepath.Join(t.TempDir(), "dual-stack-all-protocols.yaml")
+	if err := os.WriteFile(path, []byte(buildClashDualStackConfig(inbounds, model.Client{UUID: uuid}, "")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"-t", "-f", path}
+	if home := os.Getenv("MIHOMO_HOME"); home != "" {
+		args = append(args, "-d", home)
+	}
+	output, err := exec.Command(binary, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("mihomo rejected generated dual-stack configuration: %v\n%s", err, output)
+	}
 }
 
 func TestParseStreamSupportsThreeXUIRealityShape(t *testing.T) {
@@ -544,6 +855,10 @@ func TestSubCacheInvalidate(t *testing.T) {
 	InvalidateSubCache()
 	if _, ok := subCacheGet("test-key"); ok {
 		t.Fatalf("expected cache miss after InvalidateSubCache")
+	}
+	subCachePut("expired-entitlement", subCacheEntry{body: "x", storedAt: time.Now(), expiresAt: time.Now().Add(-time.Second)})
+	if _, ok := subCacheGet("expired-entitlement"); ok {
+		t.Fatalf("cache served a subscription after its client entitlement expired")
 	}
 }
 

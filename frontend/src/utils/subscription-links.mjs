@@ -5,7 +5,7 @@
 // reachable by client apps even though the admin panel port is closed.
 // Otherwise the link points at the panel's own /api/v1/sub endpoint on
 // `origin`.
-export function buildSubscriptionLink(origin, uuid, format, subBase) {
+export function buildSubscriptionLink(origin, uuid, format, subBase, dualStack = false) {
   let url
   if (subBase) {
     const base = String(subBase).replace(/\/*$/, '/')
@@ -17,6 +17,9 @@ export function buildSubscriptionLink(origin, uuid, format, subBase) {
 
   if (format === 'clash' || format === 'base64') {
     url.searchParams.set('format', format)
+  }
+  if (format === 'clash' && dualStack) {
+    url.searchParams.set('dual_stack', '1')
   }
 
   return url.toString()

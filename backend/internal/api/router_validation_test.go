@@ -252,6 +252,103 @@ func TestValidateInboundTrimsListenAddressBeforeValidation(t *testing.T) {
 	}
 }
 
+func TestInboundAPIPersistsDualStackLiteralAddresses(t *testing.T) {
+	router, token := setupRouterValidationTestServer(t, true)
+
+	create := httptest.NewRequest(http.MethodPost, "/api/v1/inbounds", bytes.NewBufferString(`{
+		"tag":"dual-stack", "protocol":"vless", "port":24443, "network":"tcp",
+		"server_address":"legacy.example.test",
+		"server_address_ipv4":" [203.0.113.9] ",
+		"server_address_ipv6":" [2001:0DB8:0:0:0:0:0:9] ",
+		"settings":"{}", "stream":"{}", "enable":true
+	}`))
+	create.Header.Set("Content-Type", "application/json")
+	create.Header.Set("Authorization", "Bearer "+token)
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, create)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create inbound: status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+
+	var created struct {
+		Data model.Inbound `json:"data"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.Data.ServerAddressIPv4 != "203.0.113.9" || created.Data.ServerAddressIPv6 != "2001:db8::9" {
+		t.Fatalf("create did not normalize dual-stack endpoints: %#v", created.Data)
+	}
+
+	var persisted model.Inbound
+	if err := config.DB.First(&persisted, created.Data.ID).Error; err != nil {
+		t.Fatalf("load persisted inbound: %v", err)
+	}
+	if persisted.ServerAddressIPv4 != "203.0.113.9" || persisted.ServerAddressIPv6 != "2001:db8::9" {
+		t.Fatalf("persisted dual-stack endpoints = %#v", persisted)
+	}
+
+	update := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/v1/inbounds/%d", created.Data.ID), bytes.NewBufferString(`{"server_address_ipv6":" [2001:db8::10] "}`))
+	update.Header.Set("Content-Type", "application/json")
+	update.Header.Set("Authorization", "Bearer "+token)
+	updateRec := httptest.NewRecorder()
+	router.ServeHTTP(updateRec, update)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("update inbound: status=%d body=%s", updateRec.Code, updateRec.Body.String())
+	}
+	if err := config.DB.First(&persisted, created.Data.ID).Error; err != nil {
+		t.Fatalf("reload updated inbound: %v", err)
+	}
+	if persisted.ServerAddress != "legacy.example.test" || persisted.ServerAddressIPv4 != "203.0.113.9" || persisted.ServerAddressIPv6 != "2001:db8::10" {
+		t.Fatalf("update failed to preserve/update addresses: %#v", persisted)
+	}
+}
+
+func TestValidateInboundRejectsInvalidDualStackLiteralAddresses(t *testing.T) {
+	router, token := setupRouterValidationTestServer(t, true)
+	cases := []struct {
+		name string
+		v4   string
+		v6   string
+	}{
+		{name: "ipv4 hostname", v4: "vpn.example.test"},
+		{name: "ipv4 port", v4: "203.0.113.9:443"},
+		{name: "ipv4 unspecified", v4: "0.0.0.0"},
+		{name: "ipv4 multicast", v4: "224.0.0.1"},
+		{name: "ipv4 wrong family", v4: "2001:db8::9"},
+		{name: "ipv6 zone", v6: "fe80::1%eth0"},
+		{name: "ipv6 port", v6: "[2001:db8::9]:443"},
+		{name: "ipv6 unspecified", v6: "::"},
+		{name: "ipv6 multicast", v6: "ff02::1"},
+		{name: "ipv6 wrong family", v6: "203.0.113.9"},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"tag":                 fmt.Sprintf("invalid-dual-stack-%d", i),
+				"protocol":            "vless",
+				"port":                25443 + i,
+				"server_address":      "legacy.example.test",
+				"server_address_ipv4": tc.v4,
+				"server_address_ipv6": tc.v6,
+				"settings":            "{}",
+				"stream":              "{}",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/inbounds", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected API rejection for %#v, status=%d body=%s", tc, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func setupRouterValidationTestServer(t *testing.T, setupComplete bool) (*gin.Engine, string) {
 	t.Helper()
 
@@ -290,7 +387,7 @@ func setupRouterValidationTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("open db: %v", err)
 	}
 
-	if err := db.AutoMigrate(&model.Setting{}, &model.AdminUser{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.Setting{}, &model.AdminUser{}, &model.AuditLog{}, &model.Inbound{}, &model.Client{}); err != nil {
 		t.Fatalf("migrate db: %v", err)
 	}
 

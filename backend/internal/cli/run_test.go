@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // TestParseGlobalFlagsRecognizesShortAndLongForms covers the parser's job:
@@ -10,42 +14,43 @@ import (
 // original order, and honor both `--flag value` and `--flag=value`.
 func TestParseGlobalFlagsRecognizesShortAndLongForms(t *testing.T) {
 	cases := []struct {
-		name      string
-		in        []string
-		wantHost  string
-		wantToken string
-		wantOut   string
-		wantQuiet bool
-		wantRest  []string
+		name        string
+		in          []string
+		wantHost    string
+		wantToken   string
+		wantOut     string
+		wantQuiet   bool
+		wantTimeout time.Duration
+		wantRest    []string
 	}{
 		{
 			name:     "long-form host + token",
 			in:       []string{"--host", "https://x", "--token", "ztk_a", "status"},
-			wantHost: "https://x", wantToken: "ztk_a", wantOut: "json",
+			wantHost: "https://x", wantToken: "ztk_a", wantOut: "json", wantTimeout: 30 * time.Second,
 			wantRest: []string{"status"},
 		},
 		{
 			name:     "equals form",
 			in:       []string{"--host=https://y", "--output=table", "system", "info"},
-			wantHost: "https://y", wantOut: "table",
+			wantHost: "https://y", wantOut: "table", wantTimeout: 30 * time.Second,
 			wantRest: []string{"system", "info"},
 		},
 		{
 			name:     "--socket maps to unix:// host",
 			in:       []string{"--socket", "/tmp/x.sock", "status"},
-			wantHost: "unix:///tmp/x.sock", wantOut: "json",
+			wantHost: "unix:///tmp/x.sock", wantOut: "json", wantTimeout: 30 * time.Second,
 			wantRest: []string{"status"},
 		},
 		{
 			name:      "-q short flag",
 			in:        []string{"-q", "inbound", "list"},
-			wantQuiet: true, wantOut: "json",
+			wantQuiet: true, wantOut: "json", wantTimeout: 30 * time.Second,
 			wantRest: []string{"inbound", "list"},
 		},
 		{
-			name:     "unknown flags fall through to rest",
-			in:       []string{"--not-mine", "value", "status"},
-			wantOut:  "json",
+			name:    "unknown flags fall through to rest",
+			in:      []string{"--not-mine", "value", "status"},
+			wantOut: "json", wantTimeout: 30 * time.Second,
 			wantRest: []string{"--not-mine", "value", "status"},
 		},
 	}
@@ -64,10 +69,60 @@ func TestParseGlobalFlagsRecognizesShortAndLongForms(t *testing.T) {
 			if got.quiet != c.wantQuiet {
 				t.Errorf("quiet: got %v, want %v", got.quiet, c.wantQuiet)
 			}
+			if got.timeout != c.wantTimeout {
+				t.Errorf("timeout: got %v, want %v", got.timeout, c.wantTimeout)
+			}
 			if !reflect.DeepEqual(got.rest, c.wantRest) {
 				t.Errorf("rest: got %v, want %v", got.rest, c.wantRest)
 			}
 		})
+	}
+}
+
+func TestParseGlobalFlagsTimeoutFormsAndValidation(t *testing.T) {
+	valid := []struct {
+		name string
+		args []string
+		want time.Duration
+	}{
+		{"separate", []string{"--timeout", "120s", "status"}, 120 * time.Second},
+		{"equals", []string{"--timeout=2500ms", "status"}, 2500 * time.Millisecond},
+	}
+	for _, tc := range valid {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseGlobalFlags(tc.args)
+			if got.parseErr != nil || got.timeout != tc.want {
+				t.Fatalf("timeout=%v parseErr=%v, want %v", got.timeout, got.parseErr, tc.want)
+			}
+		})
+	}
+	for _, value := range []string{"", "0", "-1s", "not-a-duration"} {
+		t.Run("invalid-"+value, func(t *testing.T) {
+			got := parseGlobalFlags([]string{"--timeout=" + value, "status"})
+			if got.parseErr == nil {
+				t.Fatalf("expected parse error for %q", value)
+			}
+		})
+	}
+	got := parseGlobalFlags([]string{"--timeout", "status"})
+	if got.parseErr == nil {
+		t.Fatal("missing timeout value was accepted")
+	}
+}
+
+func TestNewClientWithTimeoutAppliesHTTPDeadline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	c := newClientWithTimeout(Profile{Host: srv.URL}, 10*time.Millisecond)
+	if c.Inner.Timeout != 10*time.Millisecond {
+		t.Fatalf("client timeout=%v, want 10ms", c.Inner.Timeout)
+	}
+	_, _, err := c.Do("GET", "/slow", nil)
+	if !errors.Is(err, ErrTransport) {
+		t.Fatalf("slow request error=%v, want transport timeout", err)
 	}
 }
 
@@ -128,7 +183,7 @@ func TestSplitVersionedName(t *testing.T) {
 		{"ci-runner", "ci-runner", 1},
 		{"ci-runner-v2", "ci-runner", 2},
 		{"ci-runner-v123", "ci-runner", 123},
-		{"weird-v", "weird-v", 1},      // empty suffix → not a version
+		{"weird-v", "weird-v", 1},       // empty suffix → not a version
 		{"weird-vabc", "weird-vabc", 1}, // non-numeric → not a version
 		{"weird-v-1", "weird-v-1", 1},   // negative → not a version
 		{"-v5", "", 5},                  // edge case but consistent

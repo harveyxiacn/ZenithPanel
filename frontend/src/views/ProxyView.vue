@@ -81,7 +81,7 @@ const { probeResults, probeAllBusy, probeAutoEnabled, onProbeInbound, onProbeAll
   useInboundProbes(inbounds, activeTab)
 const showInboundForm = ref(false)
 const editingInbound = ref<Inbound | null>(null)
-const inboundForm = ref({ tag: '', protocol: 'vless', listen: '', server_address: '', port: 443, settings: '{}', stream: '{}' })
+const inboundForm = ref({ tag: '', protocol: 'vless', listen: '', server_address: '', server_address_ipv4: '', server_address_ipv6: '', port: 443, settings: '{}', stream: '{}' })
 const editMode = ref<'visual' | 'json'>('visual')
 
 // Visual form fields extracted from settings/stream JSON
@@ -358,6 +358,8 @@ function openInboundForm(inbound?: any) {
       protocol: inbound.protocol || 'vless',
       listen: inbound.listen ?? '',
       server_address: inbound.server_address ?? '',
+      server_address_ipv4: inbound.server_address_ipv4 ?? '',
+      server_address_ipv6: inbound.server_address_ipv6 ?? '',
       port: inbound.port || 443,
       settings: JSON.stringify(JSON.parse(settingsStr || '{}'), null, 2),
       stream: JSON.stringify(JSON.parse(streamStr || '{}'), null, 2),
@@ -365,7 +367,7 @@ function openInboundForm(inbound?: any) {
     parseJsonToVisual(settingsStr, streamStr)
   } else {
     editingInbound.value = null
-    inboundForm.value = { tag: '', protocol: 'vless', listen: '', server_address: '', port: 443, settings: '{}', stream: '{}' }
+    inboundForm.value = { tag: '', protocol: 'vless', listen: '', server_address: '', server_address_ipv4: '', server_address_ipv6: '', port: 443, settings: '{}', stream: '{}' }
     resetVisualForm()
   }
   showInboundForm.value = true
@@ -581,8 +583,8 @@ function inboundTagById(id: number): string {
   return ib ? ib.tag : `#${id}`
 }
 
-async function copySubLink(uuid: string, format?: 'clash' | 'base64') {
-  const link = buildSubscriptionLink(location.origin, uuid, format, subBase.value)
+async function copySubLink(uuid: string, format?: 'clash' | 'base64', dualStack = false) {
+  const link = buildSubscriptionLink(location.origin, uuid, format, subBase.value, dualStack)
 
   try {
     if (navigator.clipboard?.writeText) {
@@ -646,20 +648,22 @@ const showSubLinkModal = ref(false)
 const subLinkUuid = ref('')
 const subLinkEmail = ref('')
 const subLinkFormat = ref<'base64' | 'clash'>('base64')
+const subLinkDualStack = ref(false)
 
 const subLinkValue = computed(() => {
-  return buildSubscriptionLink(location.origin, subLinkUuid.value, subLinkFormat.value, subBase.value)
+  return buildSubscriptionLink(location.origin, subLinkUuid.value, subLinkFormat.value, subBase.value, subLinkDualStack.value)
 })
 
 function openSubLinkModal(uuid: string, email: string) {
   subLinkUuid.value = uuid
   subLinkEmail.value = email
   subLinkFormat.value = 'base64'
+  subLinkDualStack.value = false
   showSubLinkModal.value = true
 }
 
 async function copyCurrentSubscriptionLink() {
-  await copySubLink(subLinkUuid.value, subLinkFormat.value)
+  await copySubLink(subLinkUuid.value, subLinkFormat.value, subLinkDualStack.value)
 }
 
 // ---- QR Code ----
@@ -1631,6 +1635,21 @@ onBeforeUnmount(() => {
             <input v-model.number="inboundForm.port" type="number" :placeholder="$t('proxy.inbounds.port')" class="input-field text-sm" />
           </div>
 
+          <fieldset class="mb-4" aria-describedby="dual-stack-address-hint">
+            <legend class="text-sm font-medium text-slate-700 mb-2">{{ $t('proxy.inbounds.dualStackAddresses') }}</legend>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label for="inbound-public-ipv4" class="block text-xs font-medium text-slate-600 mb-1">{{ $t('proxy.inbounds.publicIPv4') }}</label>
+                <input id="inbound-public-ipv4" v-model="inboundForm.server_address_ipv4" placeholder="203.0.113.10" autocomplete="off" spellcheck="false" class="input-field text-sm w-full" />
+              </div>
+              <div>
+                <label for="inbound-public-ipv6" class="block text-xs font-medium text-slate-600 mb-1">{{ $t('proxy.inbounds.publicIPv6') }}</label>
+                <input id="inbound-public-ipv6" v-model="inboundForm.server_address_ipv6" placeholder="2001:db8::10" autocomplete="off" spellcheck="false" class="input-field text-sm w-full" />
+              </div>
+            </div>
+            <p id="dual-stack-address-hint" class="mt-2 text-xs text-slate-600 leading-5">{{ $t('proxy.inbounds.dualStackHint') }}</p>
+          </fieldset>
+
           <!-- Visual Mode -->
           <div v-if="editMode === 'visual'" class="space-y-4">
             <!-- Network & Security -->
@@ -2568,8 +2587,17 @@ onBeforeUnmount(() => {
             {{ subLinkFormat === 'base64' ? $t('proxy.subscription.v2rayHint') : $t('proxy.subscription.clashHint') }}
           </p>
 
-          <label class="block text-xs font-medium text-slate-500 mb-2">{{ $t('proxy.subscription.urlLabel') }}</label>
+          <div v-if="subLinkFormat === 'clash'" class="mb-4">
+            <label class="flex items-center gap-2 text-sm font-medium text-slate-700">
+              <input v-model="subLinkDualStack" type="checkbox" aria-describedby="dual-stack-subscription-hint" class="rounded border-slate-300 text-primary-600 focus:ring-primary-500" />
+              {{ $t('proxy.subscription.dualStack') }}
+            </label>
+            <p id="dual-stack-subscription-hint" class="mt-2 text-xs text-slate-600 leading-5">{{ $t('proxy.subscription.dualStackHint') }}</p>
+          </div>
+
+          <label for="subscription-url" class="block text-xs font-medium text-slate-500 mb-2">{{ $t('proxy.subscription.urlLabel') }}</label>
           <input
+            id="subscription-url"
             :value="subLinkValue"
             readonly
             class="input-field text-sm w-full font-mono text-xs"

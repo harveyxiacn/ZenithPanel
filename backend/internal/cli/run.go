@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/harveyxiacn/ZenithPanel/backend/internal/version"
 )
@@ -31,6 +32,10 @@ func Run(argv []string) int {
 	// a single pre-pass to extract them so each subcommand handler gets a
 	// clean argv.
 	gf := parseGlobalFlags(argv[1:])
+	if gf.parseErr != nil {
+		fmt.Fprintln(os.Stderr, "error:", gf.parseErr)
+		return 1
+	}
 
 	if gf.showHelp || len(gf.rest) == 0 {
 		printHelp()
@@ -50,7 +55,7 @@ func Run(argv []string) int {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
 	}
-	client := NewClient(profile)
+	client := newClientWithTimeout(profile, gf.timeout)
 
 	cmd := gf.rest[0]
 	args := gf.rest[1:]
@@ -104,6 +109,8 @@ type globalFlags struct {
 	output   string
 	quiet    bool
 	showHelp bool
+	timeout  time.Duration
+	parseErr error
 	rest     []string
 }
 
@@ -115,7 +122,7 @@ func parseGlobalFlags(args []string) globalFlags {
 	if IsTTY() {
 		defaultOut = "table"
 	}
-	g := globalFlags{output: defaultOut}
+	g := globalFlags{output: defaultOut, timeout: 30 * time.Second}
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -145,6 +152,31 @@ func parseGlobalFlags(args []string) globalFlags {
 			i++
 		case strings.HasPrefix(a, "--output="):
 			g.output = strings.TrimPrefix(a, "--output=")
+		case a == "--timeout":
+			if i+1 >= len(args) {
+				if g.parseErr == nil {
+					g.parseErr = errors.New("--timeout requires a positive duration (for example 120s)")
+				}
+				continue
+			}
+			i++
+			parsed, err := parseCLIPosDuration(args[i])
+			if err != nil {
+				if g.parseErr == nil {
+					g.parseErr = err
+				}
+			} else if g.parseErr == nil {
+				g.timeout = parsed
+			}
+		case strings.HasPrefix(a, "--timeout="):
+			parsed, err := parseCLIPosDuration(strings.TrimPrefix(a, "--timeout="))
+			if err != nil {
+				if g.parseErr == nil {
+					g.parseErr = err
+				}
+			} else if g.parseErr == nil {
+				g.timeout = parsed
+			}
 		case a == "-q" || a == "--quiet":
 			g.quiet = true
 		case a == "-h" || a == "--help":
@@ -158,6 +190,26 @@ func parseGlobalFlags(args []string) globalFlags {
 	}
 	g.rest = out
 	return g
+}
+
+func parseCLIPosDuration(value string) (time.Duration, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, errors.New("--timeout requires a positive duration (for example 120s)")
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --timeout %q: %w", value, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid --timeout %q: duration must be positive", value)
+	}
+	return d, nil
+}
+
+func newClientWithTimeout(profile Profile, timeout time.Duration) *Client {
+	client := NewClient(profile)
+	client.Inner.Timeout = timeout
+	return client
 }
 
 // isInfraCmd is true for commands that should work even without a fully
@@ -1092,6 +1144,7 @@ Global flags:
   --token <ztk_...>     API token (overrides config)
   --profile <name>      profile from ~/.config/zenithctl/config.toml
   --output json|table   (default json)
+  --timeout <duration>  HTTP timeout (default 30s; e.g. 120s for ACME)
   -q, --quiet           print only data
   -h, --help
 

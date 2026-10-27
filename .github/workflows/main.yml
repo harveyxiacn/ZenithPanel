@@ -78,6 +78,28 @@ jobs:
         working-directory: backend
         run: go test -coverprofile=coverage.out ./...
 
+      - name: Validate dual-stack subscriptions with the Mihomo core
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/zenith-mihomo/home
+          curl -fsSL -o /tmp/zenith-mihomo/mihomo.gz https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-amd64-compatible-v1.19.33.gz
+          echo '386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6  /tmp/zenith-mihomo/mihomo.gz' | sha256sum -c -
+          gzip -dc /tmp/zenith-mihomo/mihomo.gz > /tmp/zenith-mihomo/mihomo
+          chmod 755 /tmp/zenith-mihomo/mihomo
+          # The official GeoIP data is updated independently of the pinned
+          # core. Check the exact downloaded bytes against its release digest.
+          gh api repos/MetaCubeX/meta-rules-dat/releases/latest > /tmp/zenith-mihomo/release.json
+          data_url=$(jq -er '.assets[] | select(.name == "geoip.metadb") | .browser_download_url' /tmp/zenith-mihomo/release.json)
+          data_sha=$(jq -er '.assets[] | select(.name == "geoip.metadb") | .digest | select(startswith("sha256:")) | ltrimstr("sha256:")' /tmp/zenith-mihomo/release.json)
+          curl -fsSL "$data_url" -o /tmp/zenith-mihomo/home/geoip.metadb
+          printf '%s  %s\n' "$data_sha" /tmp/zenith-mihomo/home/geoip.metadb | sha256sum -c -
+          cd backend
+          MIHOMO_BIN=/tmp/zenith-mihomo/mihomo MIHOMO_HOME=/tmp/zenith-mihomo/home go test ./internal/service/sub -run '^TestMihomoParsesGeneratedDualStackAllProtocols$' -count=1
+
+      - name: Test dual-stack provisioning safeguards
+        run: python3 -B -m unittest discover -s scripts -p test_setup_dual_stack_subscription.py
+
       - name: Report backend coverage
         working-directory: backend
         run: |

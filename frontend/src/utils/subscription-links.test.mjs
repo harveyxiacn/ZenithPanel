@@ -3,6 +3,20 @@ import assert from 'node:assert/strict'
 
 import { buildSubscriptionLink } from './subscription-links.mjs'
 
+test('dual-stack Clash links retain the private subscription listener', () => {
+  const got = new URL(buildSubscriptionLink('https://panel.example.com', 'abc', 'clash', 'https://sub.example.com:2096/private/', true))
+  assert.equal(got.origin, 'https://sub.example.com:2096')
+  assert.equal(got.pathname, '/private/abc')
+  assert.equal(got.searchParams.get('format'), 'clash')
+  assert.equal(got.searchParams.get('dual_stack'), '1')
+})
+
+test('Base64 subscriptions never include the Clash-only dual-stack option', () => {
+  const got = new URL(buildSubscriptionLink('https://panel.example.com', 'abc', 'base64', undefined, true))
+  assert.equal(got.searchParams.get('format'), 'base64')
+  assert.equal(got.searchParams.has('dual_stack'), false)
+})
+
 test('buildSubscriptionLink returns generic subscription URL when no format is given', () => {
   const got = buildSubscriptionLink('https://panel.example.com/', 'abc-123')
   assert.equal(got, 'https://panel.example.com/api/v1/sub/abc-123')

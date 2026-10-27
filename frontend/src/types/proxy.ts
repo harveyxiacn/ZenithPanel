@@ -4,6 +4,8 @@ export interface Inbound {
   protocol: string
   listen: string
   server_address: string
+  server_address_ipv4?: string
+  server_address_ipv6?: string
   port: number
   network: string
   settings: string

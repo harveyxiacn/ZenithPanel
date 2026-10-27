@@ -259,6 +259,8 @@ type inboundPayload struct {
 	Listen              *string                      `json:"listen"`
 	ServerAddress       *string                      `json:"server_address"`
 	ServerAddressLegacy *string                      `json:"serverAddress"`
+	ServerAddressIPv4   *string                      `json:"server_address_ipv4"`
+	ServerAddressIPv6   *string                      `json:"server_address_ipv6"`
 	Port                *int                         `json:"port"`
 	Network             *string                      `json:"network"`
 	Settings            *string                      `json:"settings"`
@@ -300,6 +302,12 @@ func applyInboundPayload(target *model.Inbound, payload inboundPayload) {
 	case payload.ServerAddressLegacy != nil:
 		target.ServerAddress = strings.TrimSpace(*payload.ServerAddressLegacy)
 	}
+	if payload.ServerAddressIPv4 != nil {
+		target.ServerAddressIPv4 = normalizeInboundLiteralIP(*payload.ServerAddressIPv4)
+	}
+	if payload.ServerAddressIPv6 != nil {
+		target.ServerAddressIPv6 = normalizeInboundLiteralIP(*payload.ServerAddressIPv6)
+	}
 	if payload.Port != nil {
 		target.Port = *payload.Port
 	}
@@ -321,6 +329,43 @@ func applyInboundPayload(target *model.Inbound, payload inboundPayload) {
 	if payload.Remark != nil {
 		target.Remark = strings.TrimSpace(*payload.Remark)
 	}
+}
+
+// normalizeInboundLiteralIP accepts cosmetic brackets and whitespace around a
+// literal address, then stores net.IP's canonical spelling. It deliberately
+// leaves malformed input intact so validation rejects it rather than silently
+// treating a supplied invalid value as an empty optional field.
+func normalizeInboundLiteralIP(raw string) string {
+	value := strings.TrimSpace(raw)
+	candidate := value
+	if len(value) >= 2 && value[0] == '[' && value[len(value)-1] == ']' {
+		candidate = strings.TrimSpace(value[1 : len(value)-1])
+	}
+	if ip := net.ParseIP(candidate); ip != nil {
+		return ip.String()
+	}
+	return value
+}
+
+func validateInboundLiteralIP(field, value string, ipv4 bool) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return fmt.Sprintf("%s must be a literal IP address without a port, zone, or hostname", field)
+	}
+	if ip.IsUnspecified() || ip.IsMulticast() {
+		return fmt.Sprintf("%s must be a dialable unicast address", field)
+	}
+	if ipv4 && ip.To4() == nil {
+		return fmt.Sprintf("%s must be an IPv4 address", field)
+	}
+	if !ipv4 && ip.To4() != nil {
+		return fmt.Sprintf("%s must be an IPv6 address", field)
+	}
+	return ""
 }
 
 // setSetting wraps config.SetSetting with a logged failure path. The handlers
@@ -347,12 +392,18 @@ func validateInbound(target model.Inbound) string {
 	if listen := strings.TrimSpace(target.Listen); listen != "" && net.ParseIP(listen) == nil {
 		return "Listen must be blank or a valid IP address"
 	}
+	if msg := validateInboundLiteralIP("server_address_ipv4", target.ServerAddressIPv4, true); msg != "" {
+		return msg
+	}
+	if msg := validateInboundLiteralIP("server_address_ipv6", target.ServerAddressIPv6, false); msg != "" {
+		return msg
+	}
 	// Port conflict check — exclude self (target.ID == 0 on create, non-zero on update)
 	var conflict model.Inbound
 	if res := config.DB.Where("port = ? AND id != ? AND deleted_at IS NULL", target.Port, target.ID).First(&conflict); res.Error == nil {
 		return fmt.Sprintf("Port %d is already used by inbound '%s'", target.Port, conflict.Tag)
 	}
-	if strings.TrimSpace(target.ServerAddress) == "" && !inboundHasDerivedPublicHost(target.Stream) {
+	if strings.TrimSpace(target.ServerAddress) == "" && strings.TrimSpace(target.ServerAddressIPv4) == "" && strings.TrimSpace(target.ServerAddressIPv6) == "" && !inboundHasDerivedPublicHost(target.Stream) {
 		return "Fill 'Public Host / IP' or a stream host (TLS serverName, WebSocket Host, HTTP/2 host, or HTTPUpgrade host) — clients need this to reach the proxy."
 	}
 	// Trojan requires TLS or Reality — validate early so Sing-box doesn't crash on start.

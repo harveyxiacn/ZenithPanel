@@ -439,7 +439,9 @@ func (d dbInboundDeployer) Create(spec InboundSpec) (uint, error) {
 		Enable:   true,
 		Remark:   spec.Remark,
 
-		ServerAddress: spec.ServerAddress,
+		ServerAddress:     spec.ServerAddress,
+		ServerAddressIPv4: spec.ServerAddressIPv4,
+		ServerAddressIPv6: spec.ServerAddressIPv6,
 	}
 	if err := d.db.Transaction(func(tx *gorm.DB) error {
 		var count int64

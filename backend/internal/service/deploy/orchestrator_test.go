@@ -302,7 +302,7 @@ func TestPersistedPresetClientsAndCollisionRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := dbInboundDeployer{db: db}
-	spec := InboundSpec{Tag: "preset", Protocol: "vless", Port: 1443, Settings: map[string]any{"clients": []map[string]any{{"id": "credential", "email": "user", "flow": "xtls-rprx-vision"}}}, ServerAddress: "203.0.113.1"}
+	spec := InboundSpec{Tag: "preset", Protocol: "vless", Port: 1443, Settings: map[string]any{"clients": []map[string]any{{"id": "credential", "email": "user", "flow": "xtls-rprx-vision"}}}, ServerAddress: "203.0.113.1", ServerAddressIPv4: "203.0.113.1", ServerAddressIPv6: "2001:db8::1"}
 	id, err := d.Create(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -313,6 +313,13 @@ func TestPersistedPresetClientsAndCollisionRollback(t *testing.T) {
 	}
 	if len(clients) != 1 || clients[0].UUID != "credential" {
 		t.Fatalf("clients=%+v", clients)
+	}
+	var inbound model.Inbound
+	if err := db.First(&inbound, id).Error; err != nil {
+		t.Fatal(err)
+	}
+	if inbound.ServerAddressIPv4 != "203.0.113.1" || inbound.ServerAddressIPv6 != "2001:db8::1" {
+		t.Fatalf("dual-stack endpoints were not persisted: %+v", inbound)
 	}
 	spec.Tag = "collision"
 	if _, err := d.Create(spec); err == nil {

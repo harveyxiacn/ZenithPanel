@@ -306,8 +306,9 @@ func normalizeServerAddress(raw string) string {
 }
 
 // ResolveServerAddress returns the address clients are told to dial for
-// inbound `in` (its explicit server address, TLS SNI or transport host,
-// falling back to requestHost) — the same value subscriptions use.
+// inbound `in`: its explicit primary address, then explicitly configured
+// IPv4/IPv6 address, TLS SNI or transport host, falling back to requestHost.
+// This is the same value regular (non-dual-stack) subscriptions use.
 func ResolveServerAddress(in model.Inbound, requestHost string) string {
 	return resolveInboundServerAddress(in, requestHost)
 }
@@ -315,6 +316,12 @@ func ResolveServerAddress(in model.Inbound, requestHost string) string {
 func resolveInboundServerAddress(in model.Inbound, requestHost string) string {
 	if explicit := normalizeServerAddress(in.ServerAddress); explicit != "" {
 		return explicit
+	}
+	if ipv4 := normalizeServerAddress(in.ServerAddressIPv4); ipv4 != "" {
+		return ipv4
+	}
+	if ipv6 := normalizeServerAddress(in.ServerAddressIPv6); ipv6 != "" {
+		return ipv6
 	}
 	si := parseStream(in.Stream)
 	if si.Security == "tls" {
@@ -349,6 +356,10 @@ type subCacheEntry struct {
 	contentType string
 	userInfo    string
 	storedAt    time.Time
+	// expiresAt is the earliest non-zero client expiry represented by this
+	// response. It prevents the ordinary cache TTL from serving a node after
+	// its own entitlement has ended.
+	expiresAt time.Time
 }
 
 var (
@@ -364,7 +375,8 @@ func subCacheGet(key string) (subCacheEntry, bool) {
 	if !ok {
 		return subCacheEntry{}, false
 	}
-	if time.Since(e.storedAt) > subCacheTTL {
+	now := time.Now()
+	if time.Since(e.storedAt) > subCacheTTL || (!e.expiresAt.IsZero() && !now.Before(e.expiresAt)) {
 		delete(subCache, key)
 		return subCacheEntry{}, false
 	}
@@ -379,7 +391,7 @@ func subCachePut(key string, e subCacheEntry) {
 	if time.Since(subCacheGC) > time.Minute {
 		cutoff := time.Now().Add(-subCacheTTL)
 		for k, v := range subCache {
-			if v.storedAt.Before(cutoff) {
+			if v.storedAt.Before(cutoff) || (!v.expiresAt.IsZero() && !time.Now().Before(v.expiresAt)) {
 				delete(subCache, k)
 			}
 		}
@@ -400,9 +412,15 @@ func GenerateSubscription(c *gin.Context) {
 			format = "base64"
 		}
 	}
+	dualStack := format == "clash" && (c.Query("dual_stack") == "1" || strings.EqualFold(c.Query("dual_stack"), "true"))
 
 	serverAddr := getServerAddr(c)
 	cacheKey := uuid + "|" + format + "|" + serverAddr
+	if dualStack {
+		// A dual-stack YAML has different proxy names and groups, so it must
+		// never share an entry with the regular Clash response.
+		cacheKey += "|dual_stack"
+	}
 
 	// Fast path — serve from cache if available.
 	if entry, ok := subCacheGet(cacheKey); ok {
@@ -425,6 +443,8 @@ func GenerateSubscription(c *gin.Context) {
 		InboundSettings      string `gorm:"column:inbound_settings"`
 		InboundStream        string `gorm:"column:inbound_stream"`
 		InboundServerAddress string `gorm:"column:inbound_server_address"`
+		InboundServerIPv4    string `gorm:"column:inbound_server_address_ipv4"`
+		InboundServerIPv6    string `gorm:"column:inbound_server_address_ipv6"`
 	}
 	var rows []row
 	err := config.DB.
@@ -435,7 +455,9 @@ func GenerateSubscription(c *gin.Context) {
 			inbounds.port AS inbound_port,
 			inbounds.settings AS inbound_settings,
 			inbounds.stream AS inbound_stream,
-			inbounds.server_address AS inbound_server_address`).
+			inbounds.server_address AS inbound_server_address,
+			inbounds.server_address_ipv4 AS inbound_server_address_ipv4,
+			inbounds.server_address_ipv6 AS inbound_server_address_ipv6`).
 		Joins("JOIN inbounds ON inbounds.id = clients.inbound_id AND inbounds.enable = ? AND inbounds.deleted_at IS NULL", true).
 		Where("clients.uuid = ? AND clients.enable = ? AND clients.deleted_at IS NULL", uuid, true).
 		Scan(&rows).Error
@@ -444,23 +466,38 @@ func GenerateSubscription(c *gin.Context) {
 		return
 	}
 
-	// Use first row as canonical client (all rows share the same UUID/traffic counters).
-	client := rows[0].Client
-	if client.ExpiryTime > 0 && time.Now().Unix() > client.ExpiryTime {
+	// One UUID may intentionally span multiple inbounds. Exclude expired rows
+	// independently so an expired sibling never leaks a still-valid node into
+	// this user's subscription.
+	now := time.Now().Unix()
+	activeRows := rows[:0]
+	for _, row := range rows {
+		if row.ExpiryTime > 0 && row.ExpiryTime <= now {
+			continue
+		}
+		activeRows = append(activeRows, row)
+	}
+	rows = activeRows
+	if len(rows) == 0 {
 		c.Status(404)
 		return
 	}
 
+	// Use the first active row as canonical client for subscription metadata.
+	client := rows[0].Client
+
 	inbounds := make([]model.Inbound, 0, len(rows))
 	for _, r := range rows {
 		inbounds = append(inbounds, model.Inbound{
-			ID:            r.InboundID,
-			Tag:           r.InboundTag,
-			Protocol:      r.InboundProtocol,
-			Port:          r.InboundPort,
-			Settings:      r.InboundSettings,
-			Stream:        r.InboundStream,
-			ServerAddress: r.InboundServerAddress,
+			ID:                r.InboundID,
+			Tag:               r.InboundTag,
+			Protocol:          r.InboundProtocol,
+			Port:              r.InboundPort,
+			Settings:          r.InboundSettings,
+			Stream:            r.InboundStream,
+			ServerAddress:     r.InboundServerAddress,
+			ServerAddressIPv4: r.InboundServerIPv4,
+			ServerAddressIPv6: r.InboundServerIPv6,
 		})
 	}
 
@@ -469,10 +506,24 @@ func GenerateSubscription(c *gin.Context) {
 	if client.ExpiryTime > 0 {
 		userInfo += fmt.Sprintf("; expire=%d", client.ExpiryTime)
 	}
+	var expiresAt time.Time
+	for _, row := range rows {
+		if row.ExpiryTime == 0 {
+			continue
+		}
+		expires := time.Unix(row.ExpiryTime, 0)
+		if expiresAt.IsZero() || expires.Before(expiresAt) {
+			expiresAt = expires
+		}
+	}
 
 	var body, contentType string
 	if format == "clash" {
-		body = buildClashConfig(inbounds, client, serverAddr)
+		if dualStack {
+			body = buildClashDualStackConfig(inbounds, client, serverAddr)
+		} else {
+			body = buildClashConfig(inbounds, client, serverAddr)
+		}
 		contentType = "text/yaml; charset=utf-8"
 		c.Header("Content-Disposition", "inline; filename=\"clash.yaml\"")
 	} else {
@@ -485,6 +536,7 @@ func GenerateSubscription(c *gin.Context) {
 		contentType: contentType,
 		userInfo:    userInfo,
 		storedAt:    time.Now(),
+		expiresAt:   expiresAt,
 	})
 
 	c.Header("Content-Type", contentType)
@@ -511,20 +563,133 @@ func detectClashClient(ua string) bool {
 	return false
 }
 
-// buildClashConfig generates a Clash Meta (Mihomo) YAML configuration.
+// clashNode is one generated Clash proxy. A dual-stack subscription can emit
+// two nodes for one inbound while a regular subscription continues to emit one.
+type clashNode struct {
+	Inbound   model.Inbound
+	Name      string
+	Server    string
+	IPVersion string // empty, "ipv4", or "ipv6"
+}
+
+// buildClashConfig generates the unchanged, regular Clash Meta (Mihomo)
+// subscription: exactly one proxy per enabled inbound.
 func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr string) string {
+	nodes := make([]clashNode, 0, len(inbounds))
+	for _, in := range inbounds {
+		name := in.Tag
+		if name == "" {
+			name = fmt.Sprintf("%s-%d", in.Protocol, in.Port)
+		}
+		nodes = append(nodes, clashNode{
+			Inbound: in,
+			Name:    name,
+			Server:  resolveInboundServerAddress(in, serverAddr),
+		})
+	}
+	return buildClashConfigNodes(nodes, client, false)
+}
+
+// buildClashDualStackConfig emits one IPv6 and/or one IPv4 endpoint for every
+// supported inbound when those endpoint families are known. It is deliberately
+// separate from buildClashConfig so normal subscriptions remain byte-for-byte
+// compatible with their prior topology.
+func buildClashDualStackConfig(inbounds []model.Inbound, client model.Client, serverAddr string) string {
+	nodes := dualStackClashNodes(inbounds, serverAddr)
+	return buildClashConfigNodes(nodes, client, true)
+}
+
+// dualStackClashNodes returns only real, configured endpoints. Explicit
+// per-family addresses take precedence. If neither is supplied, a literal
+// primary address contributes only its own family; a hostname can safely be
+// emitted for both families because Mihomo is instructed to resolve it with
+// the matching ip-version.
+func dualStackClashNodes(inbounds []model.Inbound, serverAddr string) []clashNode {
+	nodes := make([]clashNode, 0, len(inbounds)*2)
+	seen := make(map[string]struct{}, len(inbounds)*2)
+	for _, in := range inbounds {
+		if !clashSupportedProtocol(in.Protocol) {
+			continue
+		}
+		base := in.Tag
+		if base == "" {
+			base = fmt.Sprintf("%s-%d", in.Protocol, in.Port)
+		}
+		primary := resolveInboundServerAddress(in, serverAddr)
+		v4, v6 := normalizeServerAddress(in.ServerAddressIPv4), normalizeServerAddress(in.ServerAddressIPv6)
+		if ip := net.ParseIP(primary); ip != nil {
+			if ip.To4() == nil && v6 == "" {
+				v6 = primary
+			}
+			if ip.To4() != nil && v4 == "" {
+				v4 = primary
+			}
+		} else if v4 == "" && v6 == "" && primary != "" {
+			v6, v4 = primary, primary
+		}
+		for _, endpoint := range []struct {
+			family string
+			server string
+		}{{"ipv6", v6}, {"ipv4", v4}} {
+			if endpoint.server == "" {
+				continue
+			}
+			label := "IPv4"
+			if endpoint.family == "ipv6" {
+				label = "IPv6"
+			}
+			stem := fmt.Sprintf("%s · %s", base, label)
+			name := stem
+			if _, duplicate := seen[name]; duplicate {
+				name = fmt.Sprintf("%s #%d", stem, in.ID)
+				for attempt := 2; ; attempt++ {
+					if _, exists := seen[name]; !exists {
+						break
+					}
+					name = fmt.Sprintf("%s #%d-%d", stem, in.ID, attempt)
+				}
+			}
+			seen[name] = struct{}{}
+			nodes = append(nodes, clashNode{Inbound: in, Name: name, Server: endpoint.server, IPVersion: endpoint.family})
+		}
+	}
+	return nodes
+}
+
+func clashSupportedProtocol(protocol string) bool {
+	switch protocol {
+	case "vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic":
+		return true
+	default:
+		return false
+	}
+}
+
+// buildClashConfigNodes renders both the legacy single-endpoint profile and
+// the opt-in dual-stack profile from an explicit node list.
+func buildClashConfigNodes(nodes []clashNode, client model.Client, dualStack bool) string {
 	sb := &strings.Builder{}
-	sb.Grow(2048 + 512*len(inbounds))
+	sb.Grow(2048 + 512*len(nodes))
 
 	sb.WriteString("port: 7890\n")
 	sb.WriteString("socks-port: 7891\n")
-	sb.WriteString("allow-lan: true\n")
+	if dualStack {
+		sb.WriteString("allow-lan: false\n")
+	} else {
+		sb.WriteString("allow-lan: true\n")
+	}
 	sb.WriteString("mode: rule\n")
 	sb.WriteString("log-level: info\n")
 	sb.WriteString("unified-delay: true\n")
+	if dualStack {
+		sb.WriteString("ipv6: true\n")
+	}
 	sb.WriteString("\n")
 	sb.WriteString("dns:\n")
 	sb.WriteString("  enable: true\n")
+	if dualStack {
+		sb.WriteString("  ipv6: true\n")
+	}
 	sb.WriteString("  enhanced-mode: fake-ip\n")
 	sb.WriteString("  fake-ip-range: 198.18.0.1/16\n")
 	sb.WriteString("  fake-ip-filter:\n")
@@ -544,16 +709,14 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 	sb.WriteString("proxies:\n")
 
 	var proxyNames []string
-	serverRules := make([]string, 0, len(inbounds))
+	serverRules := make([]string, 0, len(nodes))
 	seenServerRules := make(map[string]struct{})
 
-	for _, in := range inbounds {
+	for _, node := range nodes {
+		in := node.Inbound
 		si := parseStream(in.Stream)
-		publicServer := resolveInboundServerAddress(in, serverAddr)
-		name := in.Tag
-		if name == "" {
-			name = fmt.Sprintf("%s-%d", in.Protocol, in.Port)
-		}
+		publicServer := node.Server
+		name := node.Name
 		proxyNames = append(proxyNames, name)
 		if publicServer != "" {
 			if _, seen := seenServerRules[publicServer]; !seen {
@@ -570,7 +733,7 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 			if fp == "" {
 				fp = "chrome"
 			}
-			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
+			fmt.Fprintf(sb, "  - name: %s\n", strconv.Quote(name))
 			sb.WriteString("    type: vless\n")
 			fmt.Fprintf(sb, "    server: %s\n", publicServer)
 			fmt.Fprintf(sb, "    port: %d\n", in.Port)
@@ -608,7 +771,7 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 			writeClashTransport(sb, si)
 
 		case "vmess":
-			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
+			fmt.Fprintf(sb, "  - name: %s\n", strconv.Quote(name))
 			sb.WriteString("    type: vmess\n")
 			fmt.Fprintf(sb, "    server: %s\n", publicServer)
 			fmt.Fprintf(sb, "    port: %d\n", in.Port)
@@ -635,7 +798,7 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 			writeClashTransport(sb, si)
 
 		case "trojan":
-			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
+			fmt.Fprintf(sb, "  - name: %s\n", strconv.Quote(name))
 			sb.WriteString("    type: trojan\n")
 			fmt.Fprintf(sb, "    server: %s\n", publicServer)
 			fmt.Fprintf(sb, "    port: %d\n", in.Port)
@@ -677,7 +840,7 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 		case "shadowsocks":
 			method, password := parseSSSettings(in.Settings)
 			clientPSK := ssClientPassword(method, password, client.UUID)
-			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
+			fmt.Fprintf(sb, "  - name: %s\n", strconv.Quote(name))
 			sb.WriteString("    type: ss\n")
 			fmt.Fprintf(sb, "    server: %s\n", publicServer)
 			fmt.Fprintf(sb, "    port: %d\n", in.Port)
@@ -687,7 +850,7 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 
 		case "tuic":
 			congestion, udpRelay, zeroRTT := parseTUICExtras(in.Settings)
-			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
+			fmt.Fprintf(sb, "  - name: %s\n", strconv.Quote(name))
 			sb.WriteString("    type: tuic\n")
 			fmt.Fprintf(sb, "    server: %s\n", publicServer)
 			fmt.Fprintf(sb, "    port: %d\n", in.Port)
@@ -710,7 +873,7 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 
 		case "hysteria2":
 			extras := parseHysteria2Extras(in.Settings)
-			fmt.Fprintf(sb, "  - name: \"%s\"\n", name)
+			fmt.Fprintf(sb, "  - name: %s\n", strconv.Quote(name))
 			sb.WriteString("    type: hysteria2\n")
 			fmt.Fprintf(sb, "    server: %s\n", publicServer)
 			fmt.Fprintf(sb, "    port: %d\n", in.Port)
@@ -736,30 +899,18 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 			writeClashALPN(sb, si.ALPN)
 			fmt.Fprintf(sb, "    skip-cert-verify: %t\n", skipVerify)
 		}
+		if node.IPVersion != "" {
+			fmt.Fprintf(sb, "    ip-version: %s\n", node.IPVersion)
+		}
 
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString("proxy-groups:\n")
-	sb.WriteString("  - name: PROXY\n")
-	sb.WriteString("    type: select\n")
-	sb.WriteString("    proxies:\n")
-	sb.WriteString("      - AUTO\n")
-	for _, name := range proxyNames {
-		fmt.Fprintf(sb, "      - \"%s\"\n", name)
+	if dualStack {
+		writeDualStackGroups(sb, nodes, proxyNames)
+	} else {
+		writeDefaultClashGroups(sb, proxyNames)
 	}
-	sb.WriteString("      - DIRECT\n")
-	sb.WriteString("\n")
-	sb.WriteString("  - name: AUTO\n")
-	sb.WriteString("    type: url-test\n")
-	sb.WriteString("    proxies:\n")
-	for _, name := range proxyNames {
-		fmt.Fprintf(sb, "      - \"%s\"\n", name)
-	}
-	sb.WriteString("    url: http://www.gstatic.com/generate_204\n")
-	sb.WriteString("    interval: 300\n")
-	sb.WriteString("    tolerance: 50\n")
-	sb.WriteString("\n")
 
 	sb.WriteString("rules:\n")
 	for _, ruleServer := range serverRules {
@@ -782,6 +933,87 @@ func buildClashConfig(inbounds []model.Inbound, client model.Client, serverAddr 
 	sb.WriteString("  - MATCH,PROXY\n")
 
 	return sb.String()
+}
+
+func writeDefaultClashGroups(sb *strings.Builder, proxyNames []string) {
+	sb.WriteString("proxy-groups:\n")
+	sb.WriteString("  - name: PROXY\n")
+	sb.WriteString("    type: select\n")
+	sb.WriteString("    proxies:\n")
+	sb.WriteString("      - AUTO\n")
+	for _, name := range proxyNames {
+		fmt.Fprintf(sb, "      - %s\n", strconv.Quote(name))
+	}
+	sb.WriteString("      - DIRECT\n")
+	sb.WriteString("\n")
+	sb.WriteString("  - name: AUTO\n")
+	sb.WriteString("    type: url-test\n")
+	sb.WriteString("    proxies:\n")
+	for _, name := range proxyNames {
+		fmt.Fprintf(sb, "      - %s\n", strconv.Quote(name))
+	}
+	sb.WriteString("    url: http://www.gstatic.com/generate_204\n")
+	sb.WriteString("    interval: 300\n")
+	sb.WriteString("    tolerance: 50\n")
+	sb.WriteString("\n")
+}
+
+// writeDualStackGroups deliberately keeps DIRECT out of both automatic
+// groups: an unreachable proxy must not silently downgrade a user to a direct
+// connection. PROXY remains a manual select group and exposes all nodes.
+func writeDualStackGroups(sb *strings.Builder, nodes []clashNode, proxyNames []string) {
+	v6, v4, other := make([]string, 0, len(nodes)), make([]string, 0, len(nodes)), make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		switch node.IPVersion {
+		case "ipv6":
+			v6 = append(v6, node.Name)
+		case "ipv4":
+			v4 = append(v4, node.Name)
+		default:
+			other = append(other, node.Name)
+		}
+	}
+	all := append(append(append([]string{}, v6...), v4...), other...)
+
+	sb.WriteString("proxy-groups:\n")
+	sb.WriteString("  - name: PROXY\n")
+	sb.WriteString("    type: select\n")
+	sb.WriteString("    proxies:\n")
+	sb.WriteString("      - AUTO\n")
+	sb.WriteString("      - IPV6-FIRST\n")
+	for _, name := range proxyNames {
+		fmt.Fprintf(sb, "      - %s\n", strconv.Quote(name))
+	}
+	sb.WriteString("      - DIRECT\n\n")
+
+	// AUTO is the subscription default: select the lowest-latency available
+	// node across all enabled protocol/family entries. A 20ms tolerance avoids
+	// flapping between effectively equal routes while retaining latency-first
+	// selection.
+	sb.WriteString("  - name: AUTO\n    type: url-test\n    proxies:\n")
+	for _, name := range all {
+		fmt.Fprintf(sb, "      - %s\n", strconv.Quote(name))
+	}
+	writeDualStackHealthCheck(sb)
+	sb.WriteString("    tolerance: 20\n")
+	sb.WriteString("\n")
+
+	// IPV6-FIRST is an opt-in ordered availability group. Its input order is
+	// IPv6 then IPv4 so users can prefer IPv6 without losing an IPv4 fallback.
+	sb.WriteString("  - name: IPV6-FIRST\n    type: fallback\n    proxies:\n")
+	for _, name := range all {
+		fmt.Fprintf(sb, "      - %s\n", strconv.Quote(name))
+	}
+	writeDualStackHealthCheck(sb)
+	sb.WriteString("\n")
+
+}
+
+func writeDualStackHealthCheck(sb *strings.Builder) {
+	sb.WriteString("    url: https://www.gstatic.com/generate_204\n")
+	sb.WriteString("    interval: 60\n")
+	sb.WriteString("    lazy: false\n")
+	sb.WriteString("    timeout: 5000\n")
 }
 
 // writeClashALPN writes an alpn block if the ALPN string is non-empty.
