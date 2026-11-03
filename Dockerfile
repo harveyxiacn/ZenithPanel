@@ -13,7 +13,7 @@ COPY frontend .
 RUN npm run build
 
 # Build stage for Backend (Go)
-FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS backend-builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS backend-builder
 WORKDIR /app/backend
 # Install dependencies needed for cgo if ever required, though we use pure go sqlite now
 RUN apk add --no-cache gcc musl-dev
@@ -36,7 +36,7 @@ RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -ldflags "-s -w
 # Build upstream Sing-box with the security-patched dependency lock in
 # tools/singbox. The same build script is used by IPv6 CI so production and
 # test protocol behavior share the official feature tags and linker settings.
-FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS singbox-builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS singbox-builder
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
